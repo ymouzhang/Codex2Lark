@@ -187,6 +187,13 @@ history as complete. Local mirror rows are used for restart and reconciliation,
 but the provider does not silently fall back to stale local content when a
 required live read fails.
 
+The production provider also loads attachment references from the trigger and
+selected contextual messages through the bounded attachment service. Downloads
+are authorized by tenant/app/chat/message/resource binding and use the Feishu
+message-resource endpoint. Parsed text or safe metadata becomes separately
+attributed evidence; parser blocks, truncation, and unsupported media become
+typed warnings rather than silent omissions.
+
 ## 6. Attachment collection and parsing
 
 The event path stores attachment references before downloading bytes. An

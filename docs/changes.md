@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined production attachment-context composition before implementation:
+  trigger and selected-message references are downloaded with their trusted
+  message binding, encrypted in the managed blob store, safely parsed, and
+  emitted as attributed evidence with explicit warnings.
+
 - Defined production multi-Agent composition before implementation: every IM
   task prepares a durable root graph, `agent.delegate` creates or reuses a
   bounded child with subset authority, a separate child Harness commits an

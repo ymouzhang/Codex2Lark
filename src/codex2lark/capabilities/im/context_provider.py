@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
 from codex2lark.runtime.context import ContextEvidence
 
+from .attachments import AttachmentEvidence, AttachmentLoadRequest
 from .models import IncomingMessage
 
 
@@ -49,6 +51,10 @@ class MessageMirror(Protocol):
     async def upsert_message(self, message: IncomingMessage) -> None: ...
 
 
+class AttachmentEvidenceLoader(Protocol):
+    async def load(self, request: AttachmentLoadRequest, *, now_ms: int) -> AttachmentEvidence: ...
+
+
 class IMContextProvider:
     def __init__(
         self,
@@ -58,6 +64,8 @@ class IMContextProvider:
         recent_limit: int = 30,
         related_limit: int = 50,
         lookback_ms: int = 2 * 60 * 60 * 1000,
+        attachments: AttachmentEvidenceLoader | None = None,
+        clock_ms: Callable[[], int] | None = None,
     ) -> None:
         if min(recent_limit, related_limit, lookback_ms) < 1:
             raise ValueError("IM context limits must be positive")
@@ -66,6 +74,8 @@ class IMContextProvider:
         self._recent_limit = recent_limit
         self._related_limit = related_limit
         self._lookback_ms = lookback_ms
+        self._attachments = attachments
+        self._clock_ms = clock_ms or (lambda: 0)
 
     async def collect(self, request: IMContextRequest) -> IMContextBundle:
         trigger = await self._source.get_message(request)
@@ -97,9 +107,25 @@ class IMContextProvider:
             if previous is None or message.source_version_ms > previous.source_version_ms:
                 selected[message.message_id] = message
         ordered = sorted(selected.values(), key=lambda item: (item.occurred_at_ms, item.message_id))
-        evidence = tuple(self._evidence(message) for message in ordered)
-        warnings = () if page.complete else ("im_context_incomplete",)
-        return IMContextBundle(trigger, evidence, warnings)
+        evidence = [self._evidence(message) for message in ordered]
+        warnings = [] if page.complete else ["im_context_incomplete"]
+        if self._attachments is not None:
+            for message in (*ordered, trigger):
+                for attachment in message.attachments:
+                    loaded = await self._attachments.load(
+                        AttachmentLoadRequest(
+                            message.tenant_key,
+                            message.app_id,
+                            message.chat_id,
+                            message.message_id,
+                            attachment.resource_key,
+                        ),
+                        now_ms=self._clock_ms(),
+                    )
+                    evidence.append(loaded.evidence)
+                    if loaded.warning_code:
+                        warnings.append(loaded.warning_code)
+        return IMContextBundle(trigger, tuple(evidence), tuple(dict.fromkeys(warnings)))
 
     @staticmethod
     def _validate_binding(request: IMContextRequest, message: IncomingMessage) -> None:

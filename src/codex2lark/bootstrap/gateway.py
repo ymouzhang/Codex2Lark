@@ -10,6 +10,7 @@ from codex2lark.adapters.openai_responses import OpenAIResponsesModel
 from codex2lark.capabilities.artifacts.plugin import FeishuArtifactsPlugin
 from codex2lark.capabilities.docs.plugin import FeishuDocsPlugin
 from codex2lark.capabilities.im.admission import IMAdmissionService
+from codex2lark.capabilities.im.attachments import AttachmentService, SafeAttachmentParser
 from codex2lark.capabilities.im.channel_adapter import (
     ChannelPort,
     OfficialChannelEventSource,
@@ -52,6 +53,7 @@ from codex2lark.runtime.tools import (
 )
 from codex2lark.runtime.types import AgentDefinition, ToolCall, ToolDefinition
 from codex2lark.storage.agent_store import SQLiteAgentGraphStore
+from codex2lark.storage.blobs import EncryptedBlobStore
 from codex2lark.storage.crypto import EnvelopeCipher
 from codex2lark.storage.database import SQLiteDatabase
 from codex2lark.storage.runtime_store import RuntimeStore
@@ -217,6 +219,13 @@ def create_v3_gateway(
     live_context = IMContextProvider(
         OfficialLiveIMReader(api, bot_open_id=bot_open_id),
         im_repository,
+        attachments=AttachmentService(
+            im_repository,
+            active_channel,
+            EncryptedBlobStore(config.data_dir / "blobs", cipher),
+            SafeAttachmentParser(),
+        ),
+        clock_ms=lambda: int(time.time() * 1000),
     )
     authoring = create_application()
     docs_plugin = FeishuDocsPlugin(authoring.docs, config.authoring_identity)

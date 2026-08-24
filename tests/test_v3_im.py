@@ -10,6 +10,7 @@ from typing import Any
 
 from codex2lark.capabilities.im.admission import IMAdmissionService
 from codex2lark.capabilities.im.attachments import (
+    AttachmentEvidence,
     AttachmentLoadRequest,
     AttachmentService,
     SafeAttachmentParser,
@@ -42,6 +43,7 @@ from codex2lark.capabilities.im.task_handler import (
 )
 from codex2lark.core.events import LeasedOutboxMessage, LeasedTask
 from codex2lark.core.models import Identity
+from codex2lark.runtime.context import ContextEvidence
 from codex2lark.runtime.outbox import OutboxDispatcher
 from codex2lark.runtime.sessions import InMemorySessionStore
 from codex2lark.runtime.types import AgentDefinition, AgentOutcome, RunStatus
@@ -550,13 +552,61 @@ async def test_context_provider_rejects_cross_chat_source_data(tmp_path: Path) -
         await database.close()
 
 
+class FakeAttachmentLoader:
+    def __init__(self) -> None:
+        self.requests: list[tuple[object, int]] = []
+
+    async def load(self, request: object, *, now_ms: int) -> object:
+        self.requests.append((request, now_ms))
+        return AttachmentEvidence(
+            "blob-1",
+            "document",
+            ContextEvidence(
+                "im.attachment:om_request:file-key",
+                "Parsed attachment facts",
+                "blob-1",
+            ),
+            "parser_output_truncated",
+        )
+
+
+async def test_context_provider_loads_bound_attachment_evidence_and_warning(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    trigger = message()
+    loader = FakeAttachmentLoader()
+    provider = IMContextProvider(
+        FakeLiveIMReader(trigger, ()),
+        repository,
+        attachments=loader,
+        clock_ms=lambda: 500,
+    )
+    try:
+        bundle = await provider.collect(
+            IMContextRequest("tenant-1", "app-1", "oc_group", "om_request")
+        )
+
+        assert bundle.evidence[-1].content == "Parsed attachment facts"
+        assert bundle.warnings == ("parser_output_truncated",)
+        request, now_ms = loader.requests[0]
+        assert isinstance(request, AttachmentLoadRequest)
+        assert request.message_id == "om_request"
+        assert now_ms == 500
+    finally:
+        await database.close()
+
+
 class FakeDownloader:
     def __init__(self, content: bytes | None) -> None:
         self.content = content
         self.calls = 0
 
-    async def download_resource(self, resource_key: str, resource_type: str) -> bytes | None:
+    async def download_resource(
+        self, resource_key: str, resource_type: str, *, message_id: str
+    ) -> bytes | None:
         assert resource_key == "file-key" and resource_type == "file"
+        assert message_id == "om_request"
         self.calls += 1
         return self.content
 

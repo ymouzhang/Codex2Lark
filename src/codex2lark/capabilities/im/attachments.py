@@ -79,7 +79,9 @@ class AttachmentRepository(Protocol):
 
 
 class AttachmentDownloader(Protocol):
-    async def download_resource(self, resource_key: str, resource_type: str) -> bytes | None: ...
+    async def download_resource(
+        self, resource_key: str, resource_type: str, *, message_id: str
+    ) -> bytes | None: ...
 
 
 class SafeAttachmentParser:
@@ -323,7 +325,9 @@ class AttachmentService:
             raise ValueError("attachment declared size exceeds policy")
         if attachment.blob_id is None:
             content = await self._downloader.download_resource(
-                attachment.resource_key, attachment.resource_type
+                attachment.resource_key,
+                attachment.resource_type,
+                message_id=attachment.message_id,
             )
             if content is None:
                 raise RuntimeError("Feishu attachment download returned no bytes")

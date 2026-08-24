@@ -22,6 +22,10 @@ class ChannelPort(Protocol):
 
     async def send(self, to: str, message: dict[str, str], opts: dict[str, object]) -> object: ...
 
+    async def download_resource(
+        self, resource_key: str, resource_type: str, *, message_id: str
+    ) -> bytes | None: ...
+
 
 class MessageAdmission(Protocol):
     async def admit(self, message: IncomingMessage) -> object: ...
