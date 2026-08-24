@@ -180,6 +180,14 @@ real SQLite/encryption. Opt-in live tests use a disposable tenant/folder/group
 and always read writes back. Load and chaos suites exercise many groups,
 process death, rate limits, provider outage, disk pressure, and restore.
 
+The live multi-group gate uses the running production Gateway plus at least two
+explicit disposable chat IDs. After one authorized user mention in each group,
+`codex2lark acceptance live-multigroup` reads lifecycle metadata only and proves
+for one newly admitted request per chat: a completed root graph, succeeded task,
+sent acknowledgement, and exactly one sent terminal result. The operator
+supplies a millisecond lower bound captured before sending the mentions. The
+command never decrypts task/outbox payloads and never reads message bodies.
+
 ## 8. Dependency policy
 
 - Every runtime dependency has a documented direct purpose.

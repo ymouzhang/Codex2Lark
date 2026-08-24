@@ -40,6 +40,24 @@ def test_parser_exposes_storage_administration_commands(tmp_path) -> None:
     assert arguments.storage_command == "restore"
 
 
+def test_parser_exposes_live_multigroup_acceptance() -> None:
+    arguments = cli._parser().parse_args(
+        [
+            "acceptance",
+            "live-multigroup",
+            "--chat-id",
+            "oc_first",
+            "--chat-id",
+            "oc_second",
+            "--since-ms",
+            "1000",
+        ]
+    )
+
+    assert arguments.command == "acceptance"
+    assert arguments.chat_id == ["oc_first", "oc_second"]
+
+
 def test_gateway_doctor_validates_configuration_without_printing_secrets(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

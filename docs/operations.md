@@ -307,6 +307,25 @@ For a release or periodic recovery rehearsal, use a disposable restore target:
 Never test restore by overwriting the active directory. Record only timestamps,
 schema version, counts, and pass/fail result—not task or document content.
 
+### Opt-in live multi-group release gate
+
+Use two disposable enabled groups and keep the Gateway running. Record the
+current Unix time in milliseconds, then have an authorized user send one exact
+@-mention request in each group. Run:
+
+```bash
+uv run codex2lark acceptance live-multigroup \
+  --chat-id oc_first --chat-id oc_second \
+  --since-ms 1787587200000 --timeout-seconds 300
+```
+
+The command waits for one request per exact chat and returns content-safe JSON.
+Success requires `graph_status=completed`, `task_state=succeeded`, a sent
+acknowledgement, and exactly one sent terminal reply for each selected task. It
+does not send messages, decrypt local payloads, or inspect document content.
+Run capability-specific live document read-back separately for a disposable
+authoring request. A timeout or failed group keeps the release gate open.
+
 Run one bounded retention pass only while the Gateway is stopped:
 
 ```bash

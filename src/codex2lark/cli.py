@@ -22,6 +22,7 @@ from .interfaces.mcp import run_stdio
 from .runtime.resources import ResourceLoader
 from .storage.crypto import MasterKey
 from .storage.key_rotation import KeyRotationResult, KeyRotationService
+from .storage.live_acceptance import LiveMultiGroupAcceptance
 from .storage.maintenance import (
     BackupResult,
     GarbageCollectionResult,
@@ -276,6 +277,14 @@ def _parser() -> argparse.ArgumentParser:
     rotate.add_argument("--new-key-id", required=True)
     rotate.add_argument("--new-key-base64", required=True)
     rotate.add_argument("--yes", action="store_true")
+    acceptance = subcommands.add_parser("acceptance", help="run explicit release gates")
+    acceptance_commands = acceptance.add_subparsers(dest="acceptance_command", required=True)
+    live = acceptance_commands.add_parser(
+        "live-multigroup", help="observe the opt-in live multi-group release gate"
+    )
+    live.add_argument("--chat-id", action="append", required=True)
+    live.add_argument("--since-ms", type=int, required=True)
+    live.add_argument("--timeout-seconds", type=float, default=300.0)
     return parser
 
 
@@ -345,6 +354,23 @@ def _storage(arguments: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def _acceptance(arguments: argparse.Namespace) -> int:
+    try:
+        if arguments.acceptance_command != "live-multigroup":
+            return 2
+        observer = LiveMultiGroupAcceptance(resolve_data_dir())
+        result = observer.wait(
+            tuple(arguments.chat_id),
+            since_ms=arguments.since_ms,
+            timeout_seconds=arguments.timeout_seconds,
+        )
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        return 1
+    print(observer.as_json(result))
+    return 0 if result.ok else 1
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     if arguments.command == "mcp":
@@ -374,6 +400,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 130
     if arguments.command == "storage":
         return _storage(arguments)
+    if arguments.command == "acceptance":
+        return _acceptance(arguments)
     return 2
 
 

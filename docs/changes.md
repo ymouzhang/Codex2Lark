@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined the opt-in live multi-group release gate before implementation. Given
+  two or more exact chat IDs and a start timestamp, a content-safe observer
+  verifies completed graph/task state, sent acknowledgement, and exactly one
+  sent terminal result per group without decrypting payloads. Implementation
+  area: acceptance CLI, read-only lifecycle query, timeout behavior, and tests.
+
 - Defined an executable encrypted-task backup/restore recovery rehearsal before
   implementation. A restored database opened with the same external key must
   lease and complete previously pending work under a new Worker identity.
