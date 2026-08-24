@@ -7,14 +7,21 @@ from pathlib import Path
 import pytest
 
 from codex2lark import cli
+from codex2lark.capabilities.im.models import IncomingMessage, Mention
+from codex2lark.capabilities.im.repository import SQLiteIMRepository
+from codex2lark.core.events import NormalizedEvent, TaskCommand
+from codex2lark.storage.blobs import EncryptedBlobStore
 from codex2lark.storage.capacity import (
     StorageCapacityMonitor,
     StorageCapacityPolicy,
     StoragePressure,
 )
+from codex2lark.storage.crypto import EnvelopeCipher, MasterKey
 from codex2lark.storage.database import SQLiteDatabase
+from codex2lark.storage.key_rotation import KeyRotationService
 from codex2lark.storage.locking import DataDirectoryLock
 from codex2lark.storage.maintenance import StorageMaintenance
+from codex2lark.storage.runtime_store import RuntimeStore
 
 
 async def create_database(data_dir: Path) -> None:
@@ -346,7 +353,6 @@ def test_cli_gc_requires_explicit_confirmation(
 
     assert cli.main(["storage", "gc"]) == 1
     assert "requires explicit --yes" in capsys.readouterr().out
-
     assert (
         cli.main(
             [
@@ -363,3 +369,92 @@ def test_cli_gc_requires_explicit_confirmation(
         == 1
     )
     assert "requires explicit --yes" in capsys.readouterr().out
+
+
+async def test_key_rotation_rewraps_database_and_blobs_and_is_resumable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    data_dir = (tmp_path / "state").resolve()
+    old = MasterKey("old", b"o" * 32)
+    new = MasterKey("new", b"n" * 32)
+    database = SQLiteDatabase(data_dir / "runtime.db")
+    await database.open()
+    old_cipher = EnvelopeCipher(old)
+    repository = SQLiteIMRepository(database, old_cipher)
+    runtime = RuntimeStore(database, old_cipher)
+    incoming = IncomingMessage(
+        event_id="message-event",
+        tenant_key="tenant",
+        app_id="app",
+        chat_id="chat",
+        chat_type="group",
+        message_id="message",
+        message_type="text",
+        sender_id="user",
+        sender_type="user",
+        sender_name="Aaron",
+        body_text="private body",
+        mentions=(Mention("bot"),),
+        attachments=(),
+        occurred_at_ms=1,
+        received_at_ms=1,
+    )
+    try:
+        await repository.upsert_message(incoming)
+        await runtime.admit(
+            NormalizedEvent(
+                event_id="runtime-event",
+                plugin_id="feishu-im",
+                event_type="im.message.receive_v1",
+                tenant_key="tenant",
+                app_id="app",
+                occurred_at_ms=1,
+                received_at_ms=1,
+                resource_kind="im.message",
+                resource_id="message",
+                trace_id="trace",
+                source_payload=b"private event",
+            ),
+            TaskCommand(
+                "feishu-im",
+                "im.handle_mention",
+                "tenant/app/chat/root",
+                {"private": "task"},
+            ),
+            now_ms=1,
+        )
+    finally:
+        await database.close()
+    old_blobs = EncryptedBlobStore(data_dir / "blobs", old_cipher)
+    blob_id = old_blobs.put(b"private blob")
+
+    interrupted = KeyRotationService(data_dir)
+    monkeypatch.setattr(
+        interrupted,
+        "_rotate_blobs",
+        lambda _cipher, _target: (_ for _ in ()).throw(ConnectionError("interrupted")),
+    )
+    with pytest.raises(ConnectionError, match="interrupted"):
+        interrupted.rotate(old, new)
+    assert interrupted.marker_path.exists()
+
+    result = KeyRotationService(data_dir).rotate(old, new)
+
+    assert result.ok
+    assert result.blob_envelopes == 1
+    assert not interrupted.marker_path.exists()
+    new_database = SQLiteDatabase(data_dir / "runtime.db")
+    await new_database.open()
+    try:
+        stored = await SQLiteIMRepository(new_database, EnvelopeCipher(new)).get_message(
+            "tenant", "app", "message"
+        )
+        tasks = await RuntimeStore(new_database, EnvelopeCipher(new)).lease_tasks(
+            worker_id="worker", now_ms=2, lease_ms=10
+        )
+        assert stored is not None and stored.body_text == "private body"
+        assert tasks[0].payload == {"private": "task"}
+    finally:
+        await new_database.close()
+    rotated_blobs = EncryptedBlobStore(data_dir / "blobs", EnvelopeCipher(new))
+    assert rotated_blobs.get(blob_id) == b"private blob"

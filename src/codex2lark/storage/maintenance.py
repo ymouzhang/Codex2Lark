@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .capacity import StorageCapacityMonitor, StorageCapacityPolicy
+from .key_rotation import KeyRotationResult
 from .locking import DataDirectoryLock
 from .migrations import SCHEMA_VERSION
 
@@ -601,7 +602,9 @@ class StorageMaintenance:
 
     @staticmethod
     def as_json(
-        result: StorageStatus | BackupResult | GarbageCollectionResult | PurgeResult,
+        result: (
+            StorageStatus | BackupResult | GarbageCollectionResult | PurgeResult | KeyRotationResult
+        ),
     ) -> str:
         return json.dumps(asdict(result), ensure_ascii=False, sort_keys=True)
 

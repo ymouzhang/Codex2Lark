@@ -12,12 +12,12 @@ having types or isolated primitives is not enough.
 
 | Area | Status | Shipped production path | Open contract work |
 | --- | --- | --- | --- |
-| Kernel and storage | partial | SQLite admission, leases, encrypted blobs, idempotency, outbox, retention GC, backup/verify/restore, one-process data-directory locking, disk high-water attachment admission, targeted message/chat purge, and content-safe pressure status | key rotation and broad tenant/all-data purge |
+| Kernel and storage | partial | SQLite admission, leases, encrypted blobs, idempotency, outbox, retention GC, backup/verify/restore, resumable wrapping-key rotation, one-process data-directory locking, disk high-water attachment admission, targeted message/chat purge, and content-safe pressure status | broad tenant/all-data purge |
 | Agent Harness | partial | versioned resources, model/tool loop, checkpoints, budgets, policy gate, write verification, deterministic recovery, and durable safe-boundary steering/follow-up/interrupt/cancel | interactive approval resolution and complete-turn compaction evals |
 | Multi-Agent supervisor | partial | durable rooted graph, bounded delegation, child Harnesses, typed artifacts, same-requester root cancellation cascade, read-only parallel children, live-resolved existing-document writer locks, exact child write scopes, and root-only completion | production child mailbox commands, additional capability target resolvers/logical create reservations, fairness/load evidence, and three-worker restart acceptance |
 | Feishu IM | partial | service-native long connection, durable pre-ACK admission, exact mentions, immediate bot-added membership, live context, encrypted attachments, acknowledgement, terminal outbox replies, hard-pressure metadata fallback, and edit/recall/access-loss invalidation | progress/approval cards and opt-in live multi-group acceptance |
 | Feishu authoring | partial | managed-folder Drive/Docs/Whiteboard/Sheets/Base semantic tools, deterministic write claims, and live read-back verification | richer capability-specific editing, complete group-to-professional-document acceptance, and service-native replacement of remaining lark-cli authoring adapters |
-| Operations and release | partial | `doctor --gateway`, graceful process lifecycle, status, retention GC, backup, verification, restore, and packaged resources | daemon status/stop interface, metrics, key rotation, load/soak/chaos suites, canary rollout, and rehearsed live recovery |
+| Operations and release | partial | `doctor --gateway`, graceful process lifecycle, storage status, retention GC, targeted purge, backup, verification, restore, resumable key rotation, and packaged resources | daemon status/stop interface, metrics, load/soak/chaos suites, canary rollout, and rehearsed live recovery |
 
 Therefore the repository currently provides a usable **V3 production
 baseline**, not the completed V3 acceptance envelope in

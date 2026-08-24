@@ -48,6 +48,10 @@ class GatewayConfig:
             raise ValueError("Gateway worker configuration is invalid")
         if not self.data_dir.is_absolute():
             raise ValueError("CODEX2LARK_DATA_DIR must be an absolute path")
+        if (self.data_dir / "key-rotation.json").exists():
+            raise ValueError(
+                "storage has an incomplete key rotation; rerun storage rotate-key first"
+            )
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str] | None = None) -> GatewayConfig:

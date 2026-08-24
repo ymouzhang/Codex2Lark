@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -15,6 +16,8 @@ from .bootstrap.gateway import create_v3_gateway
 from .interfaces.application import create_application
 from .interfaces.mcp import run_stdio
 from .runtime.resources import ResourceLoader
+from .storage.crypto import MasterKey
+from .storage.key_rotation import KeyRotationResult, KeyRotationService
 from .storage.maintenance import (
     BackupResult,
     GarbageCollectionResult,
@@ -225,12 +228,20 @@ def _parser() -> argparse.ArgumentParser:
     purge_chat.add_argument("--app-id", required=True)
     purge_chat.add_argument("--chat-id", required=True)
     purge_chat.add_argument("--yes", action="store_true")
+    rotate = storage_commands.add_parser(
+        "rotate-key", help="rewrap all encrypted state with a new master key"
+    )
+    rotate.add_argument("--new-key-id", required=True)
+    rotate.add_argument("--new-key-base64", required=True)
+    rotate.add_argument("--yes", action="store_true")
     return parser
 
 
 def _storage(arguments: argparse.Namespace) -> int:
     try:
-        result: StorageStatus | BackupResult | GarbageCollectionResult | PurgeResult
+        result: (
+            StorageStatus | BackupResult | GarbageCollectionResult | PurgeResult | KeyRotationResult
+        )
         if arguments.storage_command == "status":
             result = StorageMaintenance(resolve_data_dir()).status()
         elif arguments.storage_command == "backup":
@@ -261,6 +272,18 @@ def _storage(arguments: argparse.Namespace) -> int:
                 app_id=arguments.app_id,
                 chat_id=arguments.chat_id,
             )
+        elif arguments.storage_command == "rotate-key":
+            if not arguments.yes:
+                raise ValueError("storage rotate-key requires explicit --yes confirmation")
+            current = MasterKey.from_base64(
+                key_id=os.environ.get("CODEX2LARK_MASTER_KEY_ID", ""),
+                encoded_key=os.environ.get("CODEX2LARK_MASTER_KEY_BASE64", ""),
+            )
+            target = MasterKey.from_base64(
+                key_id=arguments.new_key_id,
+                encoded_key=arguments.new_key_base64,
+            )
+            result = KeyRotationService(resolve_data_dir()).rotate(current, target)
         else:
             return 2
     except (FileNotFoundError, FileExistsError, LookupError, RuntimeError, ValueError) as exc:

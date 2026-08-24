@@ -67,20 +67,19 @@ def gateway(database: LifecycleDouble, source: LifecycleDouble) -> tuple[V3Gatew
 
 def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_path) -> None:
     encoded = base64.b64encode(b"k" * 32).decode()
-    config = GatewayConfig.from_environment(
-        {
-            "CODEX2LARK_FEISHU_APP_ID": "cli_app",
-            "CODEX2LARK_FEISHU_APP_SECRET": "secret",
-            "OPENAI_API_KEY": "model-secret",
-            "CODEX2LARK_MODEL": "configured-model",
-            "CODEX2LARK_MASTER_KEY_ID": "key-v1",
-            "CODEX2LARK_MASTER_KEY_BASE64": encoded,
-            "CODEX2LARK_DATA_DIR": str(tmp_path),
-            "CODEX2LARK_STORAGE_MAX_BYTES": "123456",
-            "CODEX2LARK_STORAGE_MIN_FREE_BYTES": "789",
-            "CODEX2LARK_MAX_ATTACHMENT_BYTES": "456",
-        }
-    )
+    values = {
+        "CODEX2LARK_FEISHU_APP_ID": "cli_app",
+        "CODEX2LARK_FEISHU_APP_SECRET": "secret",
+        "OPENAI_API_KEY": "model-secret",
+        "CODEX2LARK_MODEL": "configured-model",
+        "CODEX2LARK_MASTER_KEY_ID": "key-v1",
+        "CODEX2LARK_MASTER_KEY_BASE64": encoded,
+        "CODEX2LARK_DATA_DIR": str(tmp_path),
+        "CODEX2LARK_STORAGE_MAX_BYTES": "123456",
+        "CODEX2LARK_STORAGE_MIN_FREE_BYTES": "789",
+        "CODEX2LARK_MAX_ATTACHMENT_BYTES": "456",
+    }
+    config = GatewayConfig.from_environment(values)
 
     assert config.data_dir == tmp_path
     assert config.master_key.key == b"k" * 32
@@ -88,6 +87,9 @@ def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_pa
     assert config.storage_capacity.minimum_free_bytes == 789
     assert config.max_attachment_bytes == 456
     assert "secret" not in repr(config)
+    (tmp_path / "key-rotation.json").write_text("{}")
+    with pytest.raises(ValueError, match="incomplete key rotation"):
+        GatewayConfig.from_environment(values)
     with pytest.raises(ValueError, match="CODEX2LARK_FEISHU_APP_ID"):
         GatewayConfig.from_environment({})
 

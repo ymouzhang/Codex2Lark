@@ -86,12 +86,62 @@ class EnvelopeCipher:
         except (KeyError, TypeError, json.JSONDecodeError) as exc:
             raise ValueError("invalid encrypted envelope") from exc
 
+    def rewrap(
+        self,
+        envelope_bytes: bytes,
+        *,
+        associated_data: bytes,
+        new_master_key: MasterKey,
+    ) -> bytes:
+        envelope = self._envelope(envelope_bytes)
+        key_id = envelope.get("key_id")
+        if key_id == new_master_key.key_id:
+            return envelope_bytes
+        if key_id != self._master_key.key_id:
+            raise ValueError("encrypted envelope requires an unavailable rotation key")
+        data_key = AESGCM(self._master_key.key).decrypt(
+            self._decode(envelope["wrap_nonce"]),
+            self._decode(envelope["wrapped_key"]),
+            self._wrapping_aad(associated_data),
+        )
+        target = EnvelopeCipher(new_master_key)
+        wrap_nonce = os.urandom(_NONCE_BYTES)
+        envelope["key_id"] = new_master_key.key_id
+        envelope["wrap_nonce"] = self._encode(wrap_nonce)
+        envelope["wrapped_key"] = self._encode(
+            AESGCM(new_master_key.key).encrypt(
+                wrap_nonce,
+                data_key,
+                target._wrapping_aad(associated_data),
+            )
+        )
+        return json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode()
+
+    @classmethod
+    def envelope_key_id(cls, envelope_bytes: bytes) -> str:
+        value = cls._envelope(envelope_bytes).get("key_id")
+        if not isinstance(value, str) or not value:
+            raise ValueError("encrypted envelope has no key identifier")
+        return value
+
     def opaque_digest(self, content: bytes) -> str:
         return hmac.new(self._master_key.key, content, hashlib.sha256).hexdigest()
 
     def _wrapping_aad(self, associated_data: bytes) -> bytes:
         digest = hashlib.sha256(associated_data).digest()
         return b"codex2lark:keywrap:v1:" + self._master_key.key_id.encode("utf-8") + b":" + digest
+
+    @staticmethod
+    def _envelope(envelope_bytes: bytes) -> dict[str, object]:
+        try:
+            value = json.loads(envelope_bytes)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid encrypted envelope") from exc
+        if not isinstance(value, dict):
+            raise ValueError("invalid encrypted envelope")
+        if value.get("version") != _ENVELOPE_VERSION or value.get("algorithm") != _ALGORITHM:
+            raise ValueError("unsupported encrypted envelope")
+        return value
 
     @staticmethod
     def _encode(value: bytes) -> str:

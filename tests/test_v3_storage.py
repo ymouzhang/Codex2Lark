@@ -88,6 +88,21 @@ def test_envelope_cipher_rejects_tampering() -> None:
         cipher().decrypt(json.dumps(envelope).encode(), associated_data=b"resource")
 
 
+def test_envelope_rewrap_changes_only_wrapped_key_and_remains_decryptable() -> None:
+    old = MasterKey("old", b"o" * 32)
+    new = MasterKey("new", b"n" * 32)
+    original = EnvelopeCipher(old).encrypt(b"private", associated_data=b"resource")
+
+    rotated = EnvelopeCipher(old).rewrap(original, associated_data=b"resource", new_master_key=new)
+
+    before = json.loads(original)
+    after = json.loads(rotated)
+    assert before["ciphertext"] == after["ciphertext"]
+    assert before["data_nonce"] == after["data_nonce"]
+    assert after["key_id"] == "new"
+    assert EnvelopeCipher(new).decrypt(rotated, associated_data=b"resource") == b"private"
+
+
 def test_blob_store_encrypts_deduplicates_and_enforces_permissions(tmp_path: Path) -> None:
     store = EncryptedBlobStore(tmp_path / "blobs", cipher())
 

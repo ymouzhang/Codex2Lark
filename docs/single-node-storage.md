@@ -263,6 +263,25 @@ rotation rewrites wrapped data keys without requiring immediate re-encryption of
 every large blob. Removing the external master key renders backups unreadable,
 so key backup is an explicit operator responsibility.
 
+The stopped-Gateway rotation command receives the current key from the normal
+Gateway environment and the new 32-byte key through explicit command arguments:
+
+```text
+codex2lark storage rotate-key --new-key-id KEY_ID \
+  --new-key-base64 BASE64 --yes
+```
+
+It takes the exclusive data-directory lock, writes a content-free
+`key-rotation.json` recovery marker, rewraps every database and blob envelope,
+verifies that all envelopes name the new key, and removes the marker only after
+success. Ciphertext payload bytes are not decrypted/re-encrypted and plaintext
+is never written to disk. Rotation is repeatable with the same old/new keys
+after interruption; envelopes already using the new key are left unchanged.
+Gateway startup refuses a data directory with the recovery marker. The operator
+must retain both keys and rerun rotation until it succeeds, then update the
+service secret to the new key and verify a backup restore before retiring the
+old key. A different requested target while a marker exists is rejected.
+
 The first implementation uses AES-256-GCM from `cryptography`. The operator
 provides a base64-encoded 32-byte master key and a non-secret key identifier.
 Production configuration reads them from an external secret binding; the

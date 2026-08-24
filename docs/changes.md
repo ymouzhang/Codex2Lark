@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined resumable wrapping-key rotation before implementation: stopped-
+  Gateway exclusive ownership, current/new key separation, a crash marker,
+  mixed-envelope repeatability, database/blob verification, startup refusal
+  during incomplete rotation, and explicit operator key-retirement order.
+  Implementation area: envelope cipher, rotation catalog/service, Gateway
+  preflight, storage CLI, and interruption/recovery tests.
+
 - Defined single-node disk protection and exact local purge before
   implementation: validated capacity ceilings, a pre-download hard gate,
   metadata-only attachment fallback, content-safe pressure status, and

@@ -214,6 +214,22 @@ uv run codex2lark storage purge-chat \
 The command fails for an unknown target and prints only counts and reclaimed
 bytes. It does not delete the corresponding upstream Feishu message or chat.
 
+Rotate the wrapping key only after creating and verifying a backup and while the
+Gateway is stopped. Keep the current key environment configured for this
+command:
+
+```bash
+uv run codex2lark storage rotate-key \
+  --new-key-id local-v2 \
+  --new-key-base64 'a-new-base64-encoded-32-byte-key' \
+  --yes
+```
+
+On success, replace the service's `CODEX2LARK_MASTER_KEY_ID` and
+`CODEX2LARK_MASTER_KEY_BASE64` with the new values before restarting. If the
+command is interrupted, do not start the Gateway or delete either key; rerun the
+same command until the recovery marker is cleared.
+
 Create a portable encrypted-state backup only while the Gateway is stopped:
 
 ```bash
