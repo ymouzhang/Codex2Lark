@@ -132,6 +132,15 @@ check re-enables that plugin. Plugin ownership is trusted composition metadata,
 never inferred from model text or a tool-name prefix. Shutdown stops both ready
 and unhealthy initialized plugins.
 
+Every root and delegated `ToolExecutor` shares the same fair capacity gate and
+trusted `tool_id -> plugin_id` ownership map. A plugin permit is acquired only
+after validation, policy, and approval, then held through live target
+resolution, idempotency reconciliation, execution, and read-back verification.
+Approval waiting never occupies plugin capacity. Capacity is isolated per
+plugin and scheduled round-robin across tenant/application/group-or-session
+lanes; saturation or cancellation in one plugin cannot leak a permit or block a
+different plugin.
+
 ## 5. Stable plugin API
 
 The first Runtime API exposes these ports:

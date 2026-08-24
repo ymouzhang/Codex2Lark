@@ -38,6 +38,8 @@ class GatewayConfig:
     tenant_concurrency: int = 4
     app_concurrency: int = 4
     group_concurrency: int = 2
+    model_provider_concurrency: int = 4
+    plugin_concurrency: int = 4
     storage_capacity: StorageCapacityPolicy = field(default_factory=StorageCapacityPolicy)
     max_attachment_bytes: int = 20 * 1024 * 1024
     canary_agent_version: int | None = None
@@ -69,6 +71,8 @@ class GatewayConfig:
                 self.run_wall_time_ms,
                 self.run_cost_limit_micros,
                 self.shutdown_drain_ms,
+                self.model_provider_concurrency,
+                self.plugin_concurrency,
             )
             < 1
         ):
@@ -121,6 +125,10 @@ class GatewayConfig:
             tenant_concurrency=cls._integer(values, "CODEX2LARK_TENANT_CONCURRENCY", 4),
             app_concurrency=cls._integer(values, "CODEX2LARK_APP_CONCURRENCY", 4),
             group_concurrency=cls._integer(values, "CODEX2LARK_GROUP_CONCURRENCY", 2),
+            model_provider_concurrency=cls._integer(
+                values, "CODEX2LARK_MODEL_PROVIDER_CONCURRENCY", 4
+            ),
+            plugin_concurrency=cls._integer(values, "CODEX2LARK_PLUGIN_CONCURRENCY", 4),
             storage_capacity=StorageCapacityPolicy.from_environment(values),
             max_attachment_bytes=cls._integer(
                 values, "CODEX2LARK_MAX_ATTACHMENT_BYTES", 20 * 1024 * 1024

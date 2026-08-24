@@ -238,6 +238,13 @@ Read-only tools may execute in parallel when they are independent. Mutations of
 one Feishu resource execute sequentially. A mixed tool batch becomes sequential
 when ordering or approval matters.
 
+All root and delegated Harnesses in one Gateway share one fair capacity gate.
+The trusted `openai-responses` provider slot is acquired immediately around
+`ModelProvider.complete`; queue wait is inside `wall_time_ms`. FIFO queues are
+round-robin by tenant/application/group-or-session lane, so one group cannot
+monopolize released capacity. Cancellation removes a waiter or releases an
+already granted permit in `finally`.
+
 ## 5. Context engineering
 
 Codex2Lark gives the Agent a map, not an unbounded transcript.

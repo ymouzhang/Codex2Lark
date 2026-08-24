@@ -10,6 +10,7 @@ import pytest
 from codex2lark.core.budgets import BudgetKind, BudgetLimit
 from codex2lark.core.cancellation import CancellationToken
 from codex2lark.core.events import NormalizedEvent, OutboxDraft, TaskCommand
+from codex2lark.runtime.capacity import CapacityLane, FairCapacityGate
 from codex2lark.runtime.context import ContextBuild, ContextEngine, ContextEvidence
 from codex2lark.runtime.controls import RunControl, RunControlKind
 from codex2lark.runtime.harness import AgentHarness, HarnessRequest
@@ -233,7 +234,7 @@ def request(run_id: str = "run-1") -> HarnessRequest:
 
 
 def build_harness(
-    model: FakeModel,
+    model: object,
     *,
     tool: FakeWriteTool | None = None,
     policy: AllowPolicy | None = None,
@@ -241,6 +242,8 @@ def build_harness(
     sessions: InMemorySessionStore | None = None,
     controls: FakeControls | None = None,
     context: ContextEngine | None = None,
+    capacity_gate: FairCapacityGate | None = None,
+    provider_concurrency: int | None = None,
 ) -> tuple[AgentHarness, InMemorySessionStore]:
     write_tool = tool or FakeWriteTool()
     registry = ToolRegistry([write_tool])
@@ -266,6 +269,9 @@ def build_harness(
         context=context or ContextEngine(),
         sessions=store,
         controls=controls,
+        capacity_gate=capacity_gate,
+        provider_id="test-provider" if capacity_gate is not None else None,
+        provider_concurrency=provider_concurrency,
     )
     return harness, store
 
@@ -353,6 +359,97 @@ async def test_harness_runs_parallel_safe_read_batch_concurrently_in_call_order(
     ]
 
 
+async def test_root_and_child_harnesses_share_provider_capacity() -> None:
+    class TrackingModel:
+        def __init__(self) -> None:
+            self.active = 0
+            self.maximum_active = 0
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            del request
+            self.active += 1
+            self.maximum_active = max(self.maximum_active, self.active)
+            await asyncio.sleep(0.01)
+            self.active -= 1
+            return ModelResponse("Done.")
+
+    gate = FairCapacityGate()
+    model = TrackingModel()
+    root, _ = build_harness(
+        model,
+        capacity_gate=gate,
+        provider_concurrency=1,
+    )
+    child, _ = build_harness(
+        model,
+        capacity_gate=gate,
+        provider_concurrency=1,
+    )
+
+    root_outcome, child_outcome = await asyncio.gather(
+        root.run(request("root-run"), definition(require_verified=False), now_ms=100),
+        child.run(request("child-run"), definition(require_verified=False), now_ms=100),
+    )
+
+    assert root_outcome.status is child_outcome.status is RunStatus.COMPLETED
+    assert model.maximum_active == 1
+    provider = (await gate.snapshot())["provider:test-provider"]
+    assert (provider.in_use, provider.queued) == (0, 0)
+
+
+async def test_plugin_capacity_starts_after_approval_and_spans_tool_execution() -> None:
+    class BlockingApprovals(FakeApprovals):
+        def __init__(self) -> None:
+            super().__init__()
+            self.waiting = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def request(self, definition, call, context) -> bool:
+            del definition, call, context
+            self.waiting.set()
+            await self.release.wait()
+            return True
+
+    class BlockingWriteTool(FakeWriteTool):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def execute(self, arguments, context) -> dict[str, object]:
+            del context
+            self.started.set()
+            await self.release.wait()
+            return {"document_token": "docx_123", "title": arguments["title"]}
+
+    gate = FairCapacityGate()
+    tool = BlockingWriteTool()
+    registry = ToolRegistry([tool])
+    approvals = BlockingApprovals()
+    executor = ToolExecutor(
+        registry,
+        AllowPolicy(approval_required=True),
+        approvals,
+        capacity_gate=gate,
+        tool_plugin_ids={"docs.create": "feishu-docs"},
+        plugin_concurrency=1,
+    )
+    running = asyncio.create_task(
+        executor.execute(ToolCall("call", "docs.create", {"title": "A"}), request().tool_context)
+    )
+    await approvals.waiting.wait()
+
+    assert await gate.snapshot() == {}
+    approvals.release.set()
+    await tool.started.wait()
+    assert (await gate.snapshot())["plugin:feishu-docs"].in_use == 1
+    tool.release.set()
+    result = await running
+
+    assert result.succeeded
+    assert (await gate.snapshot())["plugin:feishu-docs"].in_use == 0
+
+
 async def test_harness_refuses_unverified_completion() -> None:
     tool = FakeWriteTool(VerificationState.UNCERTAIN)
     model = FakeModel(
@@ -420,6 +517,38 @@ async def test_wall_time_budget_cancels_hanging_model_call() -> None:
     assert outcome.summary == "wall_time_ms budget exceeded"
     assert outcome.warnings == ("wall_time_budget_exhausted",)
     assert sessions.runs["run-1"] is RunStatus.FAILED
+
+
+async def test_provider_capacity_wait_is_bounded_by_harness_wall_time() -> None:
+    gate = FairCapacityGate()
+    lane = CapacityLane("tenant-1", "app-1", "chat-1")
+    holder_entered = asyncio.Event()
+    release_holder = asyncio.Event()
+
+    async def hold_provider() -> None:
+        async with gate.capacity("provider:test-provider", lane, limit=1):
+            holder_entered.set()
+            await release_holder.wait()
+
+    holding = asyncio.create_task(hold_provider())
+    await holder_entered.wait()
+    model = FakeModel([ModelResponse("must not run")])
+    harness, _ = build_harness(
+        model,
+        capacity_gate=gate,
+        provider_concurrency=1,
+    )
+
+    outcome = await harness.run(
+        request(), definition(require_verified=False, wall_time_ms=5), now_ms=100
+    )
+
+    assert outcome.warnings == ("wall_time_budget_exhausted",)
+    assert model.requests == []
+    snapshot = (await gate.snapshot())["provider:test-provider"]
+    assert (snapshot.in_use, snapshot.queued) == (1, 0)
+    release_holder.set()
+    await holding
 
 
 async def test_model_cost_budget_stops_run_deterministically() -> None:

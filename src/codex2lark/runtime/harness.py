@@ -10,6 +10,7 @@ from typing import Protocol, TypeVar
 from codex2lark.core.budgets import BudgetKind, BudgetLedger
 from codex2lark.core.cancellation import CancellationToken, CancelledByPolicyError
 
+from .capacity import CapacityLane, FairCapacityGate
 from .context import ContextEngine, ContextEvidence
 from .controls import RunControlInbox, RunControlKind
 from .resources import ResourceLoader
@@ -104,7 +105,17 @@ class AgentHarness:
         sessions: SessionStore,
         controls: RunControlInbox | None = None,
         monotonic_ns: Callable[[], int] = time.monotonic_ns,
+        capacity_gate: FairCapacityGate | None = None,
+        provider_id: str | None = None,
+        provider_concurrency: int | None = None,
     ) -> None:
+        capacity_values = (capacity_gate, provider_id, provider_concurrency)
+        if any(value is not None for value in capacity_values) and not all(
+            value is not None for value in capacity_values
+        ):
+            raise ValueError("model capacity configuration must be complete")
+        if provider_concurrency is not None and provider_concurrency < 1:
+            raise ValueError("model provider concurrency must be positive")
         self._model = model
         self._tools = tools
         self._tool_executor = tool_executor
@@ -113,6 +124,9 @@ class AgentHarness:
         self._sessions = sessions
         self._controls = controls
         self._monotonic_ns = monotonic_ns
+        self._capacity_gate = capacity_gate
+        self._provider_id = provider_id
+        self._provider_concurrency = provider_concurrency
 
     async def run(
         self,
@@ -243,7 +257,9 @@ class AgentHarness:
                     },
                     clock_ms,
                 )
-                response = await wall_time.wait_for(self._model.complete(model_request))
+                response = await wall_time.wait_for(
+                    self._complete_model(model_request, request.tool_context)
+                )
                 self._consume_if_limited(
                     ledger,
                     BudgetKind.MODEL_TOKENS,
@@ -497,6 +513,25 @@ class AgentHarness:
                     ),
                 )
         return updated
+
+    async def _complete_model(
+        self, model_request: ModelRequest, context: ToolContext
+    ) -> ModelResponse:
+        if self._capacity_gate is None:
+            return await self._model.complete(model_request)
+        assert self._provider_id is not None
+        assert self._provider_concurrency is not None
+        lane = CapacityLane(
+            context.tenant_key,
+            context.app_id,
+            context.chat_id or context.session_key,
+        )
+        async with self._capacity_gate.capacity(
+            f"provider:{self._provider_id}",
+            lane,
+            limit=self._provider_concurrency,
+        ):
+            return await self._model.complete(model_request)
 
     async def _acknowledge_controls(
         self, task_id: str, control_ids: list[str], *, now_ms: int

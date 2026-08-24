@@ -45,6 +45,7 @@ from codex2lark.core.budgets import BudgetKind, BudgetLimit
 from codex2lark.core.models import Identity
 from codex2lark.interfaces.application import create_application
 from codex2lark.runtime.approvals import ApprovalDecisionService, DurableApprovalBroker
+from codex2lark.runtime.capacity import FairCapacityGate
 from codex2lark.runtime.context import ContextEngine
 from codex2lark.runtime.delegation import (
     AgentMessageTool,
@@ -380,6 +381,7 @@ def create_v3_gateway(
     policy = AllowConfiguredTools(plugins, tool_plugin_ids)
     approvals = DurableApprovalBroker(runtime_store)
     graph_store = SQLiteAgentGraphStore(database, cipher)
+    capacity_gate = FairCapacityGate()
     child_harness = AgentHarness(
         model=selected_model,
         tools=business_registry,
@@ -389,10 +391,16 @@ def create_v3_gateway(
             approvals,
             runtime_store,
             write_scope_store=graph_store,
+            capacity_gate=capacity_gate,
+            tool_plugin_ids=tool_plugin_ids,
+            plugin_concurrency=config.plugin_concurrency,
         ),
         resources=resource_loader,
         context=ContextEngine(),
         sessions=sessions,
+        capacity_gate=capacity_gate,
+        provider_id="openai-responses",
+        provider_concurrency=config.model_provider_concurrency,
     )
     supervisor = MultiAgentSupervisor(graph_store)
     coordinator = MultiAgentCoordinator(
@@ -417,11 +425,22 @@ def create_v3_gateway(
     harness = AgentHarness(
         model=selected_model,
         tools=registry,
-        tool_executor=ToolExecutor(registry, policy, approvals, runtime_store),
+        tool_executor=ToolExecutor(
+            registry,
+            policy,
+            approvals,
+            runtime_store,
+            capacity_gate=capacity_gate,
+            tool_plugin_ids=tool_plugin_ids,
+            plugin_concurrency=config.plugin_concurrency,
+        ),
         resources=resource_loader,
         context=ContextEngine(),
         sessions=sessions,
         controls=runtime_store,
+        capacity_gate=capacity_gate,
+        provider_id="openai-responses",
+        provider_concurrency=config.model_provider_concurrency,
     )
 
     def root_definition(version: int, model_profile: str) -> AgentDefinition:

@@ -177,6 +177,18 @@ All values are positive and must satisfy group ≤ application ≤ tenant ≤ gl
 Changing them requires a Gateway restart; pending tasks retain their trusted
 scope but use the new limits on their next lease.
 
+External call concurrency has separate positive limits:
+
+```bash
+export CODEX2LARK_MODEL_PROVIDER_CONCURRENCY='4'
+export CODEX2LARK_PLUGIN_CONCURRENCY='4'
+```
+
+The provider limit is shared by every root and child model call. The plugin
+limit applies independently to each capability plugin and is shared by every
+root and child tool call. Capacity waits remain subject to each run's active
+wall-time budget.
+
 `CODEX2LARK_AUTHORING_IDENTITY` is `user` or `bot` and selects the trusted
 lark-cli identity used by authoring tools. Group text cannot override it. The
 selected lark-cli identity must be authenticated and have the document/Drive

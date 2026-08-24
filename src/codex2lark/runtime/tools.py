@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from .capacity import CapacityLane, FairCapacityGate
 from .types import (
     ToolCall,
     ToolDefinition,
@@ -200,9 +201,16 @@ class ToolExecutor:
         clock_ms: Callable[[], int] | None = None,
         claim_lease_ms: int = 300_000,
         write_lock_lease_ms: int = 300_000,
+        capacity_gate: FairCapacityGate | None = None,
+        tool_plugin_ids: dict[str, str] | None = None,
+        plugin_concurrency: int | None = None,
     ) -> None:
         if min(claim_lease_ms, write_lock_lease_ms) < 1:
             raise ValueError("tool operation claim lease must be positive")
+        if capacity_gate is None and tool_plugin_ids:
+            raise ValueError("tool plugin ownership requires a capacity gate")
+        if capacity_gate is not None and (plugin_concurrency is None or plugin_concurrency < 1):
+            raise ValueError("plugin concurrency must be positive with a capacity gate")
         self._registry = registry
         self._policy = policy
         self._approvals = approvals
@@ -211,6 +219,9 @@ class ToolExecutor:
         self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self._claim_lease_ms = claim_lease_ms
         self._write_lock_lease_ms = write_lock_lease_ms
+        self._capacity_gate = capacity_gate
+        self._tool_plugin_ids = dict(tool_plugin_ids or {})
+        self._plugin_concurrency = plugin_concurrency
 
     async def execute(self, call: ToolCall, context: ToolContext) -> ToolResult:
         try:
@@ -234,6 +245,36 @@ class ToolExecutor:
                 "approval_rejected",
                 "the requester rejected or did not approve this operation",
             )
+        return await self._execute_with_capacity(tool, definition, call, context)
+
+    async def _execute_with_capacity(
+        self,
+        tool: SemanticTool,
+        definition: ToolDefinition,
+        call: ToolCall,
+        context: ToolContext,
+    ) -> ToolResult:
+        plugin_id = self._tool_plugin_ids.get(definition.tool_id)
+        if plugin_id is None or self._capacity_gate is None:
+            return await self._execute_permitted(tool, definition, call, context)
+        assert self._plugin_concurrency is not None
+        lane = CapacityLane(
+            context.tenant_key,
+            context.app_id,
+            context.chat_id or context.session_key,
+        )
+        async with self._capacity_gate.capacity(
+            f"plugin:{plugin_id}", lane, limit=self._plugin_concurrency
+        ):
+            return await self._execute_permitted(tool, definition, call, context)
+
+    async def _execute_permitted(
+        self,
+        tool: SemanticTool,
+        definition: ToolDefinition,
+        call: ToolCall,
+        context: ToolContext,
+    ) -> ToolResult:
         if (
             context.write_scope_required
             and not context.write_scope

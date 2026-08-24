@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined shared fair Provider/plugin call capacity before implementation. One
+  cancellation-safe round-robin gate is shared by root and child Harnesses and
+  ToolExecutors; Provider queue wait is inside wall time, plugin permits begin
+  after approval and span reconciliation/execution/verification, and trusted
+  composition metadata supplies resource ownership. Implementation area:
+  capacity gate, Harness/ToolExecutor boundaries, Gateway configuration/wiring,
+  content-safe metrics, and direct fairness/cancellation/integration tests.
+
 - Defined durable hierarchical fair task scheduling before implementation.
   Admission persists trusted tenant/application/group scopes; one SQLite
   transaction incrementally enforces global/tenant/app/group caps plus

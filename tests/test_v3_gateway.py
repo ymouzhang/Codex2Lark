@@ -137,6 +137,8 @@ def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_pa
     assert config.run_cost_limit_micros == 1_000_000
     assert config.shutdown_drain_ms == 30_000
     assert config.task_limits().group_limit == 2
+    assert config.model_provider_concurrency == 4
+    assert config.plugin_concurrency == 4
     assert "secret" not in repr(config)
     missing_price = dict(values)
     del missing_price["CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS"]
