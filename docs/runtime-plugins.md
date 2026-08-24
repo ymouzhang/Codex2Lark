@@ -273,6 +273,14 @@ as a transitional trusted adapter. The model sees only strict schemas and
 semantic results. The adapter identity is configured by the operator, is bound
 outside model input, and cannot be overridden in tool arguments.
 
+The authoring artifact plugin adds bounded `feishu.whiteboard.render`,
+`feishu.sheets.create`, `feishu.sheets.write`, `feishu.base.create`, and
+`feishu.base.upsert` tools. Each schema bounds collection sizes through its
+validated request model. Every write returns an upstream confirmation or live
+read-back verification record; Sheet writes specifically read values/formulas
+back and reject formula errors. Artifact observations are non-persistable
+because cells, records, and diagram sources may contain business content.
+
 ## 10. Result publishers
 
 Result publishers render Harness events and terminal outcomes into a channel.

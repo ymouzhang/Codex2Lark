@@ -7,6 +7,7 @@ from collections.abc import Callable
 from contextlib import suppress
 
 from codex2lark.adapters.openai_responses import OpenAIResponsesModel
+from codex2lark.capabilities.artifacts.plugin import FeishuArtifactsPlugin
 from codex2lark.capabilities.docs.plugin import FeishuDocsPlugin
 from codex2lark.capabilities.im.admission import IMAdmissionService
 from codex2lark.capabilities.im.channel_adapter import (
@@ -204,10 +205,15 @@ def create_v3_gateway(
     )
     authoring = create_application()
     docs_plugin = FeishuDocsPlugin(authoring.docs, config.authoring_identity)
-    plugins = PluginManager(runtime_api=1, allowlist={"feishu-im", "feishu-docs"})
+    artifacts_plugin = FeishuArtifactsPlugin(authoring.artifacts, config.authoring_identity)
+    plugins = PluginManager(
+        runtime_api=1,
+        allowlist={"feishu-im", "feishu-docs", "feishu-artifacts"},
+    )
     plugins.register(create_im_plugin())
     plugins.register(docs_plugin)
-    enabled_tools = list(docs_plugin.tools)
+    plugins.register(artifacts_plugin)
+    enabled_tools = [*docs_plugin.tools, *artifacts_plugin.tools]
     registry = ToolRegistry(enabled_tools)
     harness = AgentHarness(
         model=model

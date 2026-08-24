@@ -5,6 +5,10 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the V3 authoring-artifact plugin before implementation: bounded
+  Whiteboard, Sheets, and Base semantic tools share operator-bound identity,
+  strict validation, write verification, and non-persistable observations.
+
 - Defined the first V3 authoring-plugin tool profile before implementation:
   bounded search/inspect/create/edit operations, operator-bound delegated
   identity, live read-back verification, and checkpoint redaction of document
