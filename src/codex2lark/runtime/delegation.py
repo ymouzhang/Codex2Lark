@@ -123,6 +123,9 @@ class DelegatedHarnessWorker:
                         identity_ref=self._parent_context.identity_ref,
                         policy_version=self._parent_context.policy_version,
                         task_id=self._parent_context.task_id,
+                        chat_id=self._parent_context.chat_id,
+                        source_message_id=self._parent_context.source_message_id,
+                        reply_in_thread=self._parent_context.reply_in_thread,
                         write_scope=tuple(
                             WriteScopeTarget(
                                 item.resource_type,

@@ -192,10 +192,23 @@ evidence of completion.
 Acknowledgement and terminal replies use deterministic idempotency keys derived
 from the source `message_id` and reply kind.
 
+After execution begins, one idempotent progress intent tells the requester that
+authoritative group context is being collected and the Agent has started. It is
+inserted before slow context/model/tool work, delivered after acknowledgement,
+and never claims that an external write has completed. Retries reuse the same
+key and cannot spam duplicate progress messages. Additional fine-grained tool
+progress remains a future resource/plugin concern.
+
 For one admitted request, the acknowledgement intent is always leased before
 progress, approval, or terminal intents, including when their timestamps are
 identical after a fast model response. Delivery retry preserves this causal
 order so the user never sees “completed” before “received.”
+
+Destructive-tool approval uses a Feishu interactive card. The production
+Channel adapter handles `card.action.trigger` at the same synchronous durable
+callback boundary as message admission. Only the task's originating requester
+may decide; the runtime acknowledges approved, rejected, duplicate, expired, or
+unauthorized decisions without exposing stored content.
 
 ## 5. Message collection
 

@@ -13,6 +13,15 @@ class PermanentTaskError(RuntimeError):
     pass
 
 
+class TaskDeferred(RuntimeError):
+    def __init__(self, reason: str, *, delay_ms: int = 2_000) -> None:
+        if not reason or delay_ms < 0:
+            raise ValueError("task deferral is invalid")
+        super().__init__(reason)
+        self.reason = reason
+        self.delay_ms = delay_ms
+
+
 @dataclass(frozen=True, slots=True)
 class TaskExecutionResult:
     state: TaskState
@@ -59,6 +68,16 @@ class TaskStore(Protocol):
         available_at_ms: int,
         now_ms: int,
         error_code: str,
+    ) -> None: ...
+
+    async def defer_task(
+        self,
+        task_id: str,
+        *,
+        worker_id: str,
+        available_at_ms: int,
+        now_ms: int,
+        reason: str,
     ) -> None: ...
 
 
@@ -111,6 +130,16 @@ class DurableTaskWorker:
             if task.recovery_error_code is not None:
                 raise PermanentTaskError(task.recovery_error_code)
             result = await handler.execute(task, now_ms=now_ms)
+        except TaskDeferred as exc:
+            transition_ms = max(now_ms, self._clock_ms())
+            await self._store.defer_task(
+                task.task_id,
+                worker_id=self._worker_id,
+                available_at_ms=transition_ms + exc.delay_ms,
+                now_ms=transition_ms,
+                reason=exc.reason,
+            )
+            return task.task_id, True
         except Exception as exc:
             transition_ms = max(now_ms, self._clock_ms())
             if not isinstance(exc, PermanentTaskError) and task.attempt_count < task.max_attempts:

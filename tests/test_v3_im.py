@@ -47,7 +47,7 @@ from codex2lark.capabilities.im.task_handler import (
     IMMentionTaskHandler,
     IMResponseTemplates,
 )
-from codex2lark.core.events import LeasedOutboxMessage, LeasedTask
+from codex2lark.core.events import LeasedOutboxMessage, LeasedTask, OutboxDraft
 from codex2lark.core.models import Identity
 from codex2lark.runtime.context import ContextEvidence
 from codex2lark.runtime.outbox import OutboxDispatcher
@@ -385,13 +385,14 @@ async def test_pinned_channel_dispatcher_waits_for_durable_handler() -> None:
         await asyncio.sleep(0.01)
         completed.append(str(raw["header"]["event_id"]))
 
-    bridge.bind(admit, None, admit, admit)
+    bridge.bind(admit, None, admit, admit, admit)
 
     bridge.dispatch_message(raw_channel_event())
     bridge.dispatch_message_recalled(raw_channel_event())
     bridge.dispatch_bot_removed(raw_channel_event())
+    bridge.dispatch_card_action(raw_channel_event())
 
-    assert completed == ["event-raw", "event-raw", "event-raw"]
+    assert completed == ["event-raw", "event-raw", "event-raw", "event-raw"]
     bridge.close()
 
 
@@ -770,6 +771,19 @@ async def test_im_outbox_publisher_preserves_thread_and_requires_confirmation() 
         "reply_target_gone": "fail",
         "uuid": "stable-key",
     }
+    approval = replace(
+        item,
+        outbox_id="outbox-2",
+        message_kind="approval",
+        idempotency_key="approval-key",
+        payload={
+            "chat_id": "oc_group",
+            "message_id": "om_channel",
+            "card": {"schema": "2.0", "body": {"elements": []}},
+        },
+    )
+    assert await publisher.publish(approval) == "om_reply"
+    assert channel.sent[1][1] == {"card": {"schema": "2.0", "body": {"elements": []}}}
     channel.send_result = SimpleNamespace(success=True, message_id=None)
     try:
         await publisher.publish(item)
@@ -1141,6 +1155,16 @@ class FakeHarnessRunner:
         return self.outcome
 
 
+class RecordingTaskOutbox:
+    def __init__(self) -> None:
+        self.items: list[OutboxDraft] = []
+
+    async def enqueue_task_outbox(self, task_id: str, draft: OutboxDraft, *, now_ms: int) -> None:
+        del task_id, now_ms
+        if draft.idempotency_key not in {item.idempotency_key for item in self.items}:
+            self.items.append(draft)
+
+
 def mention_task(task_id: str = "task-1") -> LeasedTask:
     return LeasedTask(
         task_id=task_id,
@@ -1164,6 +1188,7 @@ def mention_task(task_id: str = "task-1") -> LeasedTask:
 
 def response_templates() -> IMResponseTemplates:
     return IMResponseTemplates(
+        progress_started="I started processing this request.",
         completed_suffix="Completed. Ask me if anything is unclear.",
         blocked_suffix="I need more information before continuing.",
         failed_suffix="I could not finish this request.",
@@ -1199,6 +1224,7 @@ async def test_im_task_handler_renders_verified_terminal_reply_and_reuses_termin
         definition=definition,
         templates=response_templates(),
         identity_ref="bot-default",
+        task_outbox=RecordingTaskOutbox(),
     )
     try:
         result = await handler.execute(mention_task(), now_ms=100)

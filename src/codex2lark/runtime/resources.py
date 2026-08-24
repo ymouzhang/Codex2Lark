@@ -39,6 +39,7 @@ class IMTemplateResources:
     bundle_id: str
     version: int
     acknowledgement: str
+    progress_started: str
     completed_suffix: str
     blocked_suffix: str
     failed_suffix: str
@@ -90,6 +91,7 @@ class ResourceLoader:
             "bundle_id",
             "version",
             "acknowledgement",
+            "progress_started",
             "completed_suffix",
             "blocked_suffix",
             "failed_suffix",
@@ -107,6 +109,7 @@ class ResourceLoader:
             bundle_id=strings["bundle_id"],
             version=version,
             acknowledgement=strings["acknowledgement"],
+            progress_started=strings["progress_started"],
             completed_suffix=strings["completed_suffix"],
             blocked_suffix=strings["blocked_suffix"],
             failed_suffix=strings["failed_suffix"],

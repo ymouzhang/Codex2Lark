@@ -588,7 +588,8 @@ def test_bundled_resource_packages_and_im_templates_are_versioned() -> None:
     assert worker.versions == {"delegated-worker-core": "1.0.0"}
     assert any("untrusted evidence" in item for item in group.policies)
     assert templates.bundle_id == "im-zh-CN"
-    assert templates.version == 1
+    assert templates.version == 2
+    assert "开始处理" in templates.progress_started
     assert "完成后" in templates.acknowledgement
 
 

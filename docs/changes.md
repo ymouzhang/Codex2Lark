@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined production progress and destructive-tool approvals before
+  implementation: one retry-safe execution-start notice, stable argument-free
+  approval identities, encrypted approval cards, no-attempt task deferral,
+  requester-only durable card decisions, idempotent conflicting-click handling,
+  expiry, and exact resume semantics. Implementation area: runtime schema/store,
+  tool policy/broker, task scheduler, Channel card callback bridge, IM publisher,
+  production composition, and approval/progress recovery tests.
+
 - Defined direct single-node Gateway process control before implementation:
   foreground/run compatibility, daemon start readiness waiting, content-safe
   PID/status/log files, exact process validation before SIGTERM, bounded graceful

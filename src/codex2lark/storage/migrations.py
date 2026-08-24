@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -409,6 +409,28 @@ CREATE TABLE IF NOT EXISTS runtime_admin_audit (
 );
 """
 
+APPROVAL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runtime_approvals (
+    approval_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    tenant_key TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    session_key TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    tool_id TEXT NOT NULL,
+    argument_digest TEXT NOT NULL,
+    state TEXT NOT NULL,
+    expires_at_ms INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    decided_at_ms INTEGER,
+    FOREIGN KEY (task_id) REFERENCES runtime_tasks(task_id)
+);
+
+CREATE INDEX IF NOT EXISTS runtime_approvals_task_idx
+ON runtime_approvals(task_id, state, created_at_ms);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
@@ -419,4 +441,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (7, AGENT_WRITE_SCOPE_SCHEMA),
     (8, CHECKPOINT_SOURCE_SCHEMA),
     (9, ADMIN_AUDIT_SCHEMA),
+    (10, APPROVAL_SCHEMA),
 )

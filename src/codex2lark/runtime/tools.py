@@ -28,6 +28,9 @@ class ToolContext:
     identity_ref: str
     policy_version: int
     task_id: str | None = None
+    chat_id: str | None = None
+    source_message_id: str | None = None
+    reply_in_thread: bool = False
     write_scope: tuple[WriteScopeTarget, ...] = ()
     write_scope_required: bool = False
 
@@ -209,7 +212,12 @@ class ToolExecutor:
         if decision.approval_required and not await self._approvals.request(
             definition, call, context
         ):
-            return self._failure(call, definition.effect, "approval_denied", "approval denied")
+            return self._failure(
+                call,
+                definition.effect,
+                "approval_rejected",
+                "the requester rejected or did not approve this operation",
+            )
         if (
             context.write_scope_required
             and not context.write_scope

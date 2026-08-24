@@ -37,6 +37,7 @@ from codex2lark.capabilities.im.task_handler import IMMentionTaskHandler, IMResp
 from codex2lark.core.budgets import BudgetKind, BudgetLimit
 from codex2lark.core.models import Identity
 from codex2lark.interfaces.application import create_application
+from codex2lark.runtime.approvals import ApprovalDecisionService, DurableApprovalBroker
 from codex2lark.runtime.context import ContextEngine
 from codex2lark.runtime.delegation import DelegateAgentTool, MultiAgentCoordinator
 from codex2lark.runtime.harness import AgentHarness, ModelProvider
@@ -47,7 +48,6 @@ from codex2lark.runtime.resources import ResourceLoader
 from codex2lark.runtime.sessions import SessionStore
 from codex2lark.runtime.tasks import DurableTaskWorker
 from codex2lark.runtime.tools import (
-    ApprovalBroker,
     PolicyDecision,
     SemanticTool,
     ToolContext,
@@ -55,7 +55,7 @@ from codex2lark.runtime.tools import (
     ToolPolicy,
     ToolRegistry,
 )
-from codex2lark.runtime.types import AgentDefinition, ToolCall, ToolDefinition
+from codex2lark.runtime.types import AgentDefinition, ToolCall, ToolDefinition, ToolEffect
 from codex2lark.storage.agent_store import SQLiteAgentGraphStore
 from codex2lark.storage.blobs import EncryptedBlobStore
 from codex2lark.storage.capacity import StorageCapacityMonitor
@@ -74,7 +74,7 @@ class AllowConfiguredTools(ToolPolicy):
     async def authorize(
         self, definition: ToolDefinition, call: ToolCall, context: ToolContext
     ) -> PolicyDecision:
-        del definition, call
+        del call
         if not all(
             (
                 context.tenant_key,
@@ -84,15 +84,11 @@ class AllowConfiguredTools(ToolPolicy):
             )
         ):
             return PolicyDecision(False, "trusted Feishu execution bindings are incomplete")
-        return PolicyDecision(True, "tool is enabled by the production capability profile")
-
-
-class DenyUnconfiguredApprovals(ApprovalBroker):
-    async def request(
-        self, definition: ToolDefinition, call: ToolCall, context: ToolContext
-    ) -> bool:
-        del definition, call, context
-        return False
+        return PolicyDecision(
+            True,
+            "tool is enabled by the production capability profile",
+            approval_required=definition.effect is ToolEffect.DESTRUCTIVE,
+        )
 
 
 class V3Gateway:
@@ -211,6 +207,7 @@ def create_v3_gateway(
         return value if isinstance(value, str) and value else None
 
     templates = IMResponseTemplates(
+        progress_started=im_templates.progress_started,
         completed_suffix=im_templates.completed_suffix,
         blocked_suffix=im_templates.blocked_suffix,
         failed_suffix=im_templates.failed_suffix,
@@ -232,6 +229,11 @@ def create_v3_gateway(
         app_id=config.feishu_app_id,
         received_at_ms=lambda: int(time.time() * 1000),
     )
+    approval_decisions = ApprovalDecisionService(
+        runtime_store,
+        app_id=config.feishu_app_id,
+        received_at_ms=lambda: int(time.time() * 1000),
+    )
     source = OfficialChannelEventSource(
         active_channel,
         admission,
@@ -239,6 +241,7 @@ def create_v3_gateway(
         received_at_ms=lambda: int(time.time() * 1000),
         bot_added_handler=membership_admission,
         lifecycle_handler=lifecycle_admission,
+        card_action_handler=approval_decisions,
     )
     api = im_api or OfficialIMMessageAPI(
         app_id=config.feishu_app_id, app_secret=config.feishu_app_secret
@@ -275,7 +278,7 @@ def create_v3_gateway(
         base_url=config.openai_base_url,
     )
     policy = AllowConfiguredTools()
-    approvals = DenyUnconfiguredApprovals()
+    approvals = DurableApprovalBroker(runtime_store)
     graph_store = SQLiteAgentGraphStore(database, cipher)
     child_harness = AgentHarness(
         model=selected_model,
@@ -338,6 +341,7 @@ def create_v3_gateway(
         definition=definition,
         templates=templates,
         identity_ref=f"bot:{config.feishu_app_id}",
+        task_outbox=runtime_store,
         graph_lifecycle=coordinator,
     )
     task_worker = DurableTaskWorker(

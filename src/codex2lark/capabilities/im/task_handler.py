@@ -29,8 +29,15 @@ class AgentGraphLifecycle(Protocol):
     async def finish(self, run_id: str, status: RunStatus, *, now_ms: int) -> None: ...
 
 
+class TaskOutbox(Protocol):
+    async def enqueue_task_outbox(
+        self, task_id: str, draft: OutboxDraft, *, now_ms: int
+    ) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class IMResponseTemplates:
+    progress_started: str
     completed_suffix: str
     blocked_suffix: str
     failed_suffix: str
@@ -41,6 +48,7 @@ class IMResponseTemplates:
             not value.strip()
             for value in (
                 self.completed_suffix,
+                self.progress_started,
                 self.blocked_suffix,
                 self.failed_suffix,
                 self.cancelled_suffix,
@@ -59,6 +67,7 @@ class IMMentionTaskHandler:
         definition: AgentDefinition,
         templates: IMResponseTemplates,
         identity_ref: str,
+        task_outbox: TaskOutbox,
         graph_lifecycle: AgentGraphLifecycle | None = None,
     ) -> None:
         if not identity_ref:
@@ -69,11 +78,31 @@ class IMMentionTaskHandler:
         self._definition = definition
         self._templates = templates
         self._identity_ref = identity_ref
+        self._task_outbox = task_outbox
         self._graph_lifecycle = graph_lifecycle
 
     async def execute(self, task: LeasedTask, *, now_ms: int) -> TaskExecutionResult:
         binding = self._binding(task)
         run_id = self.run_id_for_task(task.task_id)
+        await self._task_outbox.enqueue_task_outbox(
+            task.task_id,
+            OutboxDraft(
+                publisher_id="feishu-im.reply",
+                destination_ref=binding["message_id"],
+                message_kind="progress",
+                idempotency_key=(
+                    f"im:{binding['tenant_key']}:{binding['app_id']}:"
+                    f"{binding['message_id']}:progress:started:v1"
+                ),
+                payload={
+                    "chat_id": binding["chat_id"],
+                    "message_id": binding["message_id"],
+                    "reply_in_thread": bool(task.payload.get("thread_id")),
+                    "text": self._templates.progress_started,
+                },
+            ),
+            now_ms=now_ms,
+        )
         if self._graph_lifecycle is not None:
             await self._graph_lifecycle.prepare(
                 run_id=run_id,
@@ -112,6 +141,9 @@ class IMMentionTaskHandler:
                             identity_ref=self._identity_ref,
                             policy_version=self._definition.policy_version,
                             task_id=task.task_id,
+                            chat_id=binding["chat_id"],
+                            source_message_id=binding["message_id"],
+                            reply_in_thread=bool(task.payload.get("thread_id")),
                         ),
                         evidence=(
                             ContextEvidence(

@@ -12,6 +12,7 @@ from codex2lark.core.events import (
 )
 from codex2lark.runtime.tasks import (
     DurableTaskWorker,
+    TaskDeferred,
     TaskExecutionResult,
 )
 from codex2lark.storage.crypto import EnvelopeCipher, MasterKey
@@ -108,6 +109,38 @@ class ConcurrentHandler:
             ),
             "provider_failed",
         )
+
+
+class DeferredHandler(ConcurrentHandler):
+    async def execute(self, task: LeasedTask, *, now_ms: int) -> TaskExecutionResult:
+        del task, now_ms
+        raise TaskDeferred("approval_pending", delay_ms=25)
+
+
+async def test_task_deferral_releases_lease_without_spending_retry_budget(
+    tmp_path: Path,
+) -> None:
+    database, store = await setup(tmp_path)
+    try:
+        await store.admit(event(1), command("session-a", max_attempts=1), now_ms=1)
+        worker = DurableTaskWorker(
+            store,
+            {"im.handle_mention": DeferredHandler(1)},
+            worker_id="worker",
+            clock_ms=lambda: 10,
+        )
+
+        batch = await worker.run_once(now_ms=2)
+
+        assert len(batch.retry_task_ids) == 1
+        state = await database.call(
+            lambda connection: connection.execute(
+                "SELECT state, attempt_count, available_at_ms, last_error_code FROM runtime_tasks"
+            ).fetchone()
+        )
+        assert tuple(state) == ("pending", 0, 35, "approval_pending")
+    finally:
+        await database.close()
 
 
 async def test_task_worker_runs_independent_sessions_concurrently(tmp_path: Path) -> None:

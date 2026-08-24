@@ -20,6 +20,7 @@ class _DurableDispatcherBridge:
         self._bot_added: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._message_recalled: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._bot_removed: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        self._card_action: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="codex2lark-admission"
         )
@@ -30,11 +31,13 @@ class _DurableDispatcherBridge:
         bot_added: Callable[[dict[str, Any]], Awaitable[None]] | None,
         message_recalled: Callable[[dict[str, Any]], Awaitable[None]] | None,
         bot_removed: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        card_action: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> None:
         self._message = message
         self._bot_added = bot_added
         self._message_recalled = message_recalled
         self._bot_removed = bot_removed
+        self._card_action = card_action
 
     def dispatch_message(self, data: object) -> None:
         self._dispatch(self._message, data, "message")
@@ -47,6 +50,9 @@ class _DurableDispatcherBridge:
 
     def dispatch_bot_removed(self, data: object) -> None:
         self._dispatch(self._bot_removed, data, "botLeave")
+
+    def dispatch_card_action(self, data: object) -> None:
+        self._dispatch(self._card_action, data, "cardAction")
 
     def close(self) -> None:
         self._executor.shutdown(wait=True, cancel_futures=True)
@@ -81,7 +87,9 @@ class ChannelPort(Protocol):
 
     async def disconnect(self) -> None: ...
 
-    async def send(self, to: str, message: dict[str, str], opts: dict[str, object]) -> object: ...
+    async def send(
+        self, to: str, message: dict[str, object], opts: dict[str, object]
+    ) -> object: ...
 
     async def download_resource(
         self, resource_key: str, resource_type: str, *, message_id: str
@@ -100,6 +108,10 @@ class LifecycleHandler(Protocol):
     async def handle_message_recalled(self, raw: dict[str, Any]) -> None: ...
 
     async def handle_bot_removed(self, raw: dict[str, Any]) -> None: ...
+
+
+class CardActionHandler(Protocol):
+    async def handle(self, raw: dict[str, Any]) -> str: ...
 
 
 def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
@@ -126,8 +138,11 @@ def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
             bot_added: Callable[[dict[str, Any]], Awaitable[None]] | None,
             message_recalled: Callable[[dict[str, Any]], Awaitable[None]] | None,
             bot_removed: Callable[[dict[str, Any]], Awaitable[None]] | None,
+            card_action: Callable[[dict[str, Any]], Awaitable[None]] | None,
         ) -> None:
-            self._durable_bridge.bind(message, bot_added, message_recalled, bot_removed)
+            self._durable_bridge.bind(
+                message, bot_added, message_recalled, bot_removed, card_action
+            )
 
         def _build_dispatcher(self) -> object:
             dispatcher = super()._build_dispatcher()
@@ -154,6 +169,14 @@ def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
 
         def _on_p2_bot_deleted(self, data: object) -> None:
             self._durable_bridge.dispatch_bot_removed(data)
+
+        def _on_p2_card_action_trigger(self, data: object) -> object:
+            from lark_channel.event.callback.model.p2_card_action_trigger import (  # type: ignore[import-untyped]
+                P2CardActionTriggerResponse,
+            )
+
+            self._durable_bridge.dispatch_card_action(data)
+            return P2CardActionTriggerResponse({})
 
         async def disconnect(self) -> None:
             try:
@@ -423,6 +446,7 @@ class OfficialChannelEventSource:
         received_at_ms: Callable[[], int],
         bot_added_handler: BotAddedHandler | None = None,
         lifecycle_handler: LifecycleHandler | None = None,
+        card_action_handler: CardActionHandler | None = None,
     ) -> None:
         self._channel = channel
         self._admission = admission
@@ -430,6 +454,7 @@ class OfficialChannelEventSource:
         self._received_at_ms = received_at_ms
         self._bot_added_handler = bot_added_handler
         self._lifecycle_handler = lifecycle_handler
+        self._card_action_handler = card_action_handler
         self._started = False
         self._ready = asyncio.Event()
         self._normalizer: ChannelMessageNormalizer | None = None
@@ -446,6 +471,8 @@ class OfficialChannelEventSource:
                 self._channel.on("botAdded", self._on_bot_added)
             if self._lifecycle_handler is not None:
                 self._channel.on("botLeave", self._on_bot_removed)
+            if self._card_action_handler is not None:
+                self._channel.on("cardAction", self._on_card_action)
         try:
             await self._channel.connect_until_ready(timeout=30.0)
             identity = self._channel.bot_identity
@@ -469,6 +496,9 @@ class OfficialChannelEventSource:
                         if self._lifecycle_handler is not None
                         else None
                     ),
+                    self._card_action_handler.handle
+                    if self._card_action_handler is not None
+                    else None,
                 )
             self._ready.set()
         except BaseException:
@@ -482,7 +512,7 @@ class OfficialChannelEventSource:
             return
         durable_binder = getattr(self._channel, "bind_durable_handlers", None)
         if callable(durable_binder):
-            durable_binder(None, None, None, None)
+            durable_binder(None, None, None, None, None)
         await self._channel.disconnect()
         self._started = False
         self._normalizer = None
@@ -525,6 +555,15 @@ class OfficialChannelEventSource:
         if not isinstance(raw, dict):
             raise ValueError("bot-removed event does not expose its raw envelope")
         await self._lifecycle_handler.handle_bot_removed(raw)
+
+    async def _on_card_action(self, event: object) -> None:
+        await self._ready.wait()
+        if self._card_action_handler is None:
+            raise RuntimeError("official Channel approval handler is unavailable")
+        raw = getattr(event, "raw", None)
+        if not isinstance(raw, dict):
+            raise ValueError("card action event does not expose its raw envelope")
+        await self._card_action_handler.handle(raw)
 
     @staticmethod
     def _mapping(value: object) -> dict[str, Any]:

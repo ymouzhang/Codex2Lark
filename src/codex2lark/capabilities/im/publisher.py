@@ -6,7 +6,9 @@ from codex2lark.core.events import LeasedOutboxMessage
 
 
 class MessageChannel(Protocol):
-    async def send(self, to: str, message: dict[str, str], opts: dict[str, object]) -> object: ...
+    async def send(
+        self, to: str, message: dict[str, object], opts: dict[str, object]
+    ) -> object: ...
 
 
 class IMOutboxPublisher:
@@ -24,10 +26,16 @@ class IMOutboxPublisher:
             raise ValueError("unsupported Feishu IM result kind")
         chat_id = self._required_text(item.payload, "chat_id")
         message_id = self._required_text(item.payload, "message_id")
-        text = self._required_text(item.payload, "text")
+        if item.message_kind == "approval":
+            card = item.payload.get("card")
+            if not isinstance(card, dict):
+                raise ValueError("Feishu IM approval outbox payload requires card")
+            message: dict[str, object] = {"card": card}
+        else:
+            message = {"text": self._required_text(item.payload, "text")}
         result = await self._channel.send(
             chat_id,
-            {"text": text},
+            message,
             {
                 "reply_to": message_id,
                 "reply_in_thread": bool(item.payload.get("reply_in_thread", False)),

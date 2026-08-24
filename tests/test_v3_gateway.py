@@ -254,10 +254,11 @@ async def test_composed_gateway_admits_executes_and_sends_one_terminal_reply(
     finally:
         await service.stop()
 
-    assert len(channel.sent) == 2
+    assert len(channel.sent) == 3
+    assert "开始处理" in channel.sent[1]["message"]["text"]
     assert "认真帮你处理" in str(channel.sent[0]["message"])
-    assert "已经为你整理好摘要" in str(channel.sent[1]["message"])
-    assert "已经处理完成" in str(channel.sent[1]["message"])
+    assert "已经为你整理好摘要" in str(channel.sent[2]["message"])
+    assert "已经处理完成" in str(channel.sent[2]["message"])
     with sqlite3.connect(tmp_path / "runtime.db") as connection:
         graph = connection.execute("SELECT status FROM runtime_graphs").fetchone()
     assert graph == ("completed",)
@@ -287,7 +288,7 @@ async def test_composed_gateway_routes_same_requester_cancel_to_active_root(
         model.release.set()
 
         async def terminal_was_sent() -> None:
-            while len(channel.sent) < 3:
+            while len(channel.sent) < 4:
                 await asyncio.sleep(0.01)
 
         await asyncio.wait_for(terminal_was_sent(), timeout=1)
@@ -295,7 +296,7 @@ async def test_composed_gateway_routes_same_requester_cancel_to_active_root(
         model.release.set()
         await service.stop()
 
-    assert len(channel.sent) == 3
+    assert len(channel.sent) == 4
     assert "取消" in str(channel.sent[-1]["message"])
     with sqlite3.connect(tmp_path / "runtime.db") as connection:
         graph = connection.execute("SELECT status FROM runtime_graphs").fetchone()

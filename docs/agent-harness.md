@@ -346,6 +346,26 @@ expiry. Only an authorized group/user decision resumes the run. Approval state
 is represented by a minimal run reference; secrets and document bodies are not
 placed in the card or queue.
 
+In the first production policy, every `destructive` semantic tool requires
+approval and ordinary verified `write` tools do not. The broker derives a stable
+approval ID from the run, tool, and canonical argument digest; it persists no
+raw arguments. The pending request and approval-card outbox intent commit
+together. Tool execution raises a typed deferral, which releases the task lease
+without consuming a retry attempt. The task remains pending at a bounded poll
+interval and the run remains `running`; it does not publish a false blocked or
+terminal result.
+
+Approve/reject card actions are accepted only from the originating requester.
+The card callback event, decision, and decision acknowledgement commit before
+the callback returns. Duplicate clicks are idempotent, conflicting later clicks
+cannot change a terminal decision, and expired approvals reject execution. On
+approval the restarted Harness reconstructs authoritative context, resolves the
+same stable approval, and executes the exact destructive call. Rejection returns
+an `approval_rejected` tool result so the Agent can report a truthful blocked
+outcome. Card payloads contain action/tool ID, a generic bound-target label,
+approval ID, risk, and expiry, never tool arguments, source content, credentials,
+or hidden reasoning.
+
 ## 8. Session and recovery model
 
 `SessionStore` is a port. Production uses an encrypted SQLite-backed journal and

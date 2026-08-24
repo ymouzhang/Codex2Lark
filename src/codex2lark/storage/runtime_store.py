@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -133,6 +134,184 @@ class RuntimeStore:
             if acknowledgement is not None:
                 self._insert_outbox(connection, acknowledgement, task_id=task_id, now_ms=now_ms)
             return AdmissionResult(created=True, task_id=task_id)
+
+        return await self._database.transaction(operation)
+
+    async def enqueue_task_outbox(self, task_id: str, draft: OutboxDraft, *, now_ms: int) -> None:
+        def operation(connection: sqlite3.Connection) -> None:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM runtime_tasks WHERE task_id = ?", (task_id,)
+                ).fetchone()
+                is None
+            ):
+                raise LookupError("outbox task does not exist")
+            self._insert_outbox(connection, draft, task_id=task_id, now_ms=now_ms)
+
+        await self._database.transaction(operation)
+
+    async def request_approval(
+        self,
+        *,
+        approval_id: str,
+        task_id: str,
+        run_id: str,
+        tenant_key: str,
+        app_id: str,
+        session_key: str,
+        actor_id: str,
+        tool_id: str,
+        argument_digest: str,
+        expires_at_ms: int,
+        card: OutboxDraft,
+        now_ms: int,
+    ) -> str:
+        def operation(connection: sqlite3.Connection) -> str:
+            row = connection.execute(
+                "SELECT * FROM runtime_approvals WHERE approval_id = ?", (approval_id,)
+            ).fetchone()
+            if row is not None:
+                expected = (task_id, run_id, actor_id, tool_id, argument_digest)
+                actual = tuple(
+                    row[field]
+                    for field in ("task_id", "run_id", "actor_id", "tool_id", "argument_digest")
+                )
+                if actual != expected:
+                    raise RuntimeError("approval identity collision")
+                if row["state"] == "pending" and row["expires_at_ms"] <= now_ms:
+                    connection.execute(
+                        """
+                        UPDATE runtime_approvals SET state = 'expired', decided_at_ms = ?
+                        WHERE approval_id = ? AND state = 'pending'
+                        """,
+                        (now_ms, approval_id),
+                    )
+                    return "expired"
+                return str(row["state"])
+            connection.execute(
+                """
+                INSERT INTO runtime_approvals(
+                    approval_id, task_id, run_id, tenant_key, app_id, session_key,
+                    actor_id, tool_id, argument_digest, state, expires_at_ms,
+                    created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                (
+                    approval_id,
+                    task_id,
+                    run_id,
+                    tenant_key,
+                    app_id,
+                    session_key,
+                    actor_id,
+                    tool_id,
+                    argument_digest,
+                    expires_at_ms,
+                    now_ms,
+                ),
+            )
+            self._insert_outbox(connection, card, task_id=task_id, now_ms=now_ms)
+            return "pending"
+
+        return await self._database.transaction(operation)
+
+    async def decide_approval(
+        self,
+        event: NormalizedEvent,
+        *,
+        approval_id: str,
+        actor_id: str,
+        decision: str,
+        acknowledgement: Callable[[str], OutboxDraft],
+        now_ms: int,
+    ) -> str:
+        if decision not in {"approved", "rejected"}:
+            raise ValueError("approval decision is invalid")
+
+        def operation(connection: sqlite3.Connection) -> str:
+            duplicate = connection.execute(
+                """
+                SELECT 1 FROM runtime_events
+                WHERE tenant_key = ? AND app_id = ? AND event_id = ?
+                """,
+                (event.tenant_key, event.app_id, event.event_id),
+            ).fetchone()
+            approval = connection.execute(
+                "SELECT * FROM runtime_approvals WHERE approval_id = ?", (approval_id,)
+            ).fetchone()
+            if approval is None:
+                raise LookupError("approval request does not exist")
+            if duplicate is not None:
+                return str(approval["state"])
+            source_ciphertext = (
+                None
+                if event.source_payload is None
+                else self._cipher.encrypt(
+                    event.source_payload, associated_data=self._event_aad(event)
+                )
+            )
+            connection.execute(
+                """
+                INSERT INTO runtime_events(
+                    event_id, plugin_id, event_type, tenant_key, app_id,
+                    occurred_at_ms, received_at_ms, schema_version, resource_kind,
+                    resource_id, correlation_id, trace_id, payload_ciphertext,
+                    payload_expires_at_ms, status, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'admitted', ?)
+                """,
+                (
+                    event.event_id,
+                    event.plugin_id,
+                    event.event_type,
+                    event.tenant_key,
+                    event.app_id,
+                    event.occurred_at_ms,
+                    event.received_at_ms,
+                    event.schema_version,
+                    event.resource_kind,
+                    event.resource_id,
+                    event.correlation_id,
+                    event.trace_id,
+                    source_ciphertext,
+                    event.payload_expires_at_ms,
+                    now_ms,
+                ),
+            )
+            state = str(approval["state"])
+            authorized = (
+                approval["tenant_key"] == event.tenant_key
+                and approval["app_id"] == event.app_id
+                and approval["actor_id"] == actor_id
+            )
+            if not authorized:
+                result = "unauthorized"
+            elif state == "pending" and approval["expires_at_ms"] <= now_ms:
+                connection.execute(
+                    """
+                    UPDATE runtime_approvals SET state = 'expired', decided_at_ms = ?
+                    WHERE approval_id = ? AND state = 'pending'
+                    """,
+                    (now_ms, approval_id),
+                )
+                result = "expired"
+            elif state == "pending":
+                connection.execute(
+                    """
+                    UPDATE runtime_approvals SET state = ?, decided_at_ms = ?
+                    WHERE approval_id = ? AND state = 'pending'
+                    """,
+                    (decision, now_ms, approval_id),
+                )
+                result = decision
+            else:
+                result = state
+            self._insert_outbox(
+                connection,
+                acknowledgement(result),
+                task_id=str(approval["task_id"]),
+                now_ms=now_ms,
+            )
+            return result
 
         return await self._database.transaction(operation)
 
@@ -470,6 +649,35 @@ class RuntimeStore:
                 WHERE task_id = ? AND state = 'leased' AND lease_owner = ?
                 """,
                 (available_at_ms, error_code, now_ms, task_id, worker_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("task lease is not owned by worker")
+
+        await self._database.transaction(operation)
+
+    async def defer_task(
+        self,
+        task_id: str,
+        *,
+        worker_id: str,
+        available_at_ms: int,
+        now_ms: int,
+        reason: str,
+    ) -> None:
+        if not reason:
+            raise ValueError("task deferral reason is required")
+
+        def operation(connection: sqlite3.Connection) -> None:
+            cursor = connection.execute(
+                """
+                UPDATE runtime_tasks
+                SET state = 'pending', available_at_ms = ?,
+                    lease_owner = NULL, lease_expires_at_ms = NULL,
+                    attempt_count = MAX(attempt_count - 1, 0),
+                    last_error_code = ?, updated_at_ms = ?
+                WHERE task_id = ? AND state = 'leased' AND lease_owner = ?
+                """,
+                (available_at_ms, reason, now_ms, task_id, worker_id),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("task lease is not owned by worker")

@@ -1,7 +1,8 @@
 {
   "bundle_id": "im-zh-CN",
-  "version": 1,
+  "version": 2,
   "acknowledgement": "收到啦，我会认真帮你处理，完成后马上回来告诉你～",
+  "progress_started": "我已经开始处理啦，正在整理相关信息，请稍等我一下喔～",
   "completed_suffix": "已经处理完成啦。如果哪里还不清楚，随时问我就好。",
   "blocked_suffix": "目前还需要一点信息才能继续。你补充后告诉我，我会接着处理。",
   "failed_suffix": "这次没有顺利完成，我已经说明原因。你愿意的话，我们可以一起换个方式继续。",
