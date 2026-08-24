@@ -10,6 +10,8 @@ from typing import Protocol
 from codex2lark.adapters.openai_responses import OpenAIResponsesModel
 from codex2lark.capabilities.artifacts.plugin import FeishuArtifactsPlugin
 from codex2lark.capabilities.artifacts.tools import ArtifactService
+from codex2lark.capabilities.chat_digest.plugin import FeishuChatDigestPlugin
+from codex2lark.capabilities.chat_digest.tools import ChatDigestService
 from codex2lark.capabilities.docs.plugin import FeishuDocsPlugin
 from codex2lark.capabilities.docs.tools import DocumentService
 from codex2lark.capabilities.im.admission import IMAdmissionService
@@ -88,6 +90,9 @@ class AuthoringServices(Protocol):
 
     @property
     def membership(self) -> MembershipService: ...
+
+    @property
+    def chat_digest(self) -> ChatDigestService: ...
 
 
 class AllowConfiguredTools(ToolPolicy):
@@ -285,14 +290,27 @@ def create_v3_gateway(
     active_authoring = authoring or create_application()
     docs_plugin = FeishuDocsPlugin(active_authoring.docs, config.authoring_identity)
     artifacts_plugin = FeishuArtifactsPlugin(active_authoring.artifacts, config.authoring_identity)
+    chat_digest_plugin = FeishuChatDigestPlugin(
+        active_authoring.chat_digest, config.authoring_identity
+    )
     plugins = PluginManager(
         runtime_api=1,
-        allowlist={"feishu-im", "feishu-docs", "feishu-artifacts"},
+        allowlist={
+            "feishu-im",
+            "feishu-docs",
+            "feishu-artifacts",
+            "feishu-chat-digest",
+        },
     )
     plugins.register(create_im_plugin())
     plugins.register(docs_plugin)
     plugins.register(artifacts_plugin)
-    business_tools = [*docs_plugin.tools, *artifacts_plugin.tools]
+    plugins.register(chat_digest_plugin)
+    business_tools = [
+        *docs_plugin.tools,
+        *artifacts_plugin.tools,
+        *chat_digest_plugin.tools,
+    ]
     business_registry = ToolRegistry(business_tools)
     selected_model = model or OpenAIResponsesModel.from_api_key(
         api_key=config.openai_api_key,

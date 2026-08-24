@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined durable group-history publishing before implementation. The V3 root
+  Harness receives a strict `feishu.chat.digest.publish` workflow tool backed by
+  the existing chronological chat service, trusted identity binding, logical
+  per-chat write serialization, managed-folder placement, and live document
+  verification. Implementation area: chat-digest capability plugin, Gateway
+  composition, tool contracts, and production-registry acceptance.
+
 - Defined the group-to-professional-document vertical acceptance before
   implementation. The production Gateway composition may receive a narrow
   authoring service bundle for deterministic testing, while the full mention,

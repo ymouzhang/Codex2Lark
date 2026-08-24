@@ -283,6 +283,16 @@ read-back verification record; Sheet writes specifically read values/formulas
 back and reject formula errors. Artifact observations are non-persistable
 because cells, records, and diagram sources may contain business content.
 
+The `feishu-chat-digest` workflow plugin exposes
+`feishu.chat.digest.publish` to the durable group Harness. It reuses the same
+typed chat-history service as interactive MCP: one exact chat ID or exact group
+name, one bounded time range, chronological sender-attributed output, permitted
+image insertion, filename-only file representation, managed-folder placement,
+and live document verification. Chat identity is bound by trusted composition
+and is never model supplied. Concurrent digest writes for the same normalized
+chat target are serialized through a logical write reservation. The plugin is a
+bounded workflow capability; it does not expose raw history queries or lark-cli.
+
 ## 10. Result publishers
 
 Result publishers render Harness events and terminal outcomes into a channel.

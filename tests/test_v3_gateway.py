@@ -214,6 +214,7 @@ class E2EMessageAPI:
 class E2EModel:
     async def complete(self, request: ModelRequest) -> ModelResponse:
         assert request.messages[-1].content == "summarize this"
+        assert "feishu.chat.digest.publish" in {definition.tool_id for definition in request.tools}
         return ModelResponse("已经为你整理好摘要。", usage=ModelUsage(10, 8))
 
 
@@ -298,11 +299,18 @@ class UnusedMembershipService:
         return {"ok": True}
 
 
+class UnusedChatDigestService:
+    async def publish(self, request: object) -> dict[str, object]:
+        del request
+        raise AssertionError("unexpected chat digest call")
+
+
 class AuthoringFixture:
     def __init__(self) -> None:
         self.docs = ProfessionalDocumentService()
         self.artifacts = UnusedArtifactService()
         self.membership = UnusedMembershipService()
+        self.chat_digest = UnusedChatDigestService()
 
 
 class ProfessionalDocumentModel:

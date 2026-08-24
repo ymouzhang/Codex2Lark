@@ -289,6 +289,13 @@ return a verified document URL. The root then emits exactly one terminal reply
 that names the completed document and includes the verified URL. Persisted run
 events may contain tool identity and verification state, but never the document
 body.
+
+Acceptance criterion 10 requires the production root Agent registry to contain
+the verified `feishu.chat.digest.publish` semantic tool. Its arguments bind one
+exact chat target and bounded time range; identity remains trusted runtime
+context. The workflow reuses the tested chronological renderer and returns a
+verified managed-folder document reference before the root may claim completion.
+
 16. Backup/restore returns a compatible encrypted runtime to a recoverable state.
 17. The default deployment passes readiness without RabbitMQ, Redis, PostgreSQL,
     public Webhook, or a running Codex task.
