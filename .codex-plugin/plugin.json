@@ -1,0 +1,25 @@
+{
+  "name": "codex2lark",
+  "version": "0.1.0",
+  "description": "Stateless Feishu authoring tools for ChatGPT and Codex",
+  "author": {
+    "name": "Codex2Lark contributors"
+  },
+  "license": "MIT",
+  "keywords": ["feishu", "lark", "documents", "mcp", "authoring"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Codex2Lark",
+    "shortDescription": "Create and precisely edit rich Feishu documents.",
+    "longDescription": "A stateless AI authoring plugin for Feishu Docs, Whiteboards, Sheets, Base, and Drive. Feishu remains the only business-data source of truth.",
+    "developerName": "Codex2Lark contributors",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Publish this conversation as a polished Feishu document.",
+      "Update this Feishu document without changing unrelated content.",
+      "Turn this plan into a Feishu document with diagrams and tables."
+    ]
+  }
+}

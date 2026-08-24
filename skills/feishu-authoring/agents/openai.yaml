@@ -1,0 +1,11 @@
+interface:
+  display_name: "Feishu Authoring"
+  short_description: "Create and precisely edit rich Feishu documents"
+  default_prompt: "Use $feishu-authoring to publish this conversation as a polished Feishu document."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "codex2lark"
+      description: "Stateless Feishu Docs, Whiteboard, Sheets, and Base tools"
+policy:
+  allow_implicit_invocation: true

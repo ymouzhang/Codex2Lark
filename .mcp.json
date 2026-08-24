@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "codex2lark": {
+      "command": "uv",
+      "args": ["run", "--project", ".", "codex2lark", "mcp"],
+      "cwd": ".",
+      "env": {"UV_CACHE_DIR": "/tmp/codex2lark-uv-cache"},
+      "startup_timeout_sec": 30,
+      "tool_timeout_sec": 180
+    }
+  }
+}

@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+from collections.abc import Sequence
+
+from . import __version__
+from .application import create_application
+from .lark_cli import safe_tool_call_error
+from .mcp_server import run_stdio
+
+
+async def _doctor() -> int:
+    application = create_application()
+    if not application.lark.available():
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "checks": {
+                        "lark_cli": "missing",
+                        "mcp_server": "available",
+                        "business_data_persistence": "disabled",
+                    },
+                    "next_action": "install and authenticate lark-cli",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    try:
+        status = await application.lark.execute(["auth", "status", "--json", "--verify"])
+    except Exception as exc:
+        print(json.dumps(safe_tool_call_error(exc), ensure_ascii=False))
+        return 1
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "version": __version__,
+                "checks": {
+                    "lark_cli": "available",
+                    "authentication": status.data,
+                    "business_data_persistence": "disabled",
+                },
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="codex2lark")
+    parser.add_argument("--version", action="version", version=__version__)
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands.add_parser("mcp", help="run the stdio MCP server")
+    subcommands.add_parser("doctor", help="check lark-cli and authentication")
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = _parser().parse_args(argv)
+    if arguments.command == "mcp":
+        run_stdio()
+        return 0
+    if arguments.command == "doctor":
+        return asyncio.run(_doctor())
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
