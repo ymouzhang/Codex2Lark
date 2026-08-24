@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 
@@ -20,9 +21,11 @@ from .multi_agent import (
     NodeExecutionInput,
     NodeExecutionResult,
     NodeSpec,
+    NodeStatus,
+    ResourceTarget,
 )
 from .sessions import SessionStore
-from .tools import ToolContext, ToolReconciliation, ToolRegistry
+from .tools import ToolContext, ToolReconciliation, ToolRegistry, WriteScopeTarget
 from .types import (
     AgentDefinition,
     AgentOutcome,
@@ -41,6 +44,20 @@ def _delegated_tool_ids(arguments: dict[str, object]) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _declared_targets(arguments: dict[str, object]) -> tuple[dict[str, object], ...]:
+    value = arguments.get("targets")
+    if not isinstance(value, list):
+        raise ValueError("agent.delegate targets must be an array")
+    result: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"tool_id", "resource"}:
+            raise ValueError("each delegation target requires only tool_id and resource")
+        if not all(isinstance(item[field], str) and item[field] for field in item):
+            raise ValueError("delegation target values must be non-empty strings")
+        result.append(dict(item))
+    return tuple(result)
+
+
 class DelegatedHarnessWorker:
     def __init__(
         self,
@@ -51,6 +68,7 @@ class DelegatedHarnessWorker:
         parent_context: ToolContext,
         model_profile: str,
         now_ms: int,
+        graph_store: AgentGraphStore,
     ) -> None:
         self._harness = harness
         self._sessions = sessions
@@ -58,6 +76,7 @@ class DelegatedHarnessWorker:
         self._parent_context = parent_context
         self._model_profile = model_profile
         self._now_ms = now_ms
+        self._graph_store = graph_store
 
     async def execute(self, execution: NodeExecutionInput) -> NodeExecutionResult:
         node = execution.node
@@ -104,6 +123,17 @@ class DelegatedHarnessWorker:
                         identity_ref=self._parent_context.identity_ref,
                         policy_version=self._parent_context.policy_version,
                         task_id=self._parent_context.task_id,
+                        write_scope=tuple(
+                            WriteScopeTarget(
+                                item.resource_type,
+                                item.resource_id,
+                                item.expected_revision,
+                            )
+                            for item in await self._graph_store.list_locks(
+                                node.node_id, now_ms=self._now_ms
+                            )
+                        ),
+                        write_scope_required=node.spec.requires_write_scope,
                     ),
                 ),
                 definition,
@@ -174,6 +204,7 @@ class MultiAgentCoordinator:
         self._sessions = sessions
         self._child_tools = child_tools
         self._model_profile = model_profile
+        self._delegation_gate = asyncio.Lock()
 
     async def prepare(
         self,
@@ -230,6 +261,7 @@ class MultiAgentCoordinator:
             raise PermissionError("only the root Agent may use agent.delegate")
         role = AgentRole(str(arguments["role"]))
         requested_tools = _delegated_tool_ids(arguments)
+        declarations = _declared_targets(arguments)
         if "agent.delegate" in requested_tools:
             raise PermissionError("delegated workers cannot receive recursive delegation")
         definitions = self._child_tools.definitions(requested_tools)
@@ -237,34 +269,64 @@ class MultiAgentCoordinator:
             item.effect is not ToolEffect.READ for item in definitions
         ):
             raise PermissionError(f"{role.value} workers may receive read-only tools only")
-        root = await self._store.get_node(graph.root_node_id)
-        name = str(arguments["name"])
-        existing = next(
-            (
-                item
-                for item in await self._store.list_nodes(graph.graph_id)
-                if item.parent_node_id == root.node_id and item.spec.name == name
-            ),
-            None,
-        )
-        child = existing or await self._supervisor.spawn(
-            graph.graph_id,
-            root.node_id,
-            NodeSpec(
-                name=name,
-                role=role,
-                task_brief=str(arguments["task_brief"]),
-                expected_output_type=str(arguments["expected_output_type"]),
-                tool_ids=requested_tools,
-                budgets={
-                    "model_tokens": 12_000,
-                    "tool_calls": 6,
-                    "external_writes": 2,
-                },
-                context_mode=ContextMode.SELECTED,
-            ),
-            now_ms=now_ms,
-        )
+        async with self._delegation_gate:
+            root = await self._store.get_node(graph.root_node_id)
+            name = str(arguments["name"])
+            existing = next(
+                (
+                    item
+                    for item in await self._store.list_nodes(graph.graph_id)
+                    if item.parent_node_id == root.node_id and item.spec.name == name
+                ),
+                None,
+            )
+            if existing is not None:
+                artifact = self._artifact_for(
+                    existing.node_id, await self._store.list_artifacts(graph.graph_id)
+                )
+                if artifact is not None:
+                    return self._artifact_observation(existing, artifact)
+            targets = await self._resolve_targets(declarations, requested_tools, context)
+            child = existing or await self._supervisor.spawn(
+                graph.graph_id,
+                root.node_id,
+                NodeSpec(
+                    name=name,
+                    role=role,
+                    task_brief=str(arguments["task_brief"]),
+                    expected_output_type=str(arguments["expected_output_type"]),
+                    tool_ids=requested_tools,
+                    budgets={
+                        "model_tokens": 12_000,
+                        "tool_calls": 6,
+                        "external_writes": 2,
+                    },
+                    context_mode=ContextMode.SELECTED,
+                    requires_write_scope=bool(targets),
+                ),
+                ready=not targets,
+                now_ms=now_ms,
+            )
+            if targets:
+                acquired = True
+                for target in targets:
+                    if not await self._store.acquire_lock(
+                        graph.graph_id,
+                        child.node_id,
+                        target,
+                        now_ms=now_ms,
+                        lease_ms=300_000,
+                    ):
+                        acquired = False
+                        break
+                if not acquired:
+                    await self._store.release_locks(child.node_id)
+                    await self._supervisor.cancel(child.node_id, now_ms=now_ms)
+                    raise RuntimeError("delegated write target is already locked")
+                if child.status is NodeStatus.CREATED:
+                    child = await self._supervisor.activate(child.node_id, now_ms=now_ms)
+        async with self._delegation_gate:
+            pass
         artifact = self._artifact_for(
             child.node_id, await self._store.list_artifacts(graph.graph_id)
         )
@@ -276,6 +338,7 @@ class MultiAgentCoordinator:
                 parent_context=context,
                 model_profile=self._model_profile,
                 now_ms=now_ms,
+                graph_store=self._store,
             )
             batch = await self._supervisor.execute_ready(
                 graph.graph_id,
@@ -287,8 +350,16 @@ class MultiAgentCoordinator:
             if child.node_id in batch.failed_node_ids:
                 raise RuntimeError("delegated Agent failed")
             artifact = self._artifact_for(child.node_id, list(batch.completed_artifacts))
+            if artifact is None:
+                artifact = await self._wait_for_artifact(
+                    graph.graph_id, child.node_id, timeout_s=300.0
+                )
         if artifact is None:
             raise RuntimeError("delegated Agent did not produce an artifact")
+        return self._artifact_observation(child, artifact)
+
+    @staticmethod
+    def _artifact_observation(child: AgentNode, artifact: Artifact) -> dict[str, object]:
         return {
             "node_id": child.node_id,
             "canonical_path": child.canonical_path,
@@ -303,9 +374,97 @@ class MultiAgentCoordinator:
             for definition in self._child_tools.definitions(tool_ids)
         )
 
+    def targets_parallel_safe(self, arguments: dict[str, object]) -> bool:
+        try:
+            tool_ids = _delegated_tool_ids(arguments)
+            declarations = _declared_targets(arguments)
+            definitions = self._child_tools.definitions(tool_ids)
+        except (LookupError, ValueError):
+            return False
+        writers = {
+            item.tool_id
+            for item in definitions
+            if item.effect in {ToolEffect.WRITE, ToolEffect.DESTRUCTIVE}
+        }
+        if not writers:
+            return True
+        declared = {str(item["tool_id"]) for item in declarations}
+        if not writers.issubset(declared):
+            return False
+        return all(
+            callable(getattr(self._child_tools.require(tool_id), "resolve_delegation_target", None))
+            for tool_id in writers
+        )
+
+    async def _resolve_targets(
+        self,
+        declarations: tuple[dict[str, object], ...],
+        requested_tools: tuple[str, ...],
+        context: ToolContext,
+    ) -> tuple[ResourceTarget, ...]:
+        definitions = {
+            item.tool_id: item for item in self._child_tools.definitions(requested_tools)
+        }
+        writers = {
+            tool_id
+            for tool_id, definition in definitions.items()
+            if definition.effect in {ToolEffect.WRITE, ToolEffect.DESTRUCTIVE}
+        }
+        if not declarations:
+            return ()
+        if not writers.issubset({str(item["tool_id"]) for item in declarations}):
+            raise ValueError("every delegated writer requires a declared target")
+        resolved: list[ResourceTarget] = []
+        for declaration in declarations:
+            tool_id = str(declaration["tool_id"])
+            if tool_id not in writers:
+                raise ValueError("delegation targets may reference writer tools only")
+            resolver = getattr(
+                self._child_tools.require(tool_id), "resolve_delegation_target", None
+            )
+            if not callable(resolver):
+                raise ValueError(f"delegated writer has no target resolver: {tool_id}")
+            target = await resolver(declaration, context)
+            if not isinstance(target, WriteScopeTarget):
+                raise TypeError("delegation target resolver returned an invalid target")
+            resolved.append(
+                ResourceTarget(
+                    context.tenant_key,
+                    target.resource_type,
+                    target.resource_id,
+                    target.expected_revision,
+                )
+            )
+        unique = {
+            (item.tenant_key, item.resource_type, item.resource_id): item for item in resolved
+        }
+        return tuple(unique[key] for key in sorted(unique))
+
     @staticmethod
     def _artifact_for(node_id: str, artifacts: list[Artifact]) -> Artifact | None:
         return next((item for item in artifacts if item.producer_node_id == node_id), None)
+
+    async def _wait_for_artifact(
+        self, graph_id: str, node_id: str, *, timeout_s: float
+    ) -> Artifact | None:
+        try:
+            async with asyncio.timeout(timeout_s):
+                while True:
+                    artifact = self._artifact_for(
+                        node_id, await self._store.list_artifacts(graph_id)
+                    )
+                    if artifact is not None:
+                        return artifact
+                    node = await self._store.get_node(node_id)
+                    if node.status in {
+                        NodeStatus.BLOCKED,
+                        NodeStatus.FAILED,
+                        NodeStatus.CANCELLED,
+                    }:
+                        return None
+                    await asyncio.sleep(0.01)
+        except TimeoutError:
+            return None
 
 
 class DelegateAgentTool:
@@ -341,6 +500,21 @@ class DelegateAgentTool:
                         "type": "array",
                         "items": {"type": "string", "enum": list(self.allowed_tool_ids)},
                     },
+                    "targets": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool_id": {
+                                    "type": "string",
+                                    "enum": list(self.allowed_tool_ids),
+                                },
+                                "resource": {"type": "string"},
+                            },
+                            "required": ["tool_id", "resource"],
+                            "additionalProperties": False,
+                        },
+                    },
                 },
                 "required": [
                     "name",
@@ -348,6 +522,7 @@ class DelegateAgentTool:
                     "task_brief",
                     "expected_output_type",
                     "tool_ids",
+                    "targets",
                 ],
                 "additionalProperties": False,
             },
@@ -362,6 +537,7 @@ class DelegateAgentTool:
             "task_brief",
             "expected_output_type",
             "tool_ids",
+            "targets",
         }:
             raise ValueError("agent.delegate arguments must match the strict schema")
         NodeSpec(
@@ -374,13 +550,16 @@ class DelegateAgentTool:
         )
         if not set(_delegated_tool_ids(arguments)).issubset(self.allowed_tool_ids):
             raise PermissionError("delegated tool IDs exceed the configured allowlist")
+        _declared_targets(arguments)
 
     def parallel_safe_for(self, arguments: dict[str, object]) -> bool:
         try:
             tool_ids = _delegated_tool_ids(arguments)
         except ValueError:
             return False
-        return self.coordinator.tools_are_read_only(tool_ids)
+        return self.coordinator.tools_are_read_only(
+            tool_ids
+        ) or self.coordinator.targets_parallel_safe(arguments)
 
     async def execute(
         self, arguments: dict[str, object], context: ToolContext

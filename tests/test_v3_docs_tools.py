@@ -13,8 +13,14 @@ from codex2lark.capabilities.docs.tools import (
     document_tools,
 )
 from codex2lark.core.models import CreateDocumentRequest, Identity
-from codex2lark.runtime.tools import ToolContext
-from codex2lark.runtime.types import VerificationState
+from codex2lark.runtime.tools import (
+    PolicyDecision,
+    ToolContext,
+    ToolExecutor,
+    ToolRegistry,
+    WriteScopeTarget,
+)
+from codex2lark.runtime.types import ToolCall, ToolDefinition, VerificationState
 
 
 class FakeDocsService:
@@ -53,6 +59,22 @@ class FakeDocsService:
 
 def context() -> ToolContext:
     return ToolContext("run", "/root", "tenant", "app", "user", "session", "user", 1)
+
+
+class Allow:
+    async def authorize(
+        self, definition: ToolDefinition, call: ToolCall, context: ToolContext
+    ) -> PolicyDecision:
+        del definition, call, context
+        return PolicyDecision(True, "test")
+
+
+class NoApproval:
+    async def request(
+        self, definition: ToolDefinition, call: ToolCall, context: ToolContext
+    ) -> bool:
+        del definition, call, context
+        return False
 
 
 def test_document_tool_profile_has_strict_schemas_without_identity_override() -> None:
@@ -175,3 +197,69 @@ def test_search_rejects_unknown_arguments() -> None:
     tool = SearchDocumentsTool(FakeDocsService(), Identity.USER)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         tool.validate({"title": "Architecture", "identity": "bot"})
+
+
+async def test_delegated_document_edit_enforces_live_locked_target_and_revision() -> None:
+    service = FakeDocsService()
+    tool = EditDocumentTool(service, Identity.USER)  # type: ignore[arg-type]
+    registry = ToolRegistry([tool])
+    executor = ToolExecutor(registry, Allow(), NoApproval())
+    arguments = {
+        "resource": "docx_1",
+        "document_title": None,
+        "command": "append",
+        "content_xml": "<p>More</p>",
+        "pattern": None,
+        "block_id": None,
+        "change_summary": "Add details",
+        "required_text": ["More"],
+    }
+    call = ToolCall("call-1", "feishu.docs.edit", arguments)
+
+    denied = await executor.execute(
+        call,
+        ToolContext(
+            "run",
+            "/root/writer",
+            "tenant",
+            "app",
+            "user",
+            "session",
+            "user",
+            1,
+            write_scope=(WriteScopeTarget("docx", "docx_other", "3"),),
+        ),
+    )
+    expired = await executor.execute(
+        call,
+        ToolContext(
+            "run",
+            "/root/writer",
+            "tenant",
+            "app",
+            "user",
+            "session",
+            "user",
+            1,
+            write_scope_required=True,
+        ),
+    )
+    allowed = await executor.execute(
+        call,
+        ToolContext(
+            "run",
+            "/root/writer",
+            "tenant",
+            "app",
+            "user",
+            "session",
+            "user",
+            1,
+            write_scope=(WriteScopeTarget("docx", "docx_1", "3"),),
+        ),
+    )
+
+    assert denied.error_code == "write_scope_violation"
+    assert expired.error_code == "write_lock_missing"
+    assert allowed.succeeded
+    assert allowed.verification.state is VerificationState.VERIFIED

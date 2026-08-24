@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from codex2lark.runtime.multi_agent import (
     NodeStatus,
     ResourceTarget,
 )
+from codex2lark.runtime.tools import WriteScopeTarget
 from codex2lark.runtime.types import RunStatus, VerificationState
 from codex2lark.storage.agent_store import SQLiteAgentGraphStore
 from codex2lark.storage.crypto import EnvelopeCipher, MasterKey
@@ -268,6 +270,54 @@ async def test_resource_lock_excludes_overlapping_writers_and_recovers(tmp_path:
         )
         assert await store.acquire_lock(
             graph.graph_id, second.node_id, target, now_ms=21, lease_ms=10
+        )
+    finally:
+        await database.close()
+
+
+async def test_created_writer_is_not_leased_until_lock_and_activation(tmp_path: Path) -> None:
+    database, store, supervisor, graph, root = await setup_graph(tmp_path)
+    try:
+        child = await supervisor.spawn(
+            graph.graph_id,
+            root.node_id,
+            replace(
+                child_spec("held_writer", AgentRole.AUTHOR, tools=("docs.create",)),
+                requires_write_scope=True,
+            ),
+            ready=False,
+            now_ms=2,
+        )
+        assert child.status is NodeStatus.CREATED
+        assert (
+            await store.lease_ready(
+                graph.graph_id, worker_id="worker", now_ms=3, lease_ms=20, limit=3
+            )
+            == []
+        )
+
+        target = ResourceTarget("tenant-1", "docx", "docx-held", "revision-1")
+        assert await store.acquire_lock(
+            graph.graph_id, child.node_id, target, now_ms=4, lease_ms=20
+        )
+        activated = await supervisor.activate(child.node_id, now_ms=5)
+        leased = await store.lease_ready(
+            graph.graph_id, worker_id="worker", now_ms=6, lease_ms=20, limit=3
+        )
+
+        assert activated.status is NodeStatus.READY
+        assert activated.spec.requires_write_scope is True
+        assert [item.node_id for item in leased] == [child.node_id]
+        assert await store.list_locks(child.node_id, now_ms=6) == (target,)
+        assert await store.owns_write_scope(
+            child.node_id,
+            (WriteScopeTarget("docx", "docx-held", "revision-1"),),
+            now_ms=23,
+        )
+        assert not await store.owns_write_scope(
+            child.node_id,
+            (WriteScopeTarget("docx", "docx-held", "revision-1"),),
+            now_ms=24,
         )
     finally:
         await database.close()

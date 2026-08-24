@@ -278,7 +278,11 @@ an ordinary Feishu mutation, or any undeclared tool executes serially. This
 keeps concurrency a trusted capability property rather than a model request.
 Tools may additionally provide a deterministic argument-aware guard that can
 only narrow their static declaration. `agent.delegate` uses this guard to
-reject parallel batching whenever a requested child tool is not read-only.
+reject parallel batching whenever a requested child tool is not read-only and
+the delegation lacks structured, capability-resolvable targets. Declared
+targets do not grant authority: live resolution, durable locking, and exact
+write-scope enforcement occur before and during child execution as specified in
+[multi-agent-runtime.md](multi-agent-runtime.md#8-resource-ownership-and-parallel-writes).
 
 Tool execution passes through hooks inspired by Pi and Codex policy layers:
 

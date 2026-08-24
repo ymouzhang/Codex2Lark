@@ -553,7 +553,7 @@ def test_bundled_resource_packages_and_im_templates_are_versioned() -> None:
     worker = loader.load(("delegated-worker-core",))
     templates = ResourceLoader.load_im_templates("codex2lark.bundled_resources", "zh-CN")
 
-    assert group.versions == {"group-agent-core": "1.0.0"}
+    assert group.versions == {"group-agent-core": "1.1.0"}
     assert worker.versions == {"delegated-worker-core": "1.0.0"}
     assert any("untrusted evidence" in item for item in group.policies)
     assert templates.bundle_id == "im-zh-CN"

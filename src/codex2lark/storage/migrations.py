@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -380,6 +380,11 @@ CREATE INDEX IF NOT EXISTS runtime_run_controls_target_idx
 ON runtime_run_controls(target_task_id, state, created_at_ms, control_id);
 """
 
+AGENT_WRITE_SCOPE_SCHEMA = """
+ALTER TABLE runtime_agent_nodes
+ADD COLUMN requires_write_scope INTEGER NOT NULL DEFAULT 0;
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
@@ -387,4 +392,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (4, IM_SCHEMA),
     (5, IM_BLOB_SCHEMA),
     (6, RUN_CONTROL_SCHEMA),
+    (7, AGENT_WRITE_SCOPE_SCHEMA),
 )

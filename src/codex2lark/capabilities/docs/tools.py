@@ -14,7 +14,12 @@ from codex2lark.core.models import (
     ResourceRef,
     SearchDocumentsRequest,
 )
-from codex2lark.runtime.tools import SemanticTool, ToolContext, ToolReconciliation
+from codex2lark.runtime.tools import (
+    SemanticTool,
+    ToolContext,
+    ToolReconciliation,
+    WriteScopeTarget,
+)
 from codex2lark.runtime.types import (
     ToolDefinition,
     ToolEffect,
@@ -321,6 +326,65 @@ class EditDocumentTool(_DocumentTool):
     async def _invoke(self, request: object) -> dict[str, Any]:
         assert isinstance(request, EditDocumentRequest)
         return await self._service.edit(request)
+
+    async def resolve_delegation_target(
+        self, declaration: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        resource = declaration.get("resource")
+        if not isinstance(resource, str) or not resource:
+            raise ValueError("document delegation target requires resource")
+        return await self._live_target(_resource(resource))
+
+    async def resolve_write_target(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        request = self._request(arguments)
+        resource = request.resource
+        if resource is None:
+            assert request.document_title is not None
+            found = await self._service.search(
+                SearchDocumentsRequest(title=request.document_title, identity=self._identity)
+            )
+            matches = found.get("matches")
+            if (
+                not isinstance(matches, list)
+                or len(matches) != 1
+                or not isinstance(matches[0], dict)
+            ):
+                raise ValueError("document title did not resolve to exactly one live target")
+            reference = matches[0].get("url") or matches[0].get("token")
+            if not isinstance(reference, str) or not reference:
+                raise ValueError("resolved document has no usable reference")
+            resource = _resource(reference)
+        return await self._live_target(resource)
+
+    async def _live_target(self, resource: ResourceRef) -> WriteScopeTarget:
+        inspected = await self._service.inspect(
+            InspectDocumentRequest(
+                resource=resource,
+                format=DocumentFormat.XML,
+                detail=DetailLevel.FULL,
+                identity=self._identity,
+            )
+        )
+        live = inspected.get("resource")
+        canonical: str | None = None
+        if isinstance(live, dict):
+            for field in ("document_id", "doc_token", "token"):
+                value = live.get(field)
+                if isinstance(value, str) and value:
+                    canonical = value
+                    break
+        if canonical is None:
+            canonical = resource.value.rstrip("/").rsplit("/", 1)[-1]
+        revision = inspected.get("revision")
+        return WriteScopeTarget(
+            "docx",
+            canonical,
+            str(revision) if revision is not None else None,
+        )
 
     async def reconcile(
         self, arguments: dict[str, object], context: ToolContext

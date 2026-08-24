@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined trusted parallel-writer delegation before implementation: structured
+  targets, capability-owned live resolution, created-before-ready activation,
+  durable multi-target lock acquisition, crash recovery, per-child persisted
+  write scopes, exact call-target enforcement, and conservative serialization
+  for unresolved/create targets. Implementation area: delegation schema,
+  supervisor/store lifecycle, Docs target resolver, ToolExecutor scope gate,
+  production composition, and concurrency/recovery tests.
+
 - Defined durable active-run controls before implementation: deterministic,
   same-requester IM classification; transactional pre-ACK event/control/outbox
   admission; safe-boundary Harness consumption; checkpointed applied IDs;

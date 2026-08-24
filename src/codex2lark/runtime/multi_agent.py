@@ -7,6 +7,7 @@ from enum import StrEnum
 from typing import ClassVar, Protocol
 from uuid import uuid4
 
+from .tools import WriteScopeTarget
 from .types import RunStatus, VerificationState
 
 
@@ -86,6 +87,7 @@ class NodeSpec:
     context_mode: ContextMode = ContextMode.SELECTED
     deadline_ms: int | None = None
     dependency_node_ids: tuple[str, ...] = ()
+    requires_write_scope: bool = False
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z0-9_]+", self.name):
@@ -235,8 +237,16 @@ class AgentGraphStore(Protocol):
     async def list_nodes(self, graph_id: str) -> list[AgentNode]: ...
 
     async def spawn_child(
-        self, graph_id: str, parent_node_id: str, spec: NodeSpec, *, now_ms: int
+        self,
+        graph_id: str,
+        parent_node_id: str,
+        spec: NodeSpec,
+        *,
+        ready: bool,
+        now_ms: int,
     ) -> AgentNode: ...
+
+    async def activate_node(self, node_id: str, *, now_ms: int) -> AgentNode: ...
 
     async def lease_ready(
         self, graph_id: str, *, worker_id: str, now_ms: int, lease_ms: int, limit: int
@@ -284,6 +294,21 @@ class AgentGraphStore(Protocol):
     ) -> bool: ...
 
     async def release_locks(self, node_id: str) -> None: ...
+
+    async def list_locks(self, node_id: str, *, now_ms: int) -> tuple[ResourceTarget, ...]: ...
+
+    async def owns_write_scope(
+        self, owner_id: str, targets: tuple[WriteScopeTarget, ...], *, now_ms: int
+    ) -> bool: ...
+
+    async def renew_write_scope(
+        self,
+        owner_id: str,
+        targets: tuple[WriteScopeTarget, ...],
+        *,
+        now_ms: int,
+        lease_ms: int,
+    ) -> bool: ...
 
     async def list_artifacts(self, graph_id: str) -> list[Artifact]: ...
 
@@ -348,7 +373,13 @@ class MultiAgentSupervisor:
         return result
 
     async def spawn(
-        self, graph_id: str, parent_node_id: str, spec: NodeSpec, *, now_ms: int
+        self,
+        graph_id: str,
+        parent_node_id: str,
+        spec: NodeSpec,
+        *,
+        ready: bool = True,
+        now_ms: int,
     ) -> AgentNode:
         parent = await self._store.get_node(parent_node_id)
         if parent.graph_id != graph_id:
@@ -362,9 +393,16 @@ class MultiAgentSupervisor:
         for kind, amount in spec.budgets.items():
             if amount > parent.spec.budgets.get(kind, 0):
                 raise PermissionError(f"child {kind} budget exceeds parent budget")
-        child = await self._store.spawn_child(graph_id, parent_node_id, spec, now_ms=now_ms)
+        child = await self._store.spawn_child(
+            graph_id, parent_node_id, spec, ready=ready, now_ms=now_ms
+        )
         await self._notify()
         return child
+
+    async def activate(self, node_id: str, *, now_ms: int) -> AgentNode:
+        node = await self._store.activate_node(node_id, now_ms=now_ms)
+        await self._notify()
+        return node
 
     async def send(
         self,

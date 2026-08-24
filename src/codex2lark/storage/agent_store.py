@@ -22,6 +22,7 @@ from codex2lark.runtime.multi_agent import (
     NodeStatus,
     ResourceTarget,
 )
+from codex2lark.runtime.tools import WriteScopeTarget
 from codex2lark.runtime.types import VerificationState
 
 from .crypto import EnvelopeCipher
@@ -85,6 +86,7 @@ class SQLiteAgentGraphStore:
                 canonical_path="/root",
                 spec=root_spec,
                 depth=1,
+                status=NodeStatus.READY,
                 now_ms=now_ms,
             )
             graph = GraphRecord(
@@ -161,7 +163,13 @@ class SQLiteAgentGraphStore:
         return [self._node(row, dependencies[row["node_id"]]) for row in rows]
 
     async def spawn_child(
-        self, graph_id: str, parent_node_id: str, spec: NodeSpec, *, now_ms: int
+        self,
+        graph_id: str,
+        parent_node_id: str,
+        spec: NodeSpec,
+        *,
+        ready: bool,
+        now_ms: int,
     ) -> AgentNode:
         node_id = str(uuid4())
 
@@ -214,6 +222,7 @@ class SQLiteAgentGraphStore:
                 canonical_path=path,
                 spec=spec,
                 depth=depth,
+                status=NodeStatus.READY if ready else NodeStatus.CREATED,
                 now_ms=now_ms,
             )
             for dependency_id in spec.dependency_node_ids:
@@ -232,10 +241,31 @@ class SQLiteAgentGraphStore:
                 path,
                 spec,
                 depth,
-                NodeStatus.READY,
+                NodeStatus.READY if ready else NodeStatus.CREATED,
             )
 
         return await self._database.transaction(operation)
+
+    async def activate_node(self, node_id: str, *, now_ms: int) -> AgentNode:
+        def operation(connection: sqlite3.Connection) -> tuple[sqlite3.Row, tuple[str, ...]]:
+            cursor = connection.execute(
+                """
+                UPDATE runtime_agent_nodes SET status = 'ready', updated_at_ms = ?
+                WHERE node_id = ? AND status = 'created'
+                """,
+                (now_ms, node_id),
+            )
+            row = connection.execute(
+                "SELECT * FROM runtime_agent_nodes WHERE node_id = ?", (node_id,)
+            ).fetchone()
+            if row is None:
+                raise LookupError("Agent node does not exist")
+            if cursor.rowcount != 1 and row["status"] != NodeStatus.READY.value:
+                raise RuntimeError("only a created node can be activated")
+            return row, self._dependencies(connection, node_id)
+
+        row, dependencies = await self._database.transaction(operation)
+        return self._node(row, dependencies)
 
     async def lease_ready(
         self,
@@ -627,7 +657,8 @@ class SQLiteAgentGraphStore:
             node = connection.execute(
                 """
                 SELECT 1 FROM runtime_agent_nodes
-                WHERE graph_id = ? AND node_id = ? AND status = 'running'
+                WHERE graph_id = ? AND node_id = ?
+                  AND status IN ('created', 'ready', 'running')
                 """,
                 (graph_id, node_id),
             ).fetchone()
@@ -690,6 +721,103 @@ class SQLiteAgentGraphStore:
                 "DELETE FROM runtime_resource_locks WHERE owner_node_id = ?", (node_id,)
             )
         )
+
+    async def list_locks(self, node_id: str, *, now_ms: int) -> tuple[ResourceTarget, ...]:
+        def operation(connection: sqlite3.Connection) -> tuple[ResourceTarget, ...]:
+            connection.execute(
+                "DELETE FROM runtime_resource_locks WHERE lease_expires_at_ms <= ?", (now_ms,)
+            )
+            rows = connection.execute(
+                """
+                SELECT tenant_key, resource_type, resource_id, expected_revision
+                FROM runtime_resource_locks
+                WHERE owner_node_id = ?
+                ORDER BY resource_type, resource_id
+                """,
+                (node_id,),
+            ).fetchall()
+            return tuple(
+                ResourceTarget(
+                    str(row["tenant_key"]),
+                    str(row["resource_type"]),
+                    str(row["resource_id"]),
+                    row["expected_revision"],
+                )
+                for row in rows
+            )
+
+        return await self._database.transaction(operation)
+
+    async def owns_write_scope(
+        self,
+        owner_id: str,
+        targets: tuple[WriteScopeTarget, ...],
+        *,
+        now_ms: int,
+    ) -> bool:
+        if not targets:
+            return False
+
+        def operation(connection: sqlite3.Connection) -> bool:
+            connection.execute(
+                "DELETE FROM runtime_resource_locks WHERE lease_expires_at_ms <= ?", (now_ms,)
+            )
+            rows = connection.execute(
+                """
+                SELECT resource_type, resource_id, expected_revision
+                FROM runtime_resource_locks WHERE owner_node_id = ?
+                """,
+                (owner_id,),
+            ).fetchall()
+            owned = {
+                (
+                    str(row["resource_type"]),
+                    str(row["resource_id"]),
+                    row["expected_revision"],
+                )
+                for row in rows
+            }
+            required = {
+                (item.resource_type, item.resource_id, item.expected_revision) for item in targets
+            }
+            return required.issubset(owned)
+
+        return await self._database.transaction(operation)
+
+    async def renew_write_scope(
+        self,
+        owner_id: str,
+        targets: tuple[WriteScopeTarget, ...],
+        *,
+        now_ms: int,
+        lease_ms: int,
+    ) -> bool:
+        if not targets or lease_ms < 1:
+            return False
+
+        def operation(connection: sqlite3.Connection) -> bool:
+            for target in targets:
+                cursor = connection.execute(
+                    """
+                    UPDATE runtime_resource_locks
+                    SET lease_expires_at_ms = ?
+                    WHERE owner_node_id = ? AND resource_type = ? AND resource_id = ?
+                      AND expected_revision IS ? AND lease_expires_at_ms > ?
+                    """,
+                    (
+                        now_ms + lease_ms,
+                        owner_id,
+                        target.resource_type,
+                        target.resource_id,
+                        target.expected_revision,
+                        now_ms,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    return False
+            return True
+
+        return await self._database.transaction(operation)
 
     async def list_artifacts(self, graph_id: str) -> list[Artifact]:
         rows = await self._database.call(
@@ -805,6 +933,7 @@ class SQLiteAgentGraphStore:
         canonical_path: str,
         spec: NodeSpec,
         depth: int,
+        status: NodeStatus,
         now_ms: int,
     ) -> None:
         task = self._cipher.encrypt(
@@ -820,8 +949,9 @@ class SQLiteAgentGraphStore:
                 node_id, graph_id, parent_node_id, canonical_path, name, role,
                 task_brief_ciphertext, expected_output_type, context_mode,
                 tool_ids_ciphertext, budget_ciphertext, deadline_ms, depth, status,
+                requires_write_scope,
                 attempt_count, created_at_ms, updated_at_ms
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 0, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
             """,
             (
                 node_id,
@@ -837,6 +967,8 @@ class SQLiteAgentGraphStore:
                 budget,
                 spec.deadline_ms,
                 depth,
+                status.value,
+                int(spec.requires_write_scope),
                 now_ms,
                 now_ms,
             ),
@@ -975,6 +1107,7 @@ class SQLiteAgentGraphStore:
             context_mode=ContextMode(row["context_mode"]),
             deadline_ms=row["deadline_ms"],
             dependency_node_ids=dependency_node_ids,
+            requires_write_scope=bool(row["requires_write_scope"]),
         )
         return AgentNode(
             node_id=row["node_id"],

@@ -261,6 +261,7 @@ def create_v3_gateway(
     )
     policy = AllowConfiguredTools()
     approvals = DenyUnconfiguredApprovals()
+    graph_store = SQLiteAgentGraphStore(database, cipher)
     child_harness = AgentHarness(
         model=selected_model,
         tools=business_registry,
@@ -269,12 +270,12 @@ def create_v3_gateway(
             policy,
             approvals,
             runtime_store,
+            write_scope_store=graph_store,
         ),
         resources=resource_loader,
         context=ContextEngine(),
         sessions=sessions,
     )
-    graph_store = SQLiteAgentGraphStore(database, cipher)
     supervisor = MultiAgentSupervisor(graph_store)
     coordinator = MultiAgentCoordinator(
         supervisor=supervisor,

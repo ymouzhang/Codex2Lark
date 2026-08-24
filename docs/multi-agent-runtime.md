@@ -263,13 +263,43 @@ protocol.
 `agent.delegate` is a read-classified orchestration capability and conditionally
 parallel-safe. When one root model turn requests multiple independent, uniquely
 named delegations, the Harness starts them concurrently only if every delegated
-tool is read-only. If any child receives a Feishu write/destructive tool, the
-entire call batch executes serially because the current delegation schema does
-not carry a trusted, pre-resolvable resource target. A future parallel-writer
-profile must add explicit targets and acquire durable resource locks before
-leasing children; task prose is not a lock key. The graph supervisor still
-enforces budgets, leases, and `max_concurrency`, and returned artifacts are
-placed into the root journal in original call order.
+tool is read-only, or every writer declares at least one structured target that
+has a registered capability resolver. Task prose is never a lock key.
+
+Each declared target contains a writer `tool_id` and a capability-specific
+resource reference. Before a writer node becomes `ready`, the runtime:
+
+1. proves the tool is in the child allowlist and is write/destructive;
+2. invokes that tool's read-only target resolver with the trusted tenant,
+   identity, and policy binding;
+3. obtains a canonical resource type, ID, and current revision from live
+   Feishu state;
+4. acquires the corresponding durable SQLite lock while the child remains in
+   `created` state;
+5. activates the child only after all declared locks succeed.
+
+Resolution or lock failure cancels that child before it can run. A process crash
+between spawn and activation leaves a durable `created` node; replay resolves
+and locks it again before activation. The executor rebuilds each child's write
+scope from its persisted owned locks. A scoped child write is denied unless the
+tool resolves its actual arguments to one of those exact canonical targets, so
+a child cannot declare one document and write another. Write tools without a
+target resolver are never allowed inside a locked writer child.
+
+The node durably records that write scope is mandatory; this policy is not
+inferred from the current lock-row count. If its lock expires or is missing at
+tool time, the executor rejects the write instead of treating an empty scope as
+unrestricted. After resolving the actual live call target and revision, the
+executor atomically proves ownership and renews the exact lock immediately
+before the external write. Recovery must resolve, reacquire, and then reactivate
+the node.
+
+The first production target resolver covers existing-document edits. New
+document/Sheet/Base creation has no authoritative resource ID before the write
+and therefore remains serial until a capability defines a separately verified
+logical reservation. Target-less writer children remain serial. The graph
+supervisor still enforces budgets, leases, and `max_concurrency`, and returned
+artifacts are placed into the root journal in original call order.
 
 ## 9. User interaction during a graph
 

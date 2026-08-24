@@ -28,6 +28,19 @@ class ToolContext:
     identity_ref: str
     policy_version: int
     task_id: str | None = None
+    write_scope: tuple[WriteScopeTarget, ...] = ()
+    write_scope_required: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class WriteScopeTarget:
+    resource_type: str
+    resource_id: str
+    expected_revision: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.resource_type or not self.resource_id:
+            raise ValueError("write scope target identity is required")
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +116,25 @@ class ToolOperationStore(Protocol):
     ) -> None: ...
 
 
+class WriteScopeLeaseStore(Protocol):
+    async def owns_write_scope(
+        self,
+        owner_id: str,
+        targets: tuple[WriteScopeTarget, ...],
+        *,
+        now_ms: int,
+    ) -> bool: ...
+
+    async def renew_write_scope(
+        self,
+        owner_id: str,
+        targets: tuple[WriteScopeTarget, ...],
+        *,
+        now_ms: int,
+        lease_ms: int,
+    ) -> bool: ...
+
+
 class ToolRegistry:
     def __init__(self, tools: list[SemanticTool]) -> None:
         self._tools: dict[str, SemanticTool] = {}
@@ -145,17 +177,21 @@ class ToolExecutor:
         policy: ToolPolicy,
         approvals: ApprovalBroker,
         operation_store: ToolOperationStore | None = None,
+        write_scope_store: WriteScopeLeaseStore | None = None,
         clock_ms: Callable[[], int] | None = None,
         claim_lease_ms: int = 300_000,
+        write_lock_lease_ms: int = 300_000,
     ) -> None:
-        if claim_lease_ms < 1:
+        if min(claim_lease_ms, write_lock_lease_ms) < 1:
             raise ValueError("tool operation claim lease must be positive")
         self._registry = registry
         self._policy = policy
         self._approvals = approvals
         self._operation_store = operation_store
+        self._write_scope_store = write_scope_store
         self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self._claim_lease_ms = claim_lease_ms
+        self._write_lock_lease_ms = write_lock_lease_ms
 
     async def execute(self, call: ToolCall, context: ToolContext) -> ToolResult:
         try:
@@ -174,6 +210,88 @@ class ToolExecutor:
             definition, call, context
         ):
             return self._failure(call, definition.effect, "approval_denied", "approval denied")
+        if (
+            context.write_scope_required
+            and not context.write_scope
+            and definition.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE)
+        ):
+            return self._failure(
+                call,
+                definition.effect,
+                "write_lock_missing",
+                "the delegated writer no longer owns its required resource lock",
+            )
+        if (
+            context.write_scope_required
+            and self._write_scope_store is None
+            and definition.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE)
+        ):
+            return self._failure(
+                call,
+                definition.effect,
+                "write_lock_validator_missing",
+                "the delegated writer has no runtime lock validator",
+            )
+        if context.write_scope and definition.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE):
+            resolver = getattr(tool, "resolve_write_target", None)
+            if not callable(resolver):
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_scope_unsupported",
+                    "the scoped writer tool cannot resolve its live target",
+                )
+            try:
+                actual = await resolver(call.arguments, context)
+            except Exception as exc:
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_scope_resolution_failed",
+                    f"live write target resolution failed: {type(exc).__name__}",
+                )
+            allowed = next(
+                (
+                    target
+                    for target in context.write_scope
+                    if (target.resource_type, target.resource_id)
+                    == (actual.resource_type, actual.resource_id)
+                ),
+                None,
+            )
+            if allowed is None:
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_scope_violation",
+                    "the actual write target is outside the delegated lock scope",
+                )
+            if (
+                allowed.expected_revision is not None
+                and actual.expected_revision != allowed.expected_revision
+            ):
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_revision_conflict",
+                    "the live target revision changed after the delegated lock was acquired",
+                )
+            if (
+                context.write_scope_required
+                and self._write_scope_store is not None
+                and not await self._write_scope_store.renew_write_scope(
+                    context.run_id,
+                    context.write_scope,
+                    now_ms=self._clock_ms(),
+                    lease_ms=self._write_lock_lease_ms,
+                )
+            ):
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_lock_expired",
+                    "the delegated writer's durable resource lock expired",
+                )
         operation_key: str | None = None
         owner = f"{context.run_id}:{context.node_id}"
         if definition.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE):

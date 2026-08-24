@@ -62,7 +62,7 @@ def test_gateway_doctor_validates_configuration_without_printing_secrets(
     output = json.loads(raw)
 
     assert output["checks"]["storage"] == "not_initialized"
-    assert output["checks"]["agent_resources"]["group-agent-core"] == "1.0.0"
+    assert output["checks"]["agent_resources"]["group-agent-core"] == "1.1.0"
     assert "feishu-secret-value" not in raw
     assert "openai-secret-value" not in raw
 
