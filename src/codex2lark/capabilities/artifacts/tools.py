@@ -14,7 +14,13 @@ from codex2lark.core.models import (
     WhiteboardRenderRequest,
     WriteSheetRequest,
 )
-from codex2lark.runtime.tools import SemanticTool, ToolContext, ToolReconciliation
+from codex2lark.runtime.targets import exact_target, logical_reservation
+from codex2lark.runtime.tools import (
+    SemanticTool,
+    ToolContext,
+    ToolReconciliation,
+    WriteScopeTarget,
+)
 from codex2lark.runtime.types import (
     ToolDefinition,
     ToolEffect,
@@ -191,6 +197,28 @@ class RenderWhiteboardTool(_ArtifactTool):
         assert isinstance(request, WhiteboardRenderRequest)
         return await self._service.render_whiteboard(request)
 
+    async def resolve_delegation_target(
+        self, declaration: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        resource = _declaration_resource(declaration)
+        if "#" in resource:
+            return logical_reservation("whiteboard-create", resource)
+        return exact_target("whiteboard", resource)
+
+    async def resolve_write_target(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        request = self._request(arguments)
+        assert isinstance(request, WhiteboardRenderRequest)
+        if request.mode == "update":
+            assert request.whiteboard_token is not None
+            return exact_target("whiteboard", request.whiteboard_token)
+        assert request.document is not None
+        binding = f"{request.document.value}#{request.anchor_block_id or 'document-end'}"
+        return logical_reservation("whiteboard-create", binding)
+
 
 class CreateWorkbookTool(_ArtifactTool):
     _sheet = _object(
@@ -246,6 +274,20 @@ class CreateWorkbookTool(_ArtifactTool):
         assert isinstance(request, CreateWorkbookRequest)
         return await self._service.create_workbook(request)
 
+    async def resolve_delegation_target(
+        self, declaration: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        return logical_reservation("sheet-create", _declaration_resource(declaration))
+
+    async def resolve_write_target(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        request = self._request(arguments)
+        assert isinstance(request, CreateWorkbookRequest)
+        return logical_reservation("sheet-create", request.title)
+
 
 class WriteSheetTool(_ArtifactTool):
     definition = ToolDefinition(
@@ -267,8 +309,11 @@ class WriteSheetTool(_ArtifactTool):
     def _request(self, arguments: dict[str, object]) -> WriteSheetRequest:
         return WriteSheetRequest.model_validate(
             {
-                **arguments,
+                "spreadsheet_token": arguments.get("spreadsheet_token"),
+                "sheet_id": arguments.get("sheet_id"),
+                "range": arguments.get("range"),
                 "cells": _json(arguments.get("cells_json"), expected=list),
+                "allow_overwrite": arguments.get("allow_overwrite"),
                 "identity": self._identity,
             }
         )
@@ -276,6 +321,20 @@ class WriteSheetTool(_ArtifactTool):
     async def _invoke(self, request: object) -> dict[str, Any]:
         assert isinstance(request, WriteSheetRequest)
         return await self._service.write_sheet(request)
+
+    async def resolve_delegation_target(
+        self, declaration: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        return exact_target("sheet", _declaration_resource(declaration))
+
+    async def resolve_write_target(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        request = self._request(arguments)
+        assert isinstance(request, WriteSheetRequest)
+        return exact_target("sheet", request.spreadsheet_token)
 
 
 class CreateBaseTool(_ArtifactTool):
@@ -308,6 +367,20 @@ class CreateBaseTool(_ArtifactTool):
         assert isinstance(request, CreateBaseRequest)
         return await self._service.create_base(request)
 
+    async def resolve_delegation_target(
+        self, declaration: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        return logical_reservation("base-create", _declaration_resource(declaration))
+
+    async def resolve_write_target(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        request = self._request(arguments)
+        assert isinstance(request, CreateBaseRequest)
+        return logical_reservation("base-create", request.name)
+
 
 class UpsertBaseRecordsTool(_ArtifactTool):
     definition = ToolDefinition(
@@ -328,8 +401,10 @@ class UpsertBaseRecordsTool(_ArtifactTool):
     def _request(self, arguments: dict[str, object]) -> UpsertBaseRecordsRequest:
         return UpsertBaseRecordsRequest.model_validate(
             {
-                **arguments,
+                "base_token": arguments.get("base_token"),
+                "table_id": arguments.get("table_id"),
                 "records": _json(arguments.get("records_json"), expected=list),
+                "mode": arguments.get("mode"),
                 "identity": self._identity,
             }
         )
@@ -337,6 +412,31 @@ class UpsertBaseRecordsTool(_ArtifactTool):
     async def _invoke(self, request: object) -> dict[str, Any]:
         assert isinstance(request, UpsertBaseRecordsRequest)
         return await self._service.upsert_base_records(request)
+
+    async def resolve_delegation_target(
+        self, declaration: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        resource = _declaration_resource(declaration)
+        parts = resource.split(":", 1)
+        if len(parts) != 2:
+            raise ValueError("Base upsert target must be base_token:table_id")
+        return exact_target("base-table", *parts)
+
+    async def resolve_write_target(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        request = self._request(arguments)
+        assert isinstance(request, UpsertBaseRecordsRequest)
+        return exact_target("base-table", request.base_token, request.table_id)
+
+
+def _declaration_resource(declaration: dict[str, object]) -> str:
+    resource = declaration.get("resource")
+    if not isinstance(resource, str) or not resource:
+        raise ValueError("delegated artifact write requires a resource target")
+    return resource
 
 
 def artifact_tools(service: ArtifactService, identity: Identity) -> list[SemanticTool]:

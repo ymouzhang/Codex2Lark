@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined capability target resolution and logical create reservations before
+  implementation. Managed document/Sheet/Base creates use normalized title
+  digests, existing Sheet/Base/Whiteboard operations use typed resource locks,
+  and execution re-resolves actual arguments to reject false declarations.
+  Implementation area: shared target utility, semantic authoring tools,
+  delegation concurrency tests, and production capability registry.
+
 - Defined broad local business-data purge before implementation. Stopped-Gateway
   `purge-tenant` spans all tenant apps and derived runtime state; `purge-all`
   removes every local business row and encrypted blob while preserving schema

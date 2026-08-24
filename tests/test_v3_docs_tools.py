@@ -138,6 +138,32 @@ async def test_create_binds_operator_identity_and_returns_verified_resource() ->
     assert verification.resource_refs == ("https://example.feishu.cn/docx/docx_2",)
 
 
+async def test_document_create_reservation_normalizes_title_and_rejects_mismatch() -> None:
+    tool = CreateDocumentTool(FakeDocsService(), Identity.USER)  # type: ignore[arg-type]
+    declared = await tool.resolve_delegation_target({"resource": "  Architecture  V3 "}, context())
+    actual = await tool.resolve_write_target(
+        {
+            "title": "architecture v3",
+            "content_xml": "<p>Body</p>",
+            "required_text": ["Body"],
+        },
+        context(),
+    )
+    mismatch = await tool.resolve_write_target(
+        {
+            "title": "Different",
+            "content_xml": "<p>Body</p>",
+            "required_text": ["Body"],
+        },
+        context(),
+    )
+
+    assert declared == actual
+    assert declared.resource_id.startswith("logical:")
+    assert "Architecture" not in declared.resource_id
+    assert mismatch != declared
+
+
 async def test_create_reconciliation_finds_and_verifies_existing_live_document() -> None:
     class ReconcileDocs(FakeDocsService):
         async def search(self, request: object) -> dict[str, Any]:

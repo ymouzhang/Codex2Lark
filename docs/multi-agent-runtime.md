@@ -294,12 +294,19 @@ executor atomically proves ownership and renews the exact lock immediately
 before the external write. Recovery must resolve, reacquire, and then reactivate
 the node.
 
-The first production target resolver covers existing-document edits. New
-document/Sheet/Base creation has no authoritative resource ID before the write
-and therefore remains serial until a capability defines a separately verified
-logical reservation. Target-less writer children remain serial. The graph
-supervisor still enforces budgets, leases, and `max_concurrency`, and returned
-artifacts are placed into the root journal in original call order.
+Existing-document edits resolve a canonical live token and revision. Creation
+tools for managed-folder documents, workbooks, and Bases use capability-owned
+logical reservations derived from resource type plus a SHA-256 digest of the
+Unicode-normalized, case-folded title/name; raw titles are not stored in lock
+rows. Whiteboard creation reserves its bound document/anchor, Sheet writes lock
+the workbook, and Base upserts lock one Base/table pair. The tool independently
+resolves its actual invocation arguments immediately before execution; a model
+declaration that does not match the actual target is rejected. These
+reservations serialize same-name creates and overlapping writes while allowing
+disjoint resource work to run concurrently. A future capability without a
+resolver remains serial. The graph supervisor still enforces budgets, leases,
+and `max_concurrency`, and returned artifacts are placed into the root journal
+in original call order.
 
 ## 9. User interaction during a graph
 

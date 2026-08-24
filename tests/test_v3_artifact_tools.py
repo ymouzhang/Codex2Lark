@@ -6,9 +6,11 @@ import pytest
 
 from codex2lark.capabilities.artifacts.plugin import FeishuArtifactsPlugin
 from codex2lark.capabilities.artifacts.tools import (
+    CreateBaseTool,
     CreateWorkbookTool,
     RenderWhiteboardTool,
     UpsertBaseRecordsTool,
+    WriteSheetTool,
     artifact_tools,
 )
 from codex2lark.core.models import CreateWorkbookRequest, Identity
@@ -154,3 +156,50 @@ def test_whiteboard_tool_requires_target_matching_mode() -> None:
                 "overwrite": True,
             }
         )
+
+
+async def test_artifact_tools_resolve_logical_and_exact_write_targets() -> None:
+    service = FakeArtifactService()
+    workbook = CreateWorkbookTool(service, Identity.USER)  # type: ignore[arg-type]
+    workbook_declaration = await workbook.resolve_delegation_target(
+        {"resource": " Project Plan "}, context()
+    )
+    workbook_actual = await workbook.resolve_write_target(
+        {
+            "title": "project plan",
+            "sheets": [
+                {
+                    "name": "Data",
+                    "columns": ["Value"],
+                    "data_json": "[[1]]",
+                    "dtypes_json": "{}",
+                    "formats_json": "{}",
+                }
+            ],
+            "styles_json": "[]",
+        },
+        context(),
+    )
+    sheet = WriteSheetTool(service, Identity.USER)  # type: ignore[arg-type]
+    sheet_target = await sheet.resolve_write_target(
+        {
+            "spreadsheet_token": "sheet-1",
+            "sheet_id": "tab-1",
+            "range": "A1:A1",
+            "cells_json": '[[{"value":1}]]',
+            "allow_overwrite": True,
+        },
+        context(),
+    )
+    base = CreateBaseTool(service, Identity.USER)  # type: ignore[arg-type]
+    base_target = await base.resolve_delegation_target({"resource": "Roadmap"}, context())
+    upsert = UpsertBaseRecordsTool(service, Identity.USER)  # type: ignore[arg-type]
+    upsert_target = await upsert.resolve_delegation_target(
+        {"resource": "base-1:table-1"}, context()
+    )
+
+    assert workbook_declaration == workbook_actual
+    assert workbook_actual.resource_id.startswith("logical:")
+    assert sheet_target.resource_id == "sheet-1"
+    assert base_target.resource_type == "base-create"
+    assert upsert_target.resource_id == "base-1:table-1"

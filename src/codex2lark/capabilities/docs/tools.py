@@ -14,6 +14,7 @@ from codex2lark.core.models import (
     ResourceRef,
     SearchDocumentsRequest,
 )
+from codex2lark.runtime.targets import logical_reservation
 from codex2lark.runtime.tools import (
     SemanticTool,
     ToolContext,
@@ -214,6 +215,21 @@ class CreateDocumentTool(_DocumentTool):
     async def _invoke(self, request: object) -> dict[str, Any]:
         assert isinstance(request, CreateDocumentRequest)
         return await self._service.create(request)
+
+    async def resolve_delegation_target(
+        self, declaration: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        resource = declaration.get("resource")
+        if not isinstance(resource, str):
+            raise ValueError("document create reservation requires the exact title")
+        return logical_reservation("docx-create", resource)
+
+    async def resolve_write_target(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> WriteScopeTarget:
+        del context
+        return logical_reservation("docx-create", self._request(arguments).title)
 
     async def reconcile(
         self, arguments: dict[str, object], context: ToolContext
