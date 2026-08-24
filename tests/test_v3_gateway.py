@@ -74,6 +74,8 @@ def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_pa
         "CODEX2LARK_FEISHU_APP_SECRET": "secret",
         "OPENAI_API_KEY": "model-secret",
         "CODEX2LARK_MODEL": "configured-model",
+        "CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS": "1250000",
+        "CODEX2LARK_MODEL_OUTPUT_COST_MICROS_PER_MILLION_TOKENS": "10000000",
         "CODEX2LARK_MASTER_KEY_ID": "key-v1",
         "CODEX2LARK_MASTER_KEY_BASE64": encoded,
         "CODEX2LARK_DATA_DIR": str(tmp_path),
@@ -90,7 +92,13 @@ def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_pa
     assert config.max_attachment_bytes == 456
     assert config.enabled_chat_ids == frozenset()
     assert config.authorized_actor_ids == frozenset()
+    assert config.run_wall_time_ms == 900_000
+    assert config.run_cost_limit_micros == 1_000_000
     assert "secret" not in repr(config)
+    missing_price = dict(values)
+    del missing_price["CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS"]
+    with pytest.raises(ValueError, match="MODEL_INPUT_COST"):
+        GatewayConfig.from_environment(missing_price)
     (tmp_path / "key-rotation.json").write_text("{}")
     with pytest.raises(ValueError, match="incomplete key rotation"):
         GatewayConfig.from_environment(values)
@@ -245,6 +253,8 @@ class E2EModel:
     async def complete(self, request: ModelRequest) -> ModelResponse:
         assert request.messages[-1].content == "summarize this"
         assert "feishu.chat.digest.publish" in {definition.tool_id for definition in request.tools}
+        assert request.remaining_budget["wall_time_ms"] <= 900_000
+        assert request.remaining_budget["cost_micros"] == 1_000_000
         return ModelResponse("已经为你整理好摘要。", usage=ModelUsage(10, 8))
 
 
@@ -498,6 +508,8 @@ def e2e_config(path: Path) -> GatewayConfig:
         model="configured-model",
         master_key=MasterKey("test", b"k" * 32),
         data_dir=path,
+        model_input_cost_micros_per_million_tokens=1_250_000,
+        model_output_cost_micros_per_million_tokens=10_000_000,
         poll_interval_ms=10,
     )
 

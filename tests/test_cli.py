@@ -68,6 +68,8 @@ def test_gateway_doctor_validates_configuration_without_printing_secrets(
         "CODEX2LARK_FEISHU_APP_SECRET": "feishu-secret-value",
         "OPENAI_API_KEY": "openai-secret-value",
         "CODEX2LARK_MODEL": "configured-model",
+        "CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS": "1250000",
+        "CODEX2LARK_MODEL_OUTPUT_COST_MICROS_PER_MILLION_TOKENS": "10000000",
         "CODEX2LARK_MASTER_KEY_ID": "key-v1",
         "CODEX2LARK_MASTER_KEY_BASE64": base64.b64encode(b"k" * 32).decode(),
         "CODEX2LARK_DATA_DIR": str(tmp_path),

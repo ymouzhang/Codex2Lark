@@ -28,6 +28,8 @@ class GatewayConfig:
     model: str
     master_key: MasterKey = field(repr=False)
     data_dir: Path
+    model_input_cost_micros_per_million_tokens: int
+    model_output_cost_micros_per_million_tokens: int
     authoring_identity: Identity = Identity.USER
     openai_base_url: str | None = None
     poll_interval_ms: int = 200
@@ -40,6 +42,8 @@ class GatewayConfig:
     canary_model: str | None = None
     enabled_chat_ids: frozenset[str] = field(default_factory=frozenset)
     authorized_actor_ids: frozenset[str] = field(default_factory=frozenset)
+    run_wall_time_ms: int = 900_000
+    run_cost_limit_micros: int = 1_000_000
 
     def __post_init__(self) -> None:
         required = (
@@ -52,6 +56,16 @@ class GatewayConfig:
             raise ValueError("Gateway credentials and model are required")
         if self.poll_interval_ms < 10 or self.task_concurrency < 1 or self.max_attachment_bytes < 1:
             raise ValueError("Gateway worker configuration is invalid")
+        if (
+            min(
+                self.model_input_cost_micros_per_million_tokens,
+                self.model_output_cost_micros_per_million_tokens,
+                self.run_wall_time_ms,
+                self.run_cost_limit_micros,
+            )
+            < 1
+        ):
+            raise ValueError("Gateway model pricing and run budgets must be positive")
         if not self.data_dir.is_absolute():
             raise ValueError("CODEX2LARK_DATA_DIR must be an absolute path")
         if self.canary_percent < 0 or self.canary_percent > 100:
@@ -85,6 +99,14 @@ class GatewayConfig:
                 encoded_key=cls._required(values, "CODEX2LARK_MASTER_KEY_BASE64"),
             ),
             data_dir=data_dir,
+            model_input_cost_micros_per_million_tokens=cls._required_positive_integer(
+                values,
+                "CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS",
+            ),
+            model_output_cost_micros_per_million_tokens=cls._required_positive_integer(
+                values,
+                "CODEX2LARK_MODEL_OUTPUT_COST_MICROS_PER_MILLION_TOKENS",
+            ),
             authoring_identity=Identity(values.get("CODEX2LARK_AUTHORING_IDENTITY", "user")),
             openai_base_url=values.get("OPENAI_BASE_URL") or None,
             poll_interval_ms=cls._integer(values, "CODEX2LARK_POLL_INTERVAL_MS", 200),
@@ -99,6 +121,10 @@ class GatewayConfig:
             canary_model=values.get("CODEX2LARK_CANARY_MODEL") or None,
             enabled_chat_ids=cls._id_set(values, "CODEX2LARK_ENABLED_CHAT_IDS"),
             authorized_actor_ids=cls._id_set(values, "CODEX2LARK_AUTHORIZED_ACTOR_IDS"),
+            run_wall_time_ms=cls._integer(values, "CODEX2LARK_RUN_WALL_TIME_MS", 900_000),
+            run_cost_limit_micros=cls._integer(
+                values, "CODEX2LARK_RUN_COST_LIMIT_MICROS", 1_000_000
+            ),
         )
 
     @staticmethod
@@ -117,6 +143,15 @@ class GatewayConfig:
             return int(raw)
         except ValueError as exc:
             raise ValueError(f"environment variable must be an integer: {name}") from exc
+
+    @classmethod
+    def _required_positive_integer(cls, values: Mapping[str, str], name: str) -> int:
+        if name not in values or not values[name].strip():
+            raise ValueError(f"required environment variable is missing: {name}")
+        value = cls._integer(values, name, 0)
+        if value < 1:
+            raise ValueError(f"environment variable must be positive: {name}")
+        return value
 
     @classmethod
     def _optional_integer(cls, values: Mapping[str, str], name: str) -> int | None:

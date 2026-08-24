@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined truthful production model costing before implementation. Gateway
+  configuration requires positive operator-maintained input/output prices in
+  micro-USD per million tokens, the Responses adapter rounds provider usage
+  upward, and every production root definition declares configurable wall-time
+  and monetary ceilings. Implementation area: Gateway config/composition,
+  OpenAI Responses usage adapter, operations runbook, and direct tests.
+
 - Defined enforceable active wall-time and truthful external-effect completion
   before implementation. The Harness persists cumulative monotonic execution,
   bounds provider/tool awaits, and fails deterministically on exhaustion; every

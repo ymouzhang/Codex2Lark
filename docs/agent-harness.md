@@ -216,6 +216,18 @@ terminal outcome is failed with `external_effect_unverified`. Successfully
 verified writes retain their resource references. A run that used only
 read-only tools may still complete normally.
 
+`cost_micros` is measured in micro-US-dollars. The production Responses adapter
+calculates it from provider-reported input/output token counts and immutable
+operator-supplied prices per one million tokens, rounding each response upward.
+Cached input is deliberately charged at the full configured input rate unless a
+future provider-neutral usage contract exposes a trustworthy cached-token cost.
+Missing or malformed provider usage fails the turn instead of recording a
+misleading zero cost.
+Gateway startup rejects missing, zero, or negative prices and declares both a
+per-root-run cost ceiling and active wall-time ceiling. Pricing is configuration,
+not a hard-coded model fact, because provider/model prices change independently
+of Codex2Lark releases.
+
 Read-only tools may execute in parallel when they are independent. Mutations of
 one Feishu resource execute sequentially. A mixed tool batch becomes sequential
 when ordering or approval matters.

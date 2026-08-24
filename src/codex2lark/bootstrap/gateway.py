@@ -329,6 +329,8 @@ def create_v3_gateway(
     business_registry = ToolRegistry(business_tools)
     selected_model = model or OpenAIResponsesModel.from_api_key(
         api_key=config.openai_api_key,
+        input_cost_micros_per_million_tokens=(config.model_input_cost_micros_per_million_tokens),
+        output_cost_micros_per_million_tokens=(config.model_output_cost_micros_per_million_tokens),
         base_url=config.openai_base_url,
     )
     policy = AllowConfiguredTools()
@@ -391,6 +393,8 @@ def create_v3_gateway(
                 BudgetLimit(BudgetKind.TOOL_CALLS, 16),
                 BudgetLimit(BudgetKind.EXTERNAL_WRITES, 6),
                 BudgetLimit(BudgetKind.AGENT_NODES, 8),
+                BudgetLimit(BudgetKind.WALL_TIME_MS, config.run_wall_time_ms),
+                BudgetLimit(BudgetKind.COST_MICROS, config.run_cost_limit_micros),
             ),
             max_turns=8,
             max_context_tokens=32_000,

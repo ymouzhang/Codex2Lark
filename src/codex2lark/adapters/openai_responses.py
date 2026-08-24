@@ -23,17 +23,44 @@ class OpenAIClientPort(Protocol):
 
 
 class OpenAIResponsesModel:
-    def __init__(self, client: OpenAIClientPort) -> None:
+    def __init__(
+        self,
+        client: OpenAIClientPort,
+        *,
+        input_cost_micros_per_million_tokens: int,
+        output_cost_micros_per_million_tokens: int,
+    ) -> None:
+        if (
+            min(
+                input_cost_micros_per_million_tokens,
+                output_cost_micros_per_million_tokens,
+            )
+            < 1
+        ):
+            raise ValueError("model token prices must be positive")
         self._client = client
+        self._input_price = input_cost_micros_per_million_tokens
+        self._output_price = output_cost_micros_per_million_tokens
 
     @classmethod
-    def from_api_key(cls, *, api_key: str, base_url: str | None = None) -> OpenAIResponsesModel:
+    def from_api_key(
+        cls,
+        *,
+        api_key: str,
+        input_cost_micros_per_million_tokens: int,
+        output_cost_micros_per_million_tokens: int,
+        base_url: str | None = None,
+    ) -> OpenAIResponsesModel:
         if not api_key:
             raise ValueError("OpenAI API key is required")
         from openai import AsyncOpenAI
 
         client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        return cls(cast(OpenAIClientPort, client))
+        return cls(
+            cast(OpenAIClientPort, client),
+            input_cost_micros_per_million_tokens=(input_cost_micros_per_million_tokens),
+            output_cost_micros_per_million_tokens=(output_cost_micros_per_million_tokens),
+        )
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         remaining = request.remaining_budget.get("model_tokens", 16_384)
@@ -86,12 +113,21 @@ class OpenAIResponsesModel:
                 )
             )
         usage = getattr(response, "usage", None)
+        if usage is None:
+            raise ValueError("OpenAI response is missing token usage")
+        input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        if min(input_tokens, output_tokens) < 0:
+            raise ValueError("OpenAI response token usage cannot be negative")
+        weighted_cost = input_tokens * self._input_price + output_tokens * self._output_price
+        cost_micros = (weighted_cost + 999_999) // 1_000_000 if weighted_cost else 0
         return ModelResponse(
             content=str(getattr(response, "output_text", "") or ""),
             tool_calls=tuple(calls),
             usage=ModelUsage(
-                input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-                output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_micros=cost_micros,
             ),
             provider_response_id=self._optional_text(getattr(response, "id", None)),
         )

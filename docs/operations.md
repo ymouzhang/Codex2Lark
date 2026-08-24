@@ -141,10 +141,28 @@ export CODEX2LARK_FEISHU_APP_ID='cli_xxx'
 export CODEX2LARK_FEISHU_APP_SECRET='...'
 export OPENAI_API_KEY='...'
 export CODEX2LARK_MODEL='gpt-5'
+export CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS='1250000'
+export CODEX2LARK_MODEL_OUTPUT_COST_MICROS_PER_MILLION_TOKENS='10000000'
 export CODEX2LARK_MASTER_KEY_ID='local-v1'
 export CODEX2LARK_MASTER_KEY_BASE64='a-base64-encoded-32-byte-key'
 export CODEX2LARK_AUTHORING_IDENTITY='user'
 ```
+
+The two model-price values above are illustrative, not a current price quote.
+Set them from the provider's current price for the exact configured model. They
+are micro-US-dollars per one million tokens (`$1.25` becomes `1250000`). The
+Gateway refuses to start without positive values so a monetary budget is never
+silently treated as free. Root runs default to 15 active minutes and `$1.00`;
+override these independently when needed:
+
+```bash
+export CODEX2LARK_RUN_WALL_TIME_MS='900000'
+export CODEX2LARK_RUN_COST_LIMIT_MICROS='1000000'
+```
+
+The time budget pauses while a durable run is stopped and resumes from its
+checkpoint. Cost and elapsed active time are included in the model-visible
+remaining-budget snapshot but pricing secrets/configuration are not.
 
 `CODEX2LARK_AUTHORING_IDENTITY` is `user` or `bot` and selects the trusted
 lark-cli identity used by authoring tools. Group text cannot override it. The

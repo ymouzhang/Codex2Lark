@@ -422,6 +422,18 @@ async def test_wall_time_budget_cancels_hanging_model_call() -> None:
     assert sessions.runs["run-1"] is RunStatus.FAILED
 
 
+async def test_model_cost_budget_stops_run_deterministically() -> None:
+    harness, sessions = build_harness(
+        FakeModel([ModelResponse("Done.", usage=ModelUsage(10, 10, 1_001))])
+    )
+
+    outcome = await harness.run(request(), definition(require_verified=False), now_ms=100)
+
+    assert outcome.status is RunStatus.FAILED
+    assert outcome.summary == "cost_micros budget exceeded"
+    assert sessions.runs["run-1"] is RunStatus.FAILED
+
+
 async def test_unverified_write_remains_blocking_after_checkpoint_resume() -> None:
     sessions = InMemorySessionStore()
     first, _ = build_harness(
