@@ -412,6 +412,22 @@ Follow-up messages in the same Feishu thread reuse the durable session identity,
 but the runtime still reconciles live Feishu messages before using local content.
 No context crosses a chat or tenant boundary.
 
+### Group-bound capability authority
+
+A task admitted from a Feishu group receives its `chat_id` only through trusted
+routing metadata. Group capability tools must derive their source scope from
+that `ToolContext`; model arguments, user text, chat display names, delegated
+task briefs, and document contents cannot select a different group.
+
+Accordingly, the runtime `feishu.chat.digest.publish` schema exposes only the
+time range and bounded rendering options. It does not expose `chat_id` or
+`chat_name`. The tool injects the current trusted chat ID for execution and
+write-target resolution. Delegation may reserve only the `current_chat` marker
+or that same chat ID; both resolve to the trusted ID, while a missing binding or
+cross-chat declaration is rejected before service access.
+Interactive MCP publishing remains a separate, explicit user-authorized path
+whose request may select a chat by exact ID or unambiguous name.
+
 ### Admission authorization policy
 
 Admission applies a trusted operator policy before writing the incoming message

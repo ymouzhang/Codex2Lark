@@ -10,7 +10,7 @@ from .tools import ChatDigestService, chat_digest_tools
 class FeishuChatDigestPlugin:
     manifest = PluginManifest(
         plugin_id="feishu-chat-digest",
-        version="1.0.0",
+        version="1.1.0",
         runtime_api=1,
         capabilities=("im.chat.digest.publish",),
         required_scopes=(

@@ -23,16 +23,15 @@ class PublishChatDigestTool:
     checkpoint_safe_observation = False
     definition = ToolDefinition(
         "feishu.chat.digest.publish",
-        1,
+        2,
         (
-            "Create or refresh one verified chronological Feishu group-history document. "
+            "Create or refresh one verified chronological history document for the "
+            "current trusted Feishu group. "
             "Images may be embedded; ordinary files are represented by filename only."
         ),
         {
             "type": "object",
             "properties": {
-                "chat_id": {"type": ["string", "null"]},
-                "chat_name": {"type": ["string", "null"]},
                 "start": {"type": "string"},
                 "end": {"type": "string"},
                 "timezone": {"type": "string"},
@@ -41,8 +40,6 @@ class PublishChatDigestTool:
                 "max_images": {"type": "integer", "minimum": 0, "maximum": 500},
             },
             "required": [
-                "chat_id",
-                "chat_name",
                 "start",
                 "end",
                 "timezone",
@@ -65,15 +62,16 @@ class PublishChatDigestTool:
         if set(arguments) != set(properties):
             raise ValueError("tool arguments must exactly match the strict schema")
         try:
-            self._request(arguments)
+            ChatDigestRequest.model_validate(
+                {**arguments, "chat_id": "trusted-context-placeholder", "identity": self._identity}
+            )
         except ValidationError as exc:
             raise ValueError(str(exc)) from exc
 
     async def execute(
         self, arguments: dict[str, object], context: ToolContext
     ) -> dict[str, object]:
-        del context
-        return await self._service.publish(self._request(arguments))
+        return await self._service.publish(self._request(arguments, context))
 
     async def verify(
         self,
@@ -120,24 +118,35 @@ class PublishChatDigestTool:
     async def resolve_write_target(
         self, arguments: dict[str, object], context: ToolContext
     ) -> WriteScopeTarget:
-        del context
-        request = self._request(arguments)
-        target = request.chat_id or request.chat_name
-        assert target is not None
-        kind = "id" if request.chat_id else "name"
-        return logical_reservation("chat-digest", f"{kind}:{target}")
+        request = self._request(arguments, context)
+        assert request.chat_id is not None
+        return logical_reservation("chat-digest", f"id:{request.chat_id}")
 
     async def resolve_delegation_target(
         self, declaration: dict[str, object], context: ToolContext
     ) -> WriteScopeTarget:
-        del context
         resource = declaration.get("resource")
         if not isinstance(resource, str) or not resource:
             raise ValueError("chat digest reservation requires an exact chat target")
-        return logical_reservation("chat-digest", resource)
+        chat_id = self._trusted_chat_id(context)
+        if resource.strip() not in {"current_chat", chat_id}:
+            raise PermissionError("chat digest target must match the originating trusted group")
+        return logical_reservation("chat-digest", f"id:{chat_id}")
 
-    def _request(self, arguments: dict[str, object]) -> ChatDigestRequest:
-        return ChatDigestRequest.model_validate({**arguments, "identity": self._identity})
+    def _request(self, arguments: dict[str, object], context: ToolContext) -> ChatDigestRequest:
+        return ChatDigestRequest.model_validate(
+            {
+                **arguments,
+                "chat_id": self._trusted_chat_id(context),
+                "identity": self._identity,
+            }
+        )
+
+    @staticmethod
+    def _trusted_chat_id(context: ToolContext) -> str:
+        if context.chat_id is None or not context.chat_id.strip():
+            raise PermissionError("chat digest requires a trusted originating group binding")
+        return context.chat_id.strip()
 
 
 def chat_digest_tools(

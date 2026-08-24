@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined group-bound capability authority before implementation. Runtime chat
+  digest calls derive their group exclusively from trusted `ToolContext`, remove
+  model-selected chat fields from the schema, and reject missing/cross-group
+  delegated targets before service access; explicit interactive MCP targeting
+  remains separate. Implementation area: chat-digest semantic tool and direct
+  root/delegation authority tests.
+
 - Defined truthful production model costing before implementation. Gateway
   configuration requires positive operator-maintained input/output prices in
   micro-USD per million tokens, the Responses adapter rounds provider usage

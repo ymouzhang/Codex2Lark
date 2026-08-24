@@ -27,13 +27,13 @@ class FakeDigestService:
 
 
 def context() -> ToolContext:
-    return ToolContext("run", "/root", "tenant", "app", "user", "session", "user", 1)
+    return ToolContext(
+        "run", "/root", "tenant", "app", "user", "session", "user", 1, chat_id="oc_group"
+    )
 
 
 def arguments() -> dict[str, object]:
     return {
-        "chat_id": "oc_group",
-        "chat_name": None,
         "start": "2026-08-01",
         "end": "2026-08-02",
         "timezone": "Asia/Shanghai",
@@ -56,23 +56,32 @@ async def test_chat_digest_plugin_binds_identity_and_verifies_live_resource() ->
     assert plugin.manifest.plugin_id == "feishu-chat-digest"
     assert tool.definition.tool_id == "feishu.chat.digest.publish"
     assert service.requests[0].identity is Identity.BOT
+    assert service.requests[0].chat_id == "oc_group"
+    assert service.requests[0].chat_name is None
     assert verification.state is VerificationState.VERIFIED
     assert verification.resource_refs == ("https://example.feishu.cn/docx/group_digest",)
     assert tool.checkpoint_safe_observation is False
 
 
-async def test_chat_digest_target_is_stable_and_schema_rejects_ambiguity() -> None:
+async def test_chat_digest_target_is_bound_to_trusted_group() -> None:
     tool = PublishChatDigestTool(FakeDigestService(), Identity.USER)
     first = await tool.resolve_write_target(arguments(), context())
-    equivalent = arguments()
-    equivalent["chat_id"] = "  OC_GROUP  "
-    second = await tool.resolve_write_target(equivalent, context())
+    second = await tool.resolve_delegation_target({"resource": "current_chat"}, context())
 
     assert first == second
-    invalid = arguments()
-    invalid["chat_name"] = "Another target"
-    with pytest.raises(ValueError, match="exactly one"):
-        tool.validate(invalid)
+    with pytest.raises(PermissionError, match="originating trusted group"):
+        await tool.resolve_delegation_target({"resource": "oc_other"}, context())
+
+
+async def test_chat_digest_rejects_missing_group_before_service_access() -> None:
+    service = FakeDigestService()
+    tool = PublishChatDigestTool(service, Identity.USER)
+    unbound = ToolContext("run", "/root", "tenant", "app", "user", "session", "user", 1)
+
+    with pytest.raises(PermissionError, match="trusted originating group"):
+        await tool.execute(arguments(), unbound)
+
+    assert service.requests == []
 
 
 async def test_chat_digest_verification_requires_resource_reference() -> None:
