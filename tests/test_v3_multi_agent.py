@@ -237,6 +237,36 @@ async def test_mailbox_is_durable_redelivered_and_acknowledged(tmp_path: Path) -
         await store.acknowledge_mail(sent.item_id, child.node_id, now_ms=6)
         await store.acknowledge_mail(sent.item_id, child.node_id, now_ms=7)
         assert await store.receive_mail(child.node_id, now_ms=8) == []
+
+        first = await supervisor.send(
+            graph_id=graph.graph_id,
+            sender_node_id=root.node_id,
+            recipient_node_id=child.node_id,
+            kind=MailboxKind.MESSAGE,
+            payload={"text": "stable update"},
+            correlation_id="stable-correlation",
+            now_ms=9,
+        )
+        duplicate = await supervisor.send(
+            graph_id=graph.graph_id,
+            sender_node_id=root.node_id,
+            recipient_node_id=child.node_id,
+            kind=MailboxKind.MESSAGE,
+            payload={"text": "stable update"},
+            correlation_id="stable-correlation",
+            now_ms=10,
+        )
+        assert duplicate.item_id == first.item_id
+        with pytest.raises(RuntimeError, match="identity collision"):
+            await supervisor.send(
+                graph_id=graph.graph_id,
+                sender_node_id=root.node_id,
+                recipient_node_id=child.node_id,
+                kind=MailboxKind.MESSAGE,
+                payload={"text": "different update"},
+                correlation_id="stable-correlation",
+                now_ms=11,
+            )
     finally:
         await database.close()
 

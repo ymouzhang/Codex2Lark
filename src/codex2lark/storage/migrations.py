@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -431,6 +431,14 @@ CREATE INDEX IF NOT EXISTS runtime_approvals_task_idx
 ON runtime_approvals(task_id, state, created_at_ms);
 """
 
+MAILBOX_IDEMPOTENCY_SCHEMA = """
+CREATE UNIQUE INDEX IF NOT EXISTS runtime_mailbox_correlation_idx
+ON runtime_mailbox(
+    graph_id, sender_node_id, recipient_node_id, kind, correlation_id
+)
+WHERE correlation_id IS NOT NULL;
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
@@ -442,4 +450,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (8, CHECKPOINT_SOURCE_SCHEMA),
     (9, ADMIN_AUDIT_SCHEMA),
     (10, APPROVAL_SCHEMA),
+    (11, MAILBOX_IDEMPOTENCY_SCHEMA),
 )

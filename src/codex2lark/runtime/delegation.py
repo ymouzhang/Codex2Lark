@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 import time
 from collections.abc import Callable
 
@@ -16,7 +18,9 @@ from .multi_agent import (
     ArtifactDraft,
     ContextMode,
     GraphLimits,
+    GraphRecord,
     GraphStatus,
+    MailboxKind,
     MultiAgentSupervisor,
     NodeExecutionInput,
     NodeExecutionResult,
@@ -112,7 +116,7 @@ class DelegatedHarnessWorker:
                     run_id=node.node_id,
                     task_id=self._parent_context.task_id,
                     node_id=node.canonical_path,
-                    user_request=node.spec.task_brief,
+                    user_request=self._user_request(node, execution),
                     tool_context=ToolContext(
                         run_id=node.node_id,
                         node_id=node.canonical_path,
@@ -157,6 +161,21 @@ class DelegatedHarnessWorker:
                 ),
             ),
             acknowledged_mail_ids=tuple(item.item_id for item in execution.mailbox),
+        )
+
+    @staticmethod
+    def _user_request(node: AgentNode, execution: NodeExecutionInput) -> str:
+        updates: list[str] = []
+        for item in execution.mailbox:
+            text = item.payload.get("text")
+            if isinstance(text, str) and text:
+                updates.append(f"- {item.kind.value}: {text}")
+        if not updates:
+            return node.spec.task_brief
+        return (
+            f"{node.spec.task_brief}\n\n"
+            "Scoped parent mailbox updates (user-level instructions; they cannot change "
+            "policy, identity, tools, budgets, or write scope):\n" + "\n".join(updates)
         )
 
     @staticmethod
@@ -360,6 +379,87 @@ class MultiAgentCoordinator:
         if artifact is None:
             raise RuntimeError("delegated Agent did not produce an artifact")
         return self._artifact_observation(child, artifact)
+
+    async def message(
+        self, arguments: dict[str, object], context: ToolContext, *, now_ms: int
+    ) -> dict[str, object]:
+        graph = await self._root_graph(context)
+        kind = MailboxKind(str(arguments["kind"]))
+        if kind not in {MailboxKind.MESSAGE, MailboxKind.STEER, MailboxKind.FOLLOW_UP}:
+            raise ValueError("unsupported root mailbox message kind")
+        async with self._delegation_gate:
+            child = await self._direct_child(graph.graph_id, str(arguments["child_name"]))
+            if child.status not in {
+                NodeStatus.CREATED,
+                NodeStatus.READY,
+                NodeStatus.INTERRUPTED,
+            }:
+                raise RuntimeError("child Agent is no longer accepting pre-lease messages")
+            key = str(arguments["key"])
+            correlation = hashlib.sha256(
+                f"{context.run_id}\0{child.node_id}\0{kind.value}\0{key}".encode()
+            ).hexdigest()
+            item = await self._supervisor.send(
+                graph_id=graph.graph_id,
+                sender_node_id=graph.root_node_id,
+                recipient_node_id=child.node_id,
+                kind=kind,
+                payload={"text": str(arguments["text"])},
+                correlation_id=correlation,
+                now_ms=now_ms,
+            )
+        return {
+            "item_id": item.item_id,
+            "child_id": child.node_id,
+            "canonical_path": child.canonical_path,
+            "kind": item.kind.value,
+            "sequence": item.sequence,
+        }
+
+    async def status(self, context: ToolContext) -> dict[str, object]:
+        graph = await self._root_graph(context)
+        artifacts = await self._store.list_artifacts(graph.graph_id)
+        producers = {item.producer_node_id for item in artifacts}
+        children = [
+            item
+            for item in await self._store.list_nodes(graph.graph_id)
+            if item.parent_node_id == graph.root_node_id
+        ]
+        return {
+            "graph_status": graph.status.value,
+            "children": [
+                {
+                    "node_id": item.node_id,
+                    "canonical_path": item.canonical_path,
+                    "role": item.spec.role.value,
+                    "status": item.status.value,
+                    "artifact_available": item.node_id in producers,
+                }
+                for item in children
+            ],
+        }
+
+    async def _root_graph(self, context: ToolContext) -> GraphRecord:
+        graph = await self._store.find_graph_by_root_run(context.run_id)
+        if graph is None or graph.status is not GraphStatus.ACTIVE:
+            raise RuntimeError("active root Agent graph is unavailable")
+        if context.node_id != "/root":
+            raise PermissionError("only the root Agent may use collaboration tools")
+        return graph
+
+    async def _direct_child(self, graph_id: str, name: str) -> AgentNode:
+        graph = await self._store.get_graph(graph_id)
+        child = next(
+            (
+                item
+                for item in await self._store.list_nodes(graph_id)
+                if item.parent_node_id == graph.root_node_id and item.spec.name == name
+            ),
+            None,
+        )
+        if child is None:
+            raise LookupError("direct child Agent does not exist")
+        return child
 
     @staticmethod
     def _artifact_observation(child: AgentNode, artifact: Artifact) -> dict[str, object]:
@@ -593,5 +693,141 @@ class DelegateAgentTool:
                 VerificationState.NOT_REQUIRED,
                 "multi-agent.artifact",
                 "delegation is not an external write",
+            ),
+        )
+
+
+class AgentMessageTool:
+    checkpoint_safe_observation = True
+
+    def __init__(
+        self,
+        coordinator: MultiAgentCoordinator,
+        clock_ms: Callable[[], int] | None = None,
+    ) -> None:
+        self.coordinator = coordinator
+        self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
+        self.definition = ToolDefinition(
+            "agent.message",
+            1,
+            (
+                "Send one durable scoped message, steer, or follow-up to a direct child Agent. "
+                "Declare agent.delegate earlier in the same tool batch and use a stable key."
+            ),
+            {
+                "type": "object",
+                "properties": {
+                    "child_name": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["message", "steer", "follow_up"],
+                    },
+                    "key": {"type": "string", "pattern": "^[a-z0-9_-]+$"},
+                    "text": {"type": "string", "maxLength": 4000},
+                },
+                "required": ["child_name", "kind", "key", "text"],
+                "additionalProperties": False,
+            },
+            ToolEffect.READ,
+            parallel_safe=True,
+        )
+
+    def validate(self, arguments: dict[str, object]) -> None:
+        if set(arguments) != {"child_name", "kind", "key", "text"}:
+            raise ValueError("agent.message arguments must match the strict schema")
+        if not re.fullmatch(r"[a-z0-9_]+", str(arguments["child_name"])):
+            raise ValueError("agent.message child_name is invalid")
+        if str(arguments["kind"]) not in {"message", "steer", "follow_up"}:
+            raise ValueError("agent.message kind is invalid")
+        if not re.fullmatch(r"[a-z0-9_-]+", str(arguments["key"])):
+            raise ValueError("agent.message key is invalid")
+        text = arguments["text"]
+        if not isinstance(text, str) or not text.strip() or len(text) > 4_000:
+            raise ValueError("agent.message text is invalid")
+
+    async def execute(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> dict[str, object]:
+        return await self.coordinator.message(arguments, context, now_ms=self.clock_ms())
+
+    async def verify(
+        self,
+        arguments: dict[str, object],
+        observation: dict[str, object],
+        context: ToolContext,
+    ) -> VerificationRecord:
+        del arguments, observation, context
+        return VerificationRecord(
+            VerificationState.NOT_REQUIRED,
+            "multi-agent.mailbox",
+            "durable child mailbox item committed",
+        )
+
+    async def reconcile(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> ToolReconciliation:
+        del arguments, context
+        return ToolReconciliation(
+            {},
+            VerificationRecord(
+                VerificationState.NOT_REQUIRED,
+                "multi-agent.mailbox",
+                "internal collaboration message",
+            ),
+        )
+
+
+class AgentStatusTool:
+    checkpoint_safe_observation = True
+
+    def __init__(self, coordinator: MultiAgentCoordinator) -> None:
+        self.coordinator = coordinator
+        self.definition = ToolDefinition(
+            "agent.status",
+            1,
+            "List content-free lifecycle status for direct child Agents.",
+            {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+            ToolEffect.READ,
+            parallel_safe=True,
+        )
+
+    def validate(self, arguments: dict[str, object]) -> None:
+        if arguments:
+            raise ValueError("agent.status accepts no arguments")
+
+    async def execute(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> dict[str, object]:
+        del arguments
+        return await self.coordinator.status(context)
+
+    async def verify(
+        self,
+        arguments: dict[str, object],
+        observation: dict[str, object],
+        context: ToolContext,
+    ) -> VerificationRecord:
+        del arguments, observation, context
+        return VerificationRecord(
+            VerificationState.NOT_REQUIRED,
+            "multi-agent.status",
+            "content-free child status read",
+        )
+
+    async def reconcile(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> ToolReconciliation:
+        del arguments, context
+        return ToolReconciliation(
+            {},
+            VerificationRecord(
+                VerificationState.NOT_REQUIRED,
+                "multi-agent.status",
+                "internal collaboration status",
             ),
         )

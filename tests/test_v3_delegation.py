@@ -10,6 +10,8 @@ from codex2lark.core.budgets import BudgetKind, BudgetLimit
 from codex2lark.core.events import LeasedTask
 from codex2lark.runtime.context import ContextEngine
 from codex2lark.runtime.delegation import (
+    AgentMessageTool,
+    AgentStatusTool,
     DelegateAgentTool,
     DelegatedHarnessWorker,
     MultiAgentCoordinator,
@@ -214,6 +216,8 @@ async def test_delegate_tool_runs_separate_child_harness_and_returns_typed_artif
         model_profile="test-model",
     )
     tool = DelegateAgentTool(coordinator, (), clock_ms=lambda: 20)
+    message_tool = AgentMessageTool(coordinator, clock_ms=lambda: 20)
+    status_tool = AgentStatusTool(coordinator)
     try:
         await coordinator.prepare(
             run_id="run-root",
@@ -250,12 +254,38 @@ async def test_delegate_tool_runs_separate_child_harness_and_returns_typed_artif
 
         tool.validate(arguments)
         assert tool.parallel_safe_for(arguments) is True
-        observation = await tool.execute(arguments, context)
+        observation, mail_observation = await asyncio.gather(
+            tool.execute(arguments, context),
+            message_tool.execute(
+                {
+                    "child_name": "research",
+                    "kind": "steer",
+                    "key": "primary-sources",
+                    "text": "Focus on the newest authorized primary sources.",
+                },
+                context,
+            ),
+        )
 
         assert observation["artifact_type"] == "ResearchBundle"
         assert observation["verification_state"] == "not_required"
         assert "Primary-source research" in str(observation["artifact"])
+        assert mail_observation["kind"] == "steer"
         assert model.requests[0].node_id == "/root/research"
+        assert any(
+            "newest authorized primary sources" in message.content
+            for message in model.requests[0].messages
+        )
+        status = await status_tool.execute({}, context)
+        assert status["children"] == [
+            {
+                "node_id": observation["node_id"],
+                "canonical_path": "/root/research",
+                "role": "researcher",
+                "status": "completed",
+                "artifact_available": True,
+            }
+        ]
         prepared = await store.find_graph_by_root_run("run-root")
         assert prepared is not None
         nodes = await store.list_nodes(prepared.graph_id)

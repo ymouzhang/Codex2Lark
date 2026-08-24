@@ -561,6 +561,26 @@ class SQLiteAgentGraphStore:
             ).fetchall()
             if {row["node_id"] for row in nodes} != {sender_node_id, recipient_node_id}:
                 raise ValueError("mail sender and recipient must belong to graph")
+            if correlation_id is not None:
+                existing = connection.execute(
+                    """
+                    SELECT * FROM runtime_mailbox
+                    WHERE graph_id = ? AND sender_node_id = ? AND recipient_node_id = ?
+                      AND kind = ? AND correlation_id = ?
+                    """,
+                    (
+                        graph_id,
+                        sender_node_id,
+                        recipient_node_id,
+                        kind.value,
+                        correlation_id,
+                    ),
+                ).fetchone()
+                if existing is not None:
+                    item = self._mail(existing, MailboxState(str(existing["state"])))
+                    if item.payload != payload:
+                        raise RuntimeError("mailbox correlation identity collision")
+                    return item
             sequence = int(
                 connection.execute(
                     """

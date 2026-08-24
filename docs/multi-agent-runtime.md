@@ -438,6 +438,28 @@ Acknowledgement is idempotent. `wait` uses an in-process condition for prompt
 wakeup and always re-queries SQLite after wake or restart, so the condition is
 an optimization rather than durable state.
 
+### Runtime API 1 root mailbox tools
+
+The production root registry exposes `agent.message` and `agent.status` beside
+`agent.delegate`. `agent.message` addresses one direct child by its sibling
+name, accepts only `message`, `steer`, or `follow_up`, and requires a bounded
+stable key. The runtime derives a graph/sender/recipient/kind correlation from
+that key; retries with identical payload return the existing encrypted mailbox
+item, while reuse with different payload is an identity collision. The root
+must declare `agent.delegate` before `agent.message` in the same parallel-safe
+model batch. A coordinator barrier commits all child declarations and messages
+before leasing children.
+
+Only `created`, `ready`, or `interrupted` direct children accept a new root
+message. Running or terminal children reject it rather than claiming eventual
+delivery that this one-shot worker profile cannot provide. On lease, the child
+receives ordered mailbox items as user-level scoped task updates; they cannot
+change system policy, tools, identity, budget, write scope, or source bindings.
+The worker acknowledges those item IDs only in the same successful completion
+path as its typed artifact. `agent.status` returns direct-child ID, canonical
+path, role, lifecycle state, and whether a typed artifact exists; it returns no
+mailbox payload, task brief, hidden reasoning, or business content.
+
 ## 13. Evals and acceptance
 
 The collaboration layer is not releasable until deterministic tests prove:

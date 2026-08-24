@@ -39,7 +39,12 @@ from codex2lark.core.models import Identity
 from codex2lark.interfaces.application import create_application
 from codex2lark.runtime.approvals import ApprovalDecisionService, DurableApprovalBroker
 from codex2lark.runtime.context import ContextEngine
-from codex2lark.runtime.delegation import DelegateAgentTool, MultiAgentCoordinator
+from codex2lark.runtime.delegation import (
+    AgentMessageTool,
+    AgentStatusTool,
+    DelegateAgentTool,
+    MultiAgentCoordinator,
+)
 from codex2lark.runtime.harness import AgentHarness, ModelProvider
 from codex2lark.runtime.multi_agent import MultiAgentSupervisor
 from codex2lark.runtime.outbox import OutboxDispatcher
@@ -307,7 +312,12 @@ def create_v3_gateway(
         coordinator,
         tuple(tool.definition.tool_id for tool in business_tools),
     )
-    enabled_tools: list[SemanticTool] = [*business_tools, delegation]
+    enabled_tools: list[SemanticTool] = [
+        *business_tools,
+        delegation,
+        AgentMessageTool(coordinator),
+        AgentStatusTool(coordinator),
+    ]
     registry = ToolRegistry(enabled_tools)
     harness = AgentHarness(
         model=selected_model,

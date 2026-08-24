@@ -10,11 +10,18 @@ from codex2lark.core.events import (
     TaskCommand,
     TaskState,
 )
+from codex2lark.runtime.multi_agent import (
+    AgentRole,
+    MultiAgentSupervisor,
+    NodeSpec,
+)
 from codex2lark.runtime.tasks import (
     DurableTaskWorker,
     TaskDeferred,
     TaskExecutionResult,
 )
+from codex2lark.runtime.types import RunStatus
+from codex2lark.storage.agent_store import SQLiteAgentGraphStore
 from codex2lark.storage.crypto import EnvelopeCipher, MasterKey
 from codex2lark.storage.database import SQLiteDatabase
 from codex2lark.storage.runtime_store import RuntimeStore
@@ -197,6 +204,8 @@ async def test_scheduler_makes_bounded_progress_across_64_group_sessions(
     tmp_path: Path,
 ) -> None:
     database, store = await setup(tmp_path)
+    graph_store = SQLiteAgentGraphStore(database, EnvelopeCipher(MasterKey("test", b"t" * 32)))
+    supervisor = MultiAgentSupervisor(graph_store)
     try:
         for index in range(64):
             await store.admit(event(index), command(f"group-{index}"), now_ms=index)
@@ -216,6 +225,30 @@ async def test_scheduler_makes_bounded_progress_across_64_group_sessions(
             session_keys = [item.session_key for item in leased]
             assert len(session_keys) == len(set(session_keys))
             for item in leased:
+                graph, root = await supervisor.create_graph(
+                    root_run_id=item.task_id,
+                    tenant_key="tenant-1",
+                    app_id="app-1",
+                    source_resource_kind="im.thread",
+                    source_resource_id=item.session_key,
+                    agent_definition_id="burst-root",
+                    agent_definition_version=1,
+                    root_spec=NodeSpec(
+                        "root",
+                        AgentRole.ORCHESTRATOR,
+                        "Own the isolated group request.",
+                        "AgentOutcome",
+                        (),
+                        {},
+                    ),
+                    now_ms=now_ms,
+                )
+                await supervisor.publish_terminal(
+                    graph.graph_id,
+                    root.node_id,
+                    RunStatus.COMPLETED,
+                    now_ms=now_ms + 1,
+                )
                 completed.append(str(item.payload["message_id"]))
                 await store.finish_task(
                     item.task_id,
@@ -227,6 +260,14 @@ async def test_scheduler_makes_bounded_progress_across_64_group_sessions(
 
         assert {f"group-{index}" for index in range(64)} <= set(completed)
         assert completed.count("group-0") == 5
+        graphs = await database.call(
+            lambda connection: connection.execute(
+                "SELECT tenant_key, app_id, source_resource_id, status FROM runtime_graphs"
+            ).fetchall()
+        )
+        assert len(graphs) == 68
+        assert all(tuple(row)[:2] == ("tenant-1", "app-1") for row in graphs)
+        assert all(tuple(row)[3] == "completed" for row in graphs)
     finally:
         await database.close()
 

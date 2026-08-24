@@ -427,9 +427,12 @@ reply intent. Finalization itself is repeatable until that transaction commits.
 The automated burst fixture admits at least 64 independent group SessionKeys
 plus repeated work for noisy SessionKeys. Fixed-size lease batches must contain
 at most one task per SessionKey, eventually lease every independent group, and
-leave repeated same-session work pending until its predecessor completes. This
-proves bounded scheduler progress and session isolation; it is not a throughput
-SLO or a substitute for opt-in live Feishu soak testing.
+leave repeated same-session work pending until its predecessor completes. Every
+leased request creates and terminally closes its own tenant/app-bound root graph;
+the fixture asserts all graphs exist and no graph/source binding crosses groups.
+This proves bounded scheduler progress, many-graph fairness, and session
+isolation; it is not a throughput SLO or a substitute for opt-in live Feishu
+soak testing.
 
 ## 11. Single-node failure model
 

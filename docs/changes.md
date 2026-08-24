@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined the production root-to-child mailbox surface before implementation.
+  `agent.message` durably and idempotently sends bounded message/steer/follow-up
+  updates to not-yet-running direct children, the delegation barrier delivers
+  them before lease, child Harnesses consume them as non-authority user-level
+  task updates, and `agent.status` exposes content-free lifecycle summaries.
+  Implementation area: mailbox migration/store idempotency, delegation tools,
+  child context construction, production registry, and recovery tests.
+
 - Defined capability target resolution and logical create reservations before
   implementation. Managed document/Sheet/Base creates use normalized title
   digests, existing Sheet/Base/Whiteboard operations use typed resource locks,
