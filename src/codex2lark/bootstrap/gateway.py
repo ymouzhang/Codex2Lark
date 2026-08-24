@@ -477,6 +477,7 @@ def create_v3_gateway(
         },
         worker_id="v3-task-worker",
         concurrency=config.task_concurrency,
+        limits=config.task_limits(),
     )
     outbox = OutboxDispatcher(
         runtime_store,

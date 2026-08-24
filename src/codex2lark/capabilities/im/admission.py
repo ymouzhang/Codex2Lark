@@ -104,6 +104,7 @@ class IMAdmissionService:
                 "agent_definition_version": self._selected_version(message),
             },
             available_at_ms=message.received_at_ms,
+            group_id=message.chat_id,
         )
         acknowledgement = OutboxDraft(
             publisher_id="feishu-im.reply",

@@ -16,6 +16,7 @@ from codex2lark.core.events import (
     TaskState,
 )
 from codex2lark.core.ids import new_outbox_id, new_task_id
+from codex2lark.core.scheduling import TaskConcurrencyLimits
 from codex2lark.runtime.controls import RunControl, RunControlKind
 
 from .crypto import EnvelopeCipher
@@ -113,9 +114,10 @@ class RuntimeStore:
                 """
                 INSERT INTO runtime_tasks(
                     task_id, event_pk, plugin_id, command_type, session_key,
+                    tenant_key, app_id, group_id,
                     priority, payload_ciphertext, state, available_at_ms,
                     attempt_count, max_attempts, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, ?, ?, ?)
                 """,
                 (
                     task_id,
@@ -123,6 +125,9 @@ class RuntimeStore:
                     command.plugin_id,
                     command.command_type,
                     command.session_key,
+                    event.tenant_key,
+                    event.app_id,
+                    command.group_id,
                     command.priority,
                     task_ciphertext,
                     command.available_at_ms,
@@ -498,6 +503,7 @@ class RuntimeStore:
         now_ms: int,
         lease_ms: int,
         limit: int = 1,
+        limits: TaskConcurrencyLimits | None = None,
     ) -> list[LeasedTask]:
         if not worker_id or lease_ms <= 0 or limit <= 0:
             raise ValueError("worker_id, lease_ms, and limit must be positive")
@@ -523,52 +529,15 @@ class RuntimeStore:
                 """,
                 (now_ms, now_ms),
             )
-            rows = connection.execute(
-                """
-                WITH ranked AS (
-                    SELECT t.task_id, t.priority, t.created_at_ms,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY t.session_key
-                               ORDER BY t.priority DESC, t.created_at_ms, t.task_id
-                           ) AS session_rank
-                    FROM runtime_tasks t
-                    WHERE t.state = 'pending' AND t.available_at_ms <= ?
-                      AND (
-                          t.attempt_count < t.max_attempts
-                          OR t.last_error_code IN (
-                              'retry_exhausted', 'lease_retry_exhausted'
-                          )
-                      )
-                      AND NOT EXISTS (
-                          SELECT 1 FROM runtime_tasks active
-                          WHERE active.session_key = t.session_key
-                            AND active.state = 'leased'
-                            AND active.lease_expires_at_ms > ?
-                      )
-                )
-                SELECT task_id FROM ranked WHERE session_rank = 1
-                ORDER BY priority DESC, created_at_ms, task_id LIMIT ?
-                """,
-                (now_ms, now_ms, limit),
-            ).fetchall()
-            task_ids = [row["task_id"] for row in rows]
             lease_expires = now_ms + lease_ms
-            for task_id in task_ids:
-                connection.execute(
-                    """
-                    UPDATE runtime_tasks
-                    SET state = 'leased', lease_owner = ?, lease_expires_at_ms = ?,
-                        attempt_count = CASE
-                            WHEN last_error_code IN (
-                                'retry_exhausted', 'lease_retry_exhausted'
-                            ) THEN attempt_count
-                            ELSE attempt_count + 1
-                        END,
-                        updated_at_ms = ?
-                    WHERE task_id = ? AND state = 'pending'
-                    """,
-                    (worker_id, lease_expires, now_ms, task_id),
-                )
+            task_ids = self._select_task_ids(
+                connection,
+                worker_id=worker_id,
+                now_ms=now_ms,
+                lease_expires_at_ms=lease_expires,
+                limit=limit,
+                limits=limits,
+            )
             if not task_ids:
                 return []
             placeholders = ",".join("?" for _ in task_ids)
@@ -969,6 +938,228 @@ class RuntimeStore:
                 if row["last_error_code"] in {"retry_exhausted", "lease_retry_exhausted"}
                 else None
             ),
+            tenant_key=row["tenant_key"],
+            app_id=row["app_id"],
+            group_id=row["group_id"],
+        )
+
+    def _select_task_ids(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        worker_id: str,
+        now_ms: int,
+        lease_expires_at_ms: int,
+        limit: int,
+        limits: TaskConcurrencyLimits | None,
+    ) -> list[str]:
+        if limits is None:
+            rows = connection.execute(
+                """
+                WITH ranked AS (
+                    SELECT t.task_id, t.priority, t.created_at_ms,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY t.session_key
+                               ORDER BY t.priority DESC, t.created_at_ms, t.task_id
+                           ) AS session_rank
+                    FROM runtime_tasks t
+                    WHERE t.state = 'pending' AND t.available_at_ms <= ?
+                      AND (
+                          t.attempt_count < t.max_attempts
+                          OR t.last_error_code IN (
+                              'retry_exhausted', 'lease_retry_exhausted'
+                          )
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM runtime_tasks active
+                          WHERE active.session_key = t.session_key
+                            AND active.state = 'leased'
+                            AND active.lease_expires_at_ms > ?
+                      )
+                )
+                SELECT task_id FROM ranked WHERE session_rank = 1
+                ORDER BY priority DESC, created_at_ms, task_id LIMIT ?
+                """,
+                (now_ms, now_ms, limit),
+            ).fetchall()
+            legacy_task_ids = [str(row["task_id"]) for row in rows]
+            for task_id in legacy_task_ids:
+                self._lease_task(
+                    connection,
+                    task_id=task_id,
+                    worker_id=worker_id,
+                    now_ms=now_ms,
+                    lease_expires_at_ms=lease_expires_at_ms,
+                )
+            return legacy_task_ids
+
+        active = int(
+            connection.execute(
+                """
+                SELECT COUNT(*) FROM runtime_tasks
+                WHERE state = 'leased' AND lease_expires_at_ms > ?
+                """,
+                (now_ms,),
+            ).fetchone()[0]
+        )
+        remaining = min(limit, max(0, limits.global_limit - active))
+        task_ids: list[str] = []
+        for _ in range(remaining):
+            row = connection.execute(
+                """
+                WITH ranked AS (
+                    SELECT t.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY t.session_key
+                               ORDER BY t.priority DESC, t.created_at_ms, t.task_id
+                           ) AS session_rank,
+                           COALESCE(tl.last_served_sequence, 0) AS tenant_served,
+                           COALESCE(al.last_served_sequence, 0) AS app_served,
+                           COALESCE(gl.last_served_sequence, 0) AS group_served,
+                           COALESCE(sl.last_served_sequence, 0) AS session_served
+                    FROM runtime_tasks t
+                    LEFT JOIN runtime_scheduler_lanes tl
+                      ON tl.scope_kind = 'tenant' AND tl.scope_key = t.tenant_key
+                    LEFT JOIN runtime_scheduler_lanes al
+                      ON al.scope_kind = 'app'
+                     AND al.scope_key = t.tenant_key || char(31) || t.app_id
+                    LEFT JOIN runtime_scheduler_lanes gl
+                      ON gl.scope_kind = 'group'
+                     AND gl.scope_key = t.tenant_key || char(31) || t.app_id
+                         || char(31) || t.group_id
+                    LEFT JOIN runtime_scheduler_lanes sl
+                      ON sl.scope_kind = 'session' AND sl.scope_key = t.session_key
+                    WHERE t.state = 'pending' AND t.available_at_ms <= ?
+                      AND (
+                          t.attempt_count < t.max_attempts
+                          OR t.last_error_code IN (
+                              'retry_exhausted', 'lease_retry_exhausted'
+                          )
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM runtime_tasks active
+                          WHERE active.session_key = t.session_key
+                            AND active.state = 'leased'
+                            AND active.lease_expires_at_ms > ?
+                      )
+                )
+                SELECT * FROM ranked candidate
+                WHERE session_rank = 1
+                  AND (
+                    SELECT COUNT(*) FROM runtime_tasks active
+                    WHERE active.state = 'leased' AND active.lease_expires_at_ms > ?
+                      AND active.tenant_key = candidate.tenant_key
+                  ) < ?
+                  AND (
+                    SELECT COUNT(*) FROM runtime_tasks active
+                    WHERE active.state = 'leased' AND active.lease_expires_at_ms > ?
+                      AND active.tenant_key = candidate.tenant_key
+                      AND active.app_id = candidate.app_id
+                  ) < ?
+                  AND (
+                    candidate.group_id IS NULL OR (
+                      SELECT COUNT(*) FROM runtime_tasks active
+                      WHERE active.state = 'leased' AND active.lease_expires_at_ms > ?
+                        AND active.tenant_key = candidate.tenant_key
+                        AND active.app_id = candidate.app_id
+                        AND active.group_id = candidate.group_id
+                    ) < ?
+                  )
+                ORDER BY tenant_served, app_served, group_served, session_served,
+                         priority DESC, created_at_ms, task_id
+                LIMIT 1
+                """,
+                (
+                    now_ms,
+                    now_ms,
+                    now_ms,
+                    limits.tenant_limit,
+                    now_ms,
+                    limits.app_limit,
+                    now_ms,
+                    limits.group_limit,
+                ),
+            ).fetchone()
+            if row is None:
+                break
+            task_id = str(row["task_id"])
+            self._lease_task(
+                connection,
+                task_id=task_id,
+                worker_id=worker_id,
+                now_ms=now_ms,
+                lease_expires_at_ms=lease_expires_at_ms,
+            )
+            self._advance_scheduler_lanes(connection, row, now_ms=now_ms)
+            task_ids.append(task_id)
+        return task_ids
+
+    @staticmethod
+    def _lease_task(
+        connection: sqlite3.Connection,
+        *,
+        task_id: str,
+        worker_id: str,
+        now_ms: int,
+        lease_expires_at_ms: int,
+    ) -> None:
+        cursor = connection.execute(
+            """
+            UPDATE runtime_tasks
+            SET state = 'leased', lease_owner = ?, lease_expires_at_ms = ?,
+                attempt_count = CASE
+                    WHEN last_error_code IN ('retry_exhausted', 'lease_retry_exhausted')
+                    THEN attempt_count ELSE attempt_count + 1
+                END,
+                updated_at_ms = ?
+            WHERE task_id = ? AND state = 'pending'
+            """,
+            (worker_id, lease_expires_at_ms, now_ms, task_id),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("selected task could not be leased")
+
+    @staticmethod
+    def _advance_scheduler_lanes(
+        connection: sqlite3.Connection, row: sqlite3.Row, *, now_ms: int
+    ) -> None:
+        sequence = (
+            int(
+                connection.execute(
+                    "SELECT next_sequence FROM runtime_scheduler_state WHERE singleton = 1"
+                ).fetchone()[0]
+            )
+            + 1
+        )
+        connection.execute(
+            "UPDATE runtime_scheduler_state SET next_sequence = ? WHERE singleton = 1",
+            (sequence,),
+        )
+        separator = "\x1f"
+        tenant_key = str(row["tenant_key"])
+        app_id = str(row["app_id"])
+        lanes = [
+            ("tenant", tenant_key),
+            ("app", f"{tenant_key}{separator}{app_id}"),
+            ("session", str(row["session_key"])),
+        ]
+        if row["group_id"] is not None:
+            lanes.append(
+                (
+                    "group",
+                    f"{tenant_key}{separator}{app_id}{separator}{row['group_id']}",
+                )
+            )
+        connection.executemany(
+            """
+            INSERT INTO runtime_scheduler_lanes(
+                scope_kind, scope_key, last_served_sequence, updated_at_ms
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(scope_kind, scope_key) DO UPDATE SET
+                last_served_sequence = excluded.last_served_sequence,
+                updated_at_ms = excluded.updated_at_ms
+            """,
+            ((kind, key, sequence, now_ms) for kind, key in lanes),
         )
 
     def _leased_outbox(self, row: sqlite3.Row) -> LeasedOutboxMessage:

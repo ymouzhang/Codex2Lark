@@ -656,7 +656,7 @@ async def test_tenant_and_all_purge_remove_exact_business_scopes_and_keep_audit(
     assert all_result.blobs_deleted == 1
     assert not blob.exists()
     with sqlite3.connect(data_dir / "runtime.db") as connection:
-        assert connection.execute("SELECT COUNT(*) FROM runtime_migrations").fetchone()[0] == 11
+        assert connection.execute("SELECT COUNT(*) FROM runtime_migrations").fetchone()[0] == 12
         assert connection.execute("SELECT COUNT(*) FROM runtime_admin_audit").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM runtime_graphs").fetchone()[0] == 0

@@ -64,12 +64,15 @@ class TaskCommand:
     priority: int = 0
     available_at_ms: int = 0
     max_attempts: int = 5
+    group_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.plugin_id or not self.command_type or not self.session_key:
             raise ValueError("task routing fields must be non-empty")
         if self.max_attempts < 1:
             raise ValueError("max_attempts must be positive")
+        if self.group_id is not None and not self.group_id.strip():
+            raise ValueError("group_id cannot be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +109,9 @@ class LeasedTask:
     max_attempts: int
     lease_expires_at_ms: int
     recovery_error_code: str | None = None
+    tenant_key: str = ""
+    app_id: str = ""
+    group_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

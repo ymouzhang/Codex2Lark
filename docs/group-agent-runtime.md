@@ -420,6 +420,33 @@ Follow-up messages in the same Feishu thread reuse the durable session identity,
 but the runtime still reconciles live Feishu messages before using local content.
 No context crosses a chat or tenant boundary.
 
+### Durable hierarchical task scheduling
+
+Every admitted task persists trusted `tenant_key`, `app_id`, and optional
+`group_id` scheduling scope beside its encrypted payload. These values come
+from the normalized event/admission adapter, never from message text, model
+arguments, encrypted payload inspection, or parsing `SessionKey`.
+
+One SQLite lease transaction enforces four uniform limits: global active root
+tasks, active tasks per tenant, per tenant/application, and per
+tenant/application/group. SessionKey serialization remains an additional hard
+constraint. Selection is incremental: after each chosen task the transaction
+updates its lease and provisional counts before choosing another, so one batch
+cannot oversubscribe a parent scope.
+
+Fairness uses durable least-recently-served cursors for tenant, application,
+group, and SessionKey lanes. Candidate ordering compares those cursors in that
+order, then uses priority, creation time, and task ID only as deterministic
+tie-breakers. A noisy lane therefore cannot take a second turn while another
+eligible never/less-recently served lane is waiting. Expired leases still count
+until atomically reclaimed, and two concurrent lease requests serialize through
+the database actor/transaction.
+
+The single-node defaults are global `4`, tenant `4`, application `4`, and group
+`2`. Limits must be positive and satisfy
+`group <= application <= tenant <= global`. The worker batch size is only a
+bounded fetch/execution size; it does not replace scheduling policy.
+
 ### Group-bound capability authority
 
 A task admitted from a Feishu group receives its `chat_id` only through trusted

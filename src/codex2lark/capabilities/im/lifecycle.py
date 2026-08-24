@@ -116,6 +116,9 @@ class IMLifecycleAdmissionService:
                 session_key=f"{tenant_key}/{self._app_id}/{session_suffix}",
                 payload=payload,
                 available_at_ms=now_ms,
+                group_id=(
+                    str(payload["chat_id"]) if isinstance(payload.get("chat_id"), str) else None
+                ),
             ),
             now_ms=now_ms,
         )

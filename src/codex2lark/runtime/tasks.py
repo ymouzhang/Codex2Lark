@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from codex2lark.core.events import LeasedTask, OutboxDraft, TaskState
+from codex2lark.core.scheduling import TaskConcurrencyLimits
 
 
 class PermanentTaskError(RuntimeError):
@@ -46,7 +47,13 @@ class TaskHandler(Protocol):
 
 class TaskStore(Protocol):
     async def lease_tasks(
-        self, *, worker_id: str, now_ms: int, lease_ms: int, limit: int = 1
+        self,
+        *,
+        worker_id: str,
+        now_ms: int,
+        lease_ms: int,
+        limit: int = 1,
+        limits: TaskConcurrencyLimits | None = None,
     ) -> list[LeasedTask]: ...
 
     async def finish_task(
@@ -98,6 +105,7 @@ class DurableTaskWorker:
         retry_delay_ms: int = 2_000,
         concurrency: int = 4,
         clock_ms: Callable[[], int] | None = None,
+        limits: TaskConcurrencyLimits | None = None,
     ) -> None:
         if not worker_id or min(lease_ms, concurrency) < 1 or retry_delay_ms < 0:
             raise ValueError("task worker configuration is invalid")
@@ -108,6 +116,7 @@ class DurableTaskWorker:
         self._retry_delay_ms = retry_delay_ms
         self._concurrency = concurrency
         self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
+        self._limits = limits
 
     async def run_once(self, *, now_ms: int) -> TaskBatch:
         tasks = await self._store.lease_tasks(
@@ -115,6 +124,7 @@ class DurableTaskWorker:
             now_ms=now_ms,
             lease_ms=self._lease_ms,
             limit=self._concurrency,
+            limits=self._limits,
         )
         results = await asyncio.gather(*(self._execute(task, now_ms=now_ms) for task in tasks))
         return TaskBatch(

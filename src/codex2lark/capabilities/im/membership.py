@@ -64,6 +64,7 @@ class BotAddedAdmissionService:
                 session_key=f"{tenant_key}/{self._app_id}/{chat_id}/membership",
                 payload=payload,
                 available_at_ms=now_ms,
+                group_id=chat_id,
             ),
             now_ms=now_ms,
         )

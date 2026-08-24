@@ -132,7 +132,7 @@ async def test_database_creates_schema_wal_and_owner_only_file(tmp_path: Path) -
             ).fetchone()[0]
         )
         assert journal_mode == "wal"
-        assert migration_count == 11
+        assert migration_count == 12
         assert os.stat(path).st_mode & 0o777 == 0o600
     finally:
         await database.close()

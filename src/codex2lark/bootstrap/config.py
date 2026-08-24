@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codex2lark.core.models import Identity
+from codex2lark.core.scheduling import TaskConcurrencyLimits
 from codex2lark.storage.capacity import StorageCapacityPolicy
 from codex2lark.storage.crypto import MasterKey
 
@@ -34,6 +35,9 @@ class GatewayConfig:
     openai_base_url: str | None = None
     poll_interval_ms: int = 200
     task_concurrency: int = 4
+    tenant_concurrency: int = 4
+    app_concurrency: int = 4
+    group_concurrency: int = 2
     storage_capacity: StorageCapacityPolicy = field(default_factory=StorageCapacityPolicy)
     max_attachment_bytes: int = 20 * 1024 * 1024
     canary_agent_version: int | None = None
@@ -57,6 +61,7 @@ class GatewayConfig:
             raise ValueError("Gateway credentials and model are required")
         if self.poll_interval_ms < 10 or self.task_concurrency < 1 or self.max_attachment_bytes < 1:
             raise ValueError("Gateway worker configuration is invalid")
+        self.task_limits()
         if (
             min(
                 self.model_input_cost_micros_per_million_tokens,
@@ -113,6 +118,9 @@ class GatewayConfig:
             openai_base_url=values.get("OPENAI_BASE_URL") or None,
             poll_interval_ms=cls._integer(values, "CODEX2LARK_POLL_INTERVAL_MS", 200),
             task_concurrency=cls._integer(values, "CODEX2LARK_TASK_CONCURRENCY", 4),
+            tenant_concurrency=cls._integer(values, "CODEX2LARK_TENANT_CONCURRENCY", 4),
+            app_concurrency=cls._integer(values, "CODEX2LARK_APP_CONCURRENCY", 4),
+            group_concurrency=cls._integer(values, "CODEX2LARK_GROUP_CONCURRENCY", 2),
             storage_capacity=StorageCapacityPolicy.from_environment(values),
             max_attachment_bytes=cls._integer(
                 values, "CODEX2LARK_MAX_ATTACHMENT_BYTES", 20 * 1024 * 1024
@@ -128,6 +136,14 @@ class GatewayConfig:
                 values, "CODEX2LARK_RUN_COST_LIMIT_MICROS", 1_000_000
             ),
             shutdown_drain_ms=cls._integer(values, "CODEX2LARK_SHUTDOWN_DRAIN_MS", 30_000),
+        )
+
+    def task_limits(self) -> TaskConcurrencyLimits:
+        return TaskConcurrencyLimits(
+            self.task_concurrency,
+            self.tenant_concurrency,
+            self.app_concurrency,
+            self.group_concurrency,
         )
 
     @staticmethod

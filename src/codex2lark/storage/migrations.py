@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -439,6 +439,39 @@ ON runtime_mailbox(
 WHERE correlation_id IS NOT NULL;
 """
 
+TASK_SCHEDULING_SCHEMA = """
+ALTER TABLE runtime_tasks ADD COLUMN tenant_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE runtime_tasks ADD COLUMN app_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE runtime_tasks ADD COLUMN group_id TEXT;
+
+UPDATE runtime_tasks
+SET tenant_key = COALESCE(
+        (SELECT e.tenant_key FROM runtime_events e WHERE e.event_pk = runtime_tasks.event_pk),
+        ''
+    ),
+    app_id = COALESCE(
+        (SELECT e.app_id FROM runtime_events e WHERE e.event_pk = runtime_tasks.event_pk),
+        ''
+    );
+
+CREATE INDEX runtime_tasks_scope_lease_idx
+ON runtime_tasks(state, lease_expires_at_ms, tenant_key, app_id, group_id);
+
+CREATE TABLE runtime_scheduler_state (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    next_sequence INTEGER NOT NULL
+);
+INSERT INTO runtime_scheduler_state(singleton, next_sequence) VALUES (1, 0);
+
+CREATE TABLE runtime_scheduler_lanes (
+    scope_kind TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    last_served_sequence INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY(scope_kind, scope_key)
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
@@ -451,4 +484,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (9, ADMIN_AUDIT_SCHEMA),
     (10, APPROVAL_SCHEMA),
     (11, MAILBOX_IDEMPOTENCY_SCHEMA),
+    (12, TASK_SCHEDULING_SCHEMA),
 )

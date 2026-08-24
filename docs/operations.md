@@ -164,6 +164,19 @@ The time budget pauses while a durable run is stopped and resumes from its
 checkpoint. Cost and elapsed active time are included in the model-visible
 remaining-budget snapshot but pricing secrets/configuration are not.
 
+Root-task concurrency is independently bounded and fair across trusted scopes:
+
+```bash
+export CODEX2LARK_TASK_CONCURRENCY='4'
+export CODEX2LARK_TENANT_CONCURRENCY='4'
+export CODEX2LARK_APP_CONCURRENCY='4'
+export CODEX2LARK_GROUP_CONCURRENCY='2'
+```
+
+All values are positive and must satisfy group ≤ application ≤ tenant ≤ global.
+Changing them requires a Gateway restart; pending tasks retain their trusted
+scope but use the new limits on their next lease.
+
 `CODEX2LARK_AUTHORING_IDENTITY` is `user` or `bot` and selects the trusted
 lark-cli identity used by authoring tools. Group text cannot override it. The
 selected lark-cli identity must be authenticated and have the document/Drive

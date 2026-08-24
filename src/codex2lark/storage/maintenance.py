@@ -324,6 +324,7 @@ class StorageMaintenance:
                 """,
                 (due, batch_size),
             ).rowcount
+            self._delete_orphan_scheduler_lanes(connection)
             connection.commit()
 
             for path in self._bounded_blob_files(batch_size):
@@ -479,6 +480,7 @@ class StorageMaintenance:
                     target_digest=hashlib.sha256(tenant_key.encode()).hexdigest(),
                     counts=counts,
                 )
+                self._delete_orphan_scheduler_lanes(connection)
                 connection.commit()
             except BaseException:
                 connection.rollback()
@@ -529,6 +531,7 @@ class StorageMaintenance:
                     "runtime_run_controls",
                     "runtime_checkpoint_sources",
                     "runtime_approvals",
+                    "runtime_scheduler_lanes",
                     "im_chats",
                     "im_messages",
                     "im_attachments",
@@ -548,6 +551,9 @@ class StorageMaintenance:
                 connection.execute("DELETE FROM runtime_admin_audit")
                 for table in reversed(business_tables):
                     connection.execute(f"DELETE FROM {table}")
+                connection.execute(
+                    "UPDATE runtime_scheduler_state SET next_sequence = 0 WHERE singleton = 1"
+                )
                 self._insert_purge_audit(
                     connection,
                     target_kind="all",
@@ -709,6 +715,7 @@ class StorageMaintenance:
                         int(time.time() * 1000),
                     ),
                 )
+                self._delete_orphan_scheduler_lanes(connection)
                 connection.commit()
             except BaseException:
                 connection.rollback()
@@ -733,6 +740,31 @@ class StorageMaintenance:
                 deleted,
                 reclaimed,
             )
+
+    @staticmethod
+    def _delete_orphan_scheduler_lanes(connection: sqlite3.Connection) -> None:
+        separator = "\x1f"
+        connection.execute(
+            """
+            DELETE FROM runtime_scheduler_lanes AS lane
+            WHERE (scope_kind = 'tenant' AND NOT EXISTS (
+                    SELECT 1 FROM runtime_tasks t WHERE t.tenant_key = lane.scope_key
+                  ))
+               OR (scope_kind = 'app' AND NOT EXISTS (
+                    SELECT 1 FROM runtime_tasks t
+                    WHERE t.tenant_key || ? || t.app_id = lane.scope_key
+                  ))
+               OR (scope_kind = 'group' AND NOT EXISTS (
+                    SELECT 1 FROM runtime_tasks t
+                    WHERE t.group_id IS NOT NULL
+                      AND t.tenant_key || ? || t.app_id || ? || t.group_id = lane.scope_key
+                  ))
+               OR (scope_kind = 'session' AND NOT EXISTS (
+                    SELECT 1 FROM runtime_tasks t WHERE t.session_key = lane.scope_key
+                  ))
+            """,
+            (separator, separator, separator),
+        )
 
     @staticmethod
     def _prepare_purge_tables(

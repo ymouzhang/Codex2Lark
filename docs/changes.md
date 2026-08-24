@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined durable hierarchical fair task scheduling before implementation.
+  Admission persists trusted tenant/application/group scopes; one SQLite
+  transaction incrementally enforces global/tenant/app/group caps plus
+  SessionKey serialization and advances durable least-recently-served lane
+  cursors before selecting the next task. Implementation area: migration,
+  scheduling values, runtime admission/store/worker/configuration, maintenance,
+  and direct saturation/fairness/recovery tests.
+
 - Defined bounded cooperative Gateway shutdown before implementation. Intake
   stops first, the active batch receives a configurable drain window, cancelled
   tasks atomically return their lease without consuming a retry, and source,
