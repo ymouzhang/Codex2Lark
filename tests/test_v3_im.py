@@ -11,6 +11,11 @@ from codex2lark.capabilities.im.channel_adapter import (
     ChannelMessageNormalizer,
     OfficialChannelEventSource,
 )
+from codex2lark.capabilities.im.context_provider import (
+    IMContextProvider,
+    IMContextRequest,
+    MessagePage,
+)
 from codex2lark.capabilities.im.models import (
     AttachmentReference,
     IMAdmissionReason,
@@ -341,5 +346,103 @@ async def test_outbox_dispatcher_retries_ambiguous_reply_then_marks_sent(
         )
         assert tuple(state) == ("sent", "om_confirmed")
         assert await repository.get_message("tenant-1", "app-1", "om_request") is not None
+    finally:
+        await database.close()
+
+
+class FakeLiveIMReader:
+    def __init__(
+        self,
+        trigger: IncomingMessage,
+        related: tuple[IncomingMessage, ...],
+        *,
+        complete: bool = True,
+    ) -> None:
+        self.trigger = trigger
+        self.related = related
+        self.complete = complete
+        self.used_related = False
+
+    async def get_message(self, request: IMContextRequest) -> IncomingMessage:
+        assert request.message_id == self.trigger.message_id
+        return self.trigger
+
+    async def related_messages(self, trigger: IncomingMessage, *, limit: int) -> MessagePage:
+        assert trigger == self.trigger and limit == 50
+        self.used_related = True
+        return MessagePage(self.related, self.complete)
+
+    async def recent_messages(
+        self, trigger: IncomingMessage, *, since_ms: int, limit: int
+    ) -> MessagePage:
+        assert trigger == self.trigger and since_ms >= 0 and limit == 30
+        return MessagePage(self.related, self.complete)
+
+
+async def test_context_provider_refetches_orders_versions_and_marks_incomplete(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    trigger = message()
+    older = message(
+        event_id="older",
+        message_id="om_older",
+        body_text="earlier context",
+        occurred_at_ms=10,
+        received_at_ms=20,
+    )
+    newer = message(
+        event_id="newer",
+        message_id="om_newer",
+        body_text="later context",
+        occurred_at_ms=50,
+        received_at_ms=60,
+    )
+    recalled = message(
+        event_id="recalled",
+        message_id="om_recalled",
+        body_text="removed",
+        occurred_at_ms=30,
+        received_at_ms=40,
+        is_recalled=True,
+    )
+    source = FakeLiveIMReader(
+        trigger,
+        (newer, recalled, older, newer, trigger),
+        complete=False,
+    )
+    provider = IMContextProvider(source, repository)
+    try:
+        bundle = await provider.collect(
+            IMContextRequest("tenant-1", "app-1", "oc_group", "om_request")
+        )
+        assert source.used_related
+        assert [item.source_ref for item in bundle.evidence] == [
+            "im.message:om_older",
+            "im.message:om_newer",
+        ]
+        assert bundle.warnings == ("im_context_incomplete",)
+        assert bundle.evidence[0].source_version == "10"
+        mirrored = await repository.get_message("tenant-1", "app-1", "om_recalled")
+        assert mirrored is not None and mirrored.is_recalled
+    finally:
+        await database.close()
+
+
+async def test_context_provider_rejects_cross_chat_source_data(tmp_path: Path) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    trigger = message()
+    source = FakeLiveIMReader(
+        trigger,
+        (message(message_id="om_other", chat_id="oc_other"),),
+    )
+    try:
+        provider = IMContextProvider(source, repository)
+        try:
+            await provider.collect(IMContextRequest("tenant-1", "app-1", "oc_group", "om_request"))
+        except PermissionError as exc:
+            assert "trusted binding" in str(exc)
+        else:
+            raise AssertionError("cross-chat context must be rejected")
     finally:
         await database.close()

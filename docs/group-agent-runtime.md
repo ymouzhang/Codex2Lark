@@ -155,6 +155,23 @@ The active mention message is the user request. Earlier group messages, quoted
 messages, filenames, attachment content, and Feishu documents are untrusted
 evidence, not developer or system instructions.
 
+### Runtime API 1 relationship context
+
+The IM context provider receives a trusted tenant/app/chat/message binding, not
+free-form model arguments. It first refetches the trigger message. It then asks
+the source adapter for either the bounded thread/reply relationship or messages
+from the same chat within the configured lookback window. Every returned item
+must match the bound tenant, app, and chat before it is mirrored or emitted.
+
+The provider deduplicates by message ID, orders by source creation time, excludes
+the trigger from background evidence, and emits one `ContextEvidence` per live
+message with `im.message:<message_id>` provenance and its source update version.
+Recalled/deleted items become mirror tombstones and never become model evidence.
+An incomplete page is a typed warning; the provider never labels incomplete
+history as complete. Local mirror rows are used for restart and reconciliation,
+but the provider does not silently fall back to stale local content when a
+required live read fails.
+
 ## 6. Attachment collection and parsing
 
 The event path stores attachment references before downloading bytes. An

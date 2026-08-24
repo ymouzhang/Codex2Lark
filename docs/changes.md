@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the V3 IM relationship-first context provider before implementation:
+  trusted source bindings, mandatory live trigger refetch, same-chat isolation,
+  chronological source-versioned evidence, tombstone exclusion, and explicit
+  incomplete-history warnings without stale-cache fallback.
+
 - Defined the service-native IM transport and publisher boundary before
   implementation: pinned official Channel SDK, bounded fast callbacks, explicit
   canonical conversion, source-message/thread replies, and durable outbox
