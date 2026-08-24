@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the V3 attachment ingest and bounded parser contract before code:
+  trusted source-reference authorization, encrypted content-addressed blobs,
+  crash-safe reference commits, strict byte/ZIP/output ceilings, inert Office
+  and PDF extraction, typed image/AV handling, and blocked active content.
+
 - Defined the V3 IM relationship-first context provider before implementation:
   trusted source bindings, mandatory live trigger refetch, same-chat isolation,
   chronological source-versioned evidence, tombstone exclusion, and explicit

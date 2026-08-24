@@ -108,6 +108,24 @@ class StoredMessage:
 
 
 @dataclass(frozen=True, slots=True)
+class StoredAttachment:
+    tenant_key: str
+    app_id: str
+    chat_id: str
+    message_id: str
+    resource_key: str
+    resource_type: str
+    filename: str | None
+    media_type: str | None
+    declared_size: int | None
+    blob_id: str | None
+    download_state: str
+    parse_state: str
+    parsed_content: str | None = None
+    warning_code: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class IMAdmissionDecision:
     reason: IMAdmissionReason
     task_id: str | None = None

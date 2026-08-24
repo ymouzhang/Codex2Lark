@@ -7,9 +7,11 @@ requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
     "cryptography>=45,<47",
+    "defusedxml>=0.7,<1",
     "lark-channel-sdk==1.0.0",
     "mcp>=1.0,<2",
     "pydantic>=2.10,<3",
+    "pypdf>=6,<7",
 ]
 
 [project.scripts]

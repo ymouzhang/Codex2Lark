@@ -7,7 +7,7 @@ from typing import Any
 from codex2lark.storage.crypto import EnvelopeCipher
 from codex2lark.storage.database import SQLiteDatabase
 
-from .models import IncomingMessage, Mention, StoredMessage
+from .models import IncomingMessage, Mention, StoredAttachment, StoredMessage
 
 
 class SQLiteIMRepository:
@@ -175,6 +175,121 @@ class SQLiteIMRepository:
         )
         return [self._message(row) for row in reversed(rows)]
 
+    async def get_attachment(
+        self,
+        tenant_key: str,
+        app_id: str,
+        chat_id: str,
+        message_id: str,
+        resource_key: str,
+    ) -> StoredAttachment | None:
+        row = await self._database.call(
+            lambda connection: connection.execute(
+                """
+                SELECT * FROM im_attachments
+                WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                  AND message_id = ? AND resource_key = ?
+                """,
+                (tenant_key, app_id, chat_id, message_id, resource_key),
+            ).fetchone()
+        )
+        return None if row is None else self._attachment(row)
+
+    async def record_attachment_blob(
+        self,
+        attachment: StoredAttachment,
+        *,
+        blob_id: str,
+        byte_size: int,
+        media_type: str | None,
+        now_ms: int,
+    ) -> None:
+        def operation(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO im_file_blobs(blob_id, byte_size, media_type, created_at_ms)
+                VALUES (?, ?, ?, ?)
+                """,
+                (blob_id, byte_size, media_type, now_ms),
+            )
+            cursor = connection.execute(
+                """
+                UPDATE im_attachments
+                SET blob_id = ?, media_type = COALESCE(?, media_type),
+                    download_state = 'downloaded'
+                WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                  AND message_id = ? AND resource_key = ?
+                """,
+                (
+                    blob_id,
+                    media_type,
+                    attachment.tenant_key,
+                    attachment.app_id,
+                    attachment.chat_id,
+                    attachment.message_id,
+                    attachment.resource_key,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError("attachment reference disappeared during ingest")
+
+        await self._database.transaction(operation)
+
+    async def record_attachment_parse(
+        self,
+        attachment: StoredAttachment,
+        *,
+        parser_id: str,
+        parser_version: str,
+        parsing_policy_version: str,
+        content: str | None,
+        state: str,
+        warning_code: str | None,
+    ) -> None:
+        if state not in {"parsed", "metadata_only", "blocked", "failed"}:
+            raise ValueError("invalid attachment parse state")
+        encrypted = self._encrypt_optional(
+            content,
+            aad=self._attachment_identity_aad(
+                attachment.tenant_key,
+                attachment.app_id,
+                attachment.message_id,
+                attachment.resource_key,
+                "parsed_content",
+            ),
+        )
+        content_hash = None if content is None else self._cipher.opaque_digest(content.encode())
+
+        def operation(connection: sqlite3.Connection) -> None:
+            cursor = connection.execute(
+                """
+                UPDATE im_attachments
+                SET parse_state = ?, parser_id = ?, parser_version = ?,
+                    parsing_policy_version = ?,
+                    parsed_content_ciphertext = ?, parsed_content_hash = ?, warning_code = ?
+                WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                  AND message_id = ? AND resource_key = ?
+                """,
+                (
+                    state,
+                    parser_id,
+                    parser_version,
+                    parsing_policy_version,
+                    encrypted,
+                    content_hash,
+                    warning_code,
+                    attachment.tenant_key,
+                    attachment.app_id,
+                    attachment.chat_id,
+                    attachment.message_id,
+                    attachment.resource_key,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise LookupError("attachment reference disappeared during parse")
+
+        await self._database.transaction(operation)
+
     def _upsert_chat(self, connection: sqlite3.Connection, message: IncomingMessage) -> None:
         name = self._encrypt_optional(
             message.chat_name,
@@ -248,6 +363,36 @@ class SQLiteIMRepository:
             is_deleted=bool(row["is_deleted"]),
         )
 
+    def _attachment(self, row: sqlite3.Row) -> StoredAttachment:
+        identity = (
+            row["tenant_key"],
+            row["app_id"],
+            row["message_id"],
+            row["resource_key"],
+        )
+        return StoredAttachment(
+            tenant_key=row["tenant_key"],
+            app_id=row["app_id"],
+            chat_id=row["chat_id"],
+            message_id=row["message_id"],
+            resource_key=row["resource_key"],
+            resource_type=row["resource_type"],
+            filename=self._decrypt_optional(
+                row["filename_ciphertext"],
+                aad=self._attachment_identity_aad(*identity, "filename"),
+            ),
+            media_type=row["media_type"],
+            declared_size=row["declared_size"],
+            blob_id=row["blob_id"],
+            download_state=row["download_state"],
+            parse_state=row["parse_state"],
+            parsed_content=self._decrypt_optional(
+                row["parsed_content_ciphertext"],
+                aad=self._attachment_identity_aad(*identity, "parsed_content"),
+            ),
+            warning_code=row["warning_code"],
+        )
+
     def _encrypt_optional(self, value: str | None, *, aad: bytes) -> bytes | None:
         return None if value is None else self._cipher.encrypt(value.encode(), associated_data=aad)
 
@@ -269,7 +414,22 @@ class SQLiteIMRepository:
 
     @staticmethod
     def _attachment_aad(message: IncomingMessage, resource_key: str, field: str) -> bytes:
+        return SQLiteIMRepository._attachment_identity_aad(
+            message.tenant_key,
+            message.app_id,
+            message.message_id,
+            resource_key,
+            field,
+        )
+
+    @staticmethod
+    def _attachment_identity_aad(
+        tenant_key: str,
+        app_id: str,
+        message_id: str,
+        resource_key: str,
+        field: str,
+    ) -> bytes:
         return (
-            f"im_attachments:{message.tenant_key}:{message.app_id}:"
-            f"{message.message_id}:{resource_key}:{field}:v1"
+            f"im_attachments:{tenant_key}:{app_id}:{message_id}:{resource_key}:{field}:v1"
         ).encode()

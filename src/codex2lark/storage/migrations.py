@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -347,9 +347,24 @@ CREATE TABLE IF NOT EXISTS im_attachments (
 );
 """
 
+IM_BLOB_SCHEMA = """
+ALTER TABLE im_attachments ADD COLUMN parsing_policy_version TEXT;
+
+CREATE TABLE IF NOT EXISTS im_file_blobs (
+    blob_id TEXT PRIMARY KEY,
+    byte_size INTEGER NOT NULL,
+    media_type TEXT,
+    created_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS im_attachments_blob_idx
+ON im_attachments(blob_id);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
     (3, MULTI_AGENT_SCHEMA),
     (4, IM_SCHEMA),
+    (5, IM_BLOB_SCHEMA),
 )

@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from codex2lark.capabilities.im.admission import IMAdmissionService
+from codex2lark.capabilities.im.attachments import (
+    AttachmentLoadRequest,
+    AttachmentService,
+    SafeAttachmentParser,
+)
 from codex2lark.capabilities.im.channel_adapter import (
     ChannelMessageNormalizer,
     OfficialChannelEventSource,
@@ -27,6 +34,7 @@ from codex2lark.capabilities.im.publisher import IMOutboxPublisher
 from codex2lark.capabilities.im.repository import SQLiteIMRepository
 from codex2lark.core.events import LeasedOutboxMessage
 from codex2lark.runtime.outbox import OutboxDispatcher
+from codex2lark.storage.blobs import EncryptedBlobStore
 from codex2lark.storage.crypto import EnvelopeCipher, MasterKey
 from codex2lark.storage.database import SQLiteDatabase
 from codex2lark.storage.runtime_store import RuntimeStore
@@ -444,5 +452,142 @@ async def test_context_provider_rejects_cross_chat_source_data(tmp_path: Path) -
             assert "trusted binding" in str(exc)
         else:
             raise AssertionError("cross-chat context must be rejected")
+    finally:
+        await database.close()
+
+
+class FakeDownloader:
+    def __init__(self, content: bytes | None) -> None:
+        self.content = content
+        self.calls = 0
+
+    async def download_resource(self, resource_key: str, resource_type: str) -> bytes | None:
+        assert resource_key == "file-key" and resource_type == "file"
+        self.calls += 1
+        return self.content
+
+
+async def test_attachment_ingest_encrypts_parses_and_reuses_managed_blob(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    await repository.upsert_message(
+        message(
+            attachments=(AttachmentReference("file-key", "file", "notes.txt", "text/plain", 12),)
+        )
+    )
+    cipher = EnvelopeCipher(MasterKey("test", b"i" * 32))
+    blobs = EncryptedBlobStore(tmp_path / "blobs", cipher)
+    downloader = FakeDownloader(b"private attachment text")
+    service = AttachmentService(repository, downloader, blobs, SafeAttachmentParser())
+    request = AttachmentLoadRequest("tenant-1", "app-1", "oc_group", "om_request", "file-key")
+    try:
+        loaded = await service.load(request, now_ms=200)
+        again = await service.load(request, now_ms=201)
+
+        assert loaded.evidence.content == "private attachment text"
+        assert again.blob_id == loaded.blob_id
+        assert downloader.calls == 1
+        stored = await repository.get_attachment(
+            "tenant-1", "app-1", "oc_group", "om_request", "file-key"
+        )
+        assert stored is not None
+        assert stored.parse_state == "parsed"
+        assert stored.parsed_content == "private attachment text"
+        ciphertext = await database.call(
+            lambda connection: connection.execute(
+                "SELECT parsed_content_ciphertext FROM im_attachments"
+            ).fetchone()[0]
+        )
+        assert b"private attachment text" not in ciphertext
+        blob_file = next((tmp_path / "blobs").rglob("*.blob"))
+        assert b"private attachment text" not in blob_file.read_bytes()
+    finally:
+        await database.close()
+
+
+def xlsx_bytes() -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "xl/sharedStrings.xml",
+            '<sst xmlns="x"><si><t>Revenue</t></si></sst>',
+        )
+        archive.writestr(
+            "xl/worksheets/sheet1.xml",
+            (
+                '<worksheet xmlns="x"><sheetData><row>'
+                '<c r="A1" t="s"><v>0</v></c>'
+                '<c r="B1"><f>SUM(B2:B3)</f><v>42</v></c>'
+                "</row></sheetData></worksheet>"
+            ),
+        )
+    return output.getvalue()
+
+
+def stored_attachment(filename: str, *, resource_type: str = "file") -> Any:
+    return SimpleNamespace(
+        tenant_key="tenant-1",
+        app_id="app-1",
+        chat_id="oc_group",
+        message_id="om_request",
+        resource_key="file-key",
+        resource_type=resource_type,
+        filename=filename,
+        media_type=None,
+        declared_size=None,
+        blob_id=None,
+        download_state="referenced",
+        parse_state="not_parsed",
+    )
+
+
+def test_safe_attachment_parser_keeps_formulas_inert_and_blocks_active_content() -> None:
+    parser = SafeAttachmentParser()
+    workbook = parser.parse(stored_attachment("book.xlsx"), xlsx_bytes())
+    blocked = parser.parse(stored_attachment("payload.sh"), b"echo unsafe")
+
+    assert workbook.state == "parsed"
+    assert workbook.content is not None
+    assert "A1=Revenue" in workbook.content
+    assert "[formula:SUM(B2:B3)]" in workbook.content
+    assert blocked.state == "blocked"
+    assert blocked.warning_code == "active_content_blocked"
+
+
+async def test_attachment_service_rejects_unreferenced_and_oversized_downloads(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    cipher = EnvelopeCipher(MasterKey("test", b"i" * 32))
+    service = AttachmentService(
+        repository,
+        FakeDownloader(b"too large"),
+        EncryptedBlobStore(tmp_path / "blobs", cipher),
+        SafeAttachmentParser(),
+        max_attachment_bytes=4,
+    )
+    try:
+        try:
+            await service.load(
+                AttachmentLoadRequest("tenant-1", "app-1", "oc_group", "missing", "file-key"),
+                now_ms=1,
+            )
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("unreferenced attachment must be rejected")
+        await repository.upsert_message(
+            message(attachments=(AttachmentReference("file-key", "file", "notes.txt"),))
+        )
+        try:
+            await service.load(
+                AttachmentLoadRequest("tenant-1", "app-1", "oc_group", "om_request", "file-key"),
+                now_ms=2,
+            )
+        except ValueError as exc:
+            assert "actual size" in str(exc)
+        else:
+            raise AssertionError("oversized attachment must be rejected")
     finally:
         await database.close()

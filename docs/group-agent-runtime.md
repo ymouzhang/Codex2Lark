@@ -202,6 +202,30 @@ Every parser returns text or structured evidence with source provenance,
 truncation warnings, parser version, and content hash. Parsing never executes
 macros, embedded programs, formulas, links, or instructions found in the file.
 
+### Runtime API 1 attachment ingest and parsers
+
+The first implementation defaults to 20 MiB per downloaded attachment, 50 MiB
+total declared uncompressed Office ZIP members, 1,000 ZIP entries, a 100:1
+member compression-ratio ceiling, and 200,000 output characters. These are hard
+upper bounds configurable only downward by a task policy. A declared size above
+the limit is rejected before download; actual bytes are checked again.
+
+Download authorization is a trusted `AttachmentLoadRequest` bound to tenant,
+app, chat, message, and resource key. The repository must already contain that
+reference. Downloaded plaintext exists only in memory for the bounded ingest;
+the managed blob store writes an authenticated encrypted envelope through an
+owner-only temporary file and atomic link. SQLite then records the blob
+reference. A crash before that transaction may leave only an encrypted orphan,
+which maintenance removes; a database row never points at plaintext.
+
+Text/Markdown/JSON/CSV use bounded decoding and validation. PDF uses the pinned
+`pypdf` parser without following links. DOCX/XLSX/PPTX use bounded ZIP member
+selection and `defusedxml`; formulas are rendered as inert text and never
+evaluated. Images produce a typed managed-image reference plus metadata. Audio
+and video produce metadata only. Archives, scripts, and executables return a
+blocked parser result and are never unpacked or executed. Parser output is
+encrypted and keyed by content hash, parser ID/version, and policy version.
+
 ## 7. Durable storage
 
 The store uses one SQLite database in WAL mode and one managed file directory.
