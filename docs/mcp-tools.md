@@ -1,5 +1,18 @@
 # MCP tool contracts
 
+## Server lifecycle automation
+
+In addition to semantic tools, the MCP process owns a real-time bot-added event
+consumer. It listens only to `im.chat.member.bot.added_v1` as the configured bot
+and immediately ensures that the current authenticated user is in the event's
+group. The event handler has no arbitrary event-key or command input surface.
+The digest tool repeats the membership gate as an idempotent recovery check.
+
+MCP startup fails when the event consumer cannot reach its documented ready
+marker. Runtime exits are restarted with bounded backoff; malformed events and
+per-group invitation failures are safely logged and skipped without terminating
+the stream.
+
 ## 1. Design rules
 
 - Tool names express Feishu business operations, not CLI commands.

@@ -47,3 +47,7 @@ it. It is not a release changelog.
   before implementing live member inspection, bot invitation, and user-side
   read-back verification in the group-chat membership gate; separated chat
   access identity from user-owned Drive and Docs authoring identity.
+- Changed user invitation from digest-time-only to an MCP-lifespan real-time
+  `im.chat.member.bot.added_v1` consumer before implementing fixed-key event
+  supervision, ready-marker startup, graceful shutdown, bounded restart, and
+  the retained digest-time recovery gate.

@@ -13,6 +13,11 @@ authenticated user into that group before reading messages. Report whether the
 user was already present or was added; if invitation is forbidden, incomplete,
 or awaiting approval, stop and explain the required group-owner action.
 
+The running MCP server normally performs this invitation immediately when the
+bot-added event arrives. Treat the digest-time membership result as a recovery
+check, and surface listener configuration guidance when the user reports that
+automatic invitation did not happen.
+
 Do not broaden the time range or silently accept incomplete pagination. Ask the
 user to narrow the range when the bounded tool reports incomplete history or a
 message-count limit.

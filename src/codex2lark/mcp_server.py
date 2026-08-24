@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -44,12 +46,22 @@ FastMCPSettings.model_rebuild()
 
 def build_mcp(application: Application | None = None) -> FastMCP:
     app = application or create_application()
+
+    @asynccontextmanager
+    async def lifespan(_: FastMCP[Any]) -> AsyncIterator[dict[str, Any]]:
+        await app.events.start()
+        try:
+            yield {"application": app}
+        finally:
+            await app.events.stop()
+
     mcp = FastMCP(
         "Codex2Lark",
         instructions=(
             "Stateless Feishu authoring tools. Inspect live resources before editing and verify "
             "all writes. Feishu is the only business-data source of truth."
         ),
+        lifespan=lifespan,
     )
 
     @mcp.tool(

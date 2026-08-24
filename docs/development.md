@@ -53,6 +53,7 @@ src/codex2lark/
 ├── docs_service.py        document orchestration
 ├── notification_service.py post-verification bot direct messages
 ├── chat_membership_service.py bot-visible group membership gate
+├── event_service.py        bot-added event consumer and supervisor
 ├── chat_digest_service.py group-message retrieval and digest publishing
 ├── artifacts_service.py   whiteboard, Sheet, and Base orchestration
 ├── compiler.py            supported XML construction/preflight

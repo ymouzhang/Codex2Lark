@@ -94,6 +94,23 @@ list, unavailable user identity, rejected or approval-pending invitation, or
 failed read-back stops the workflow before message retrieval and document
 creation. The workflow never invites a guessed user or a caller-supplied ID.
 
+The primary trigger is real-time rather than digest-time. While the
+`codex2lark mcp` process is running, Codex2Lark consumes
+`im.chat.member.bot.added_v1` as the bot. The MCP server becomes ready only
+after lark-cli emits the event consumer's ready marker. Each event supplies the
+authoritative `chat_id`; Codex2Lark immediately runs the same membership gate
+and invites the current authenticated user when absent. Events are processed
+sequentially, and repeated delivery is safe because every attempt begins with a
+live member read. The digest-time gate remains as a recovery check.
+
+No event checkpoint, queue, event body, or membership state is persisted by
+Codex2Lark. Graceful MCP shutdown closes the consumer's stdin and waits for
+lark-cli to exit; it never uses an unclean kill. An unexpected consumer exit is
+logged safely and restarted with bounded backoff. Event processing failures are
+reported to stderr without exposing event payloads or credentials and do not
+stop later events. Immediate handling is guaranteed only while the MCP process
+and its event connection are running; downtime has no Codex2Lark-owned replay.
+
 Each entry shows local time, sender display name, and message content. Date
 headings make long ranges scannable, while messages remain globally ordered by
 creation time. Recalled messages and unsupported message types are represented
@@ -196,3 +213,5 @@ the affected resource back and validate observable structure and content.
 11. A bounded group-chat range can be published chronologically with sender
     names, selectively embedded images, filename-only file entries, managed
     folder placement, and live read-back verification.
+12. While MCP is running, a bot-added event immediately and idempotently ensures
+    the current authenticated user is a verified member of that group.

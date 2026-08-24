@@ -150,6 +150,13 @@ require the bot to be an owner, administrator, or eligible creator bot. An
 invitation awaiting approval is not treated as membership, so digest publishing
 stops until approval is complete.
 
+Real-time automatic user invitation additionally requires enabling the
+`im.chat.member.bot.added_v1` event in the Feishu developer console and granting
+the bot `im:chat.members:bot_access`. Start and keep `codex2lark mcp` running;
+the server waits for the lark-cli event-ready marker before it accepts MCP work.
+Stopping the MCP process also stops immediate event handling. Codex2Lark does
+not persist or replay events received while it was offline.
+
 Notification delivery is a post-write side effect. If it fails, the MCP result
 reports `notification.status = failed`; inspect the warning and fix bot access,
 but do not rerun the document edit solely to obtain the message.
@@ -182,6 +189,10 @@ but do not rerun the document edit solely to obtain the message.
   and write scopes, confirm the user is inside the application's availability
   range, and allow the bot to invite members (or have a group owner add the user
   manually). A pending invitation must be approved before retrying.
+- MCP fails during bot-added listener startup: enable
+  `im.chat.member.bot.added_v1`, grant `im:chat.members:bot_access`, verify the
+  bot identity, and ensure no incompatible event-bus consumer owns the local
+  connection. Restart MCP after correcting the configuration.
 - incomplete group history: narrow the start/end range or intentionally raise
   the bounded page/message limits, then retry. No partial digest was created.
 - startup timeout: run `uv sync` once in the installed plugin directory or

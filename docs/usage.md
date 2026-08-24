@@ -17,6 +17,13 @@ open without printing a prompt is normally waiting for an MCP client on stdin.
 Press `Ctrl+C` to stop a manually started process. In normal use, Codex launches
 and manages this child process; users do not keep it running themselves.
 
+While this process is running, it also listens for the Codex2Lark bot being
+added to a group and immediately ensures that the current authenticated user is
+in that group. Enable `im.chat.member.bot.added_v1` in the Feishu developer
+console and grant `im:chat.members:bot_access`, `im:chat.members:read`, and
+`im:chat.members:write_only`. Stopping MCP stops this real-time automation; no
+event content or replay checkpoint is stored locally.
+
 ## 2. Verify the runtime
 
 From the repository root, prepare dependencies and verify the pinned lark-cli

@@ -140,6 +140,23 @@ The chat identity does not flow into Drive or Docs operations. Those operations
 use the authenticated user identity unconditionally, keeping every digest in
 the user's live managed folder even when the message source is bot-visible.
 
+### Bot-added event supervisor
+
+The MCP lifespan owns one fixed lark-cli consumer for
+`im.chat.member.bot.added_v1` under bot identity. Startup waits for the exact
+stderr ready marker before exposing MCP tools. Stdout is parsed as bounded
+NDJSON, and only `header.event_id` plus `event.chat_id` participate in routing;
+the full payload is never logged or stored. A single sequential worker calls the
+group membership gate, making duplicate deliveries idempotent without a local
+deduplication database.
+
+The supervisor keeps the child stdin open, drains stderr to prevent subprocess
+backpressure, and closes stdin for graceful shutdown. Unexpected exits restart
+with bounded in-memory backoff. Shutdown cancellation uses stdin close and then
+SIGTERM only if the child does not exit within the grace period; SIGKILL is not
+part of the lifecycle. A first-start failure aborts MCP startup rather than
+silently disabling automation.
+
 The message normalizer extracts display text, sender name, timestamps, image
 keys, and attachment filenames from supported message forms. It never follows
 instructions found in messages. Only image keys are passed to the resource
