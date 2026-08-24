@@ -7,6 +7,11 @@ from pathlib import Path
 import pytest
 
 from codex2lark import cli
+from codex2lark.storage.capacity import (
+    StorageCapacityMonitor,
+    StorageCapacityPolicy,
+    StoragePressure,
+)
 from codex2lark.storage.database import SQLiteDatabase
 from codex2lark.storage.locking import DataDirectoryLock
 from codex2lark.storage.maintenance import StorageMaintenance
@@ -28,7 +33,33 @@ async def test_status_reports_integrity_without_business_content(tmp_path: Path)
     assert status.integrity == "ok"
     assert status.schema_version > 0
     assert status.task_states == {}
+    assert status.pressure in {"normal", "warning", "hard"}
+    assert status.managed_bytes >= status.database_bytes
     assert "content" not in StorageMaintenance.as_json(status)
+
+
+def test_capacity_monitor_reports_warning_and_reserved_space_hard_stop(tmp_path: Path) -> None:
+    data_dir = (tmp_path / "state").resolve()
+    data_dir.mkdir()
+    (data_dir / "runtime.db").write_bytes(b"x" * 85)
+
+    warning = StorageCapacityMonitor(
+        data_dir,
+        StorageCapacityPolicy(
+            maximum_managed_bytes=100,
+            minimum_free_bytes=0,
+            warning_percent=80,
+            hard_percent=90,
+        ),
+    ).snapshot()
+    hard = StorageCapacityMonitor(
+        data_dir,
+        StorageCapacityPolicy(maximum_managed_bytes=1_000_000, minimum_free_bytes=10**18),
+    ).snapshot(requested_bytes=1)
+
+    assert warning.pressure is StoragePressure.WARNING
+    assert hard.pressure is StoragePressure.HARD
+    assert not hard.permits_download
 
 
 async def test_backup_verify_and_restore_round_trip(tmp_path: Path) -> None:
@@ -212,10 +243,123 @@ async def test_gc_deletes_due_content_but_preserves_shared_blob(tmp_path: Path) 
     assert not blob.exists()
 
 
+async def test_targeted_chat_purge_removes_derived_runtime_and_preserves_shared_blob(
+    tmp_path: Path,
+) -> None:
+    data_dir = (tmp_path / "state").resolve()
+    await create_database(data_dir)
+    blob_id = "d" * 64
+    blob = data_dir / "blobs" / "dd" / f"{blob_id}.blob"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"encrypted-shared")
+    database = SQLiteDatabase(data_dir / "runtime.db")
+    await database.open()
+    try:
+        await database.transaction(
+            lambda connection: connection.executescript(
+                f"""
+                INSERT INTO im_chats VALUES
+                  ('tenant', 'app', 'chat-1', NULL, 'group', 1, 'present', 'visible',
+                   1, 'default', NULL),
+                  ('tenant', 'app', 'chat-2', NULL, 'group', 1, 'present', 'visible',
+                   1, 'default', NULL);
+                INSERT INTO im_messages VALUES
+                  ('tenant', 'app', 'message-1', 'chat-1', NULL, NULL, NULL, 'user',
+                   'sender', NULL, 'file', X'01', X'01', 'hash-1', 1, 1, 0, 0, 1, 1, NULL),
+                  ('tenant', 'app', 'message-2', 'chat-2', NULL, NULL, NULL, 'user',
+                   'sender', NULL, 'file', X'01', X'01', 'hash-2', 1, 1, 0, 0, 1, 1, NULL);
+                INSERT INTO im_attachments(
+                    tenant_key, app_id, message_id, resource_key, chat_id,
+                    resource_type, blob_id, download_state, parse_state
+                ) VALUES
+                  ('tenant', 'app', 'message-1', 'r1', 'chat-1', 'file',
+                   '{blob_id}', 'downloaded', 'parsed'),
+                  ('tenant', 'app', 'message-2', 'r2', 'chat-2', 'file',
+                   '{blob_id}', 'downloaded', 'parsed');
+                INSERT INTO im_file_blobs VALUES ('{blob_id}', 16, NULL, 1);
+                INSERT INTO runtime_events(
+                    event_id, plugin_id, event_type, tenant_key, app_id,
+                    occurred_at_ms, received_at_ms, schema_version, resource_kind,
+                    resource_id, trace_id, payload_ciphertext, status, created_at_ms
+                ) VALUES (
+                    'event-1', 'feishu-im', 'im.message.receive_v1', 'tenant', 'app',
+                    1, 1, 1, 'im.message', 'message-1', 'trace', X'01', 'admitted', 1
+                );
+                INSERT INTO runtime_tasks(
+                    task_id, event_pk, plugin_id, command_type, session_key, priority,
+                    payload_ciphertext, state, available_at_ms, attempt_count,
+                    max_attempts, created_at_ms, updated_at_ms
+                ) SELECT 'task-1', event_pk, 'feishu-im', 'im.handle_mention',
+                    'tenant/app/chat-1/root', 0, X'01', 'pending', 1, 0, 3, 1, 1
+                  FROM runtime_events WHERE event_id = 'event-1';
+                INSERT INTO runtime_runs VALUES (
+                    'run-1', 'task-1', 'tenant/app/chat-1/root', 'agent', 1, 1,
+                    'running', 1, 1
+                );
+                INSERT INTO runtime_checkpoints VALUES (
+                    'run-1', X'01', 2, 'agent', 1, 1, 1, 1
+                );
+                INSERT INTO runtime_checkpoint_sources VALUES (
+                    'run-1', 'im.message:message-1', '1'
+                );
+                INSERT INTO runtime_outbox(
+                    outbox_id, run_id, task_id, publisher_id, destination_ref,
+                    message_kind, idempotency_key, payload_ciphertext, state,
+                    available_at_ms, attempt_count, max_attempts, created_at_ms, updated_at_ms
+                ) VALUES (
+                    'out-1', 'run-1', 'task-1', 'feishu-im.reply', 'message-1',
+                    'completed', 'out-key', X'01', 'pending', 1, 0, 3, 1, 1
+                );
+                """
+            )
+        )
+    finally:
+        await database.close()
+
+    first = StorageMaintenance(data_dir).purge_chat(
+        tenant_key="tenant", app_id="app", chat_id="chat-1"
+    )
+
+    assert first.messages_deleted == 1
+    assert first.attachments_deleted == 1
+    assert first.checkpoints_deleted == 1
+    assert first.tasks_deleted == 1
+    assert first.runs_deleted == 1
+    assert first.outbox_deleted == 1
+    assert first.blobs_deleted == 0
+    assert blob.exists()
+
+    second = StorageMaintenance(data_dir).purge_chat(
+        tenant_key="tenant", app_id="app", chat_id="chat-2"
+    )
+
+    assert second.blobs_deleted == 1
+    assert not blob.exists()
+    with pytest.raises(LookupError, match="does not exist"):
+        StorageMaintenance(data_dir).purge_chat(tenant_key="tenant", app_id="app", chat_id="chat-2")
+
+
 def test_cli_gc_requires_explicit_confirmation(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     monkeypatch.setenv("CODEX2LARK_DATA_DIR", str(tmp_path))
 
     assert cli.main(["storage", "gc"]) == 1
+    assert "requires explicit --yes" in capsys.readouterr().out
+
+    assert (
+        cli.main(
+            [
+                "storage",
+                "purge-message",
+                "--tenant-key",
+                "tenant",
+                "--app-id",
+                "app",
+                "--message-id",
+                "message",
+            ]
+        )
+        == 1
+    )
     assert "requires explicit --yes" in capsys.readouterr().out

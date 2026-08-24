@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -398,6 +398,17 @@ CREATE INDEX IF NOT EXISTS runtime_checkpoint_sources_ref_idx
 ON runtime_checkpoint_sources(source_ref, run_id);
 """
 
+ADMIN_AUDIT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runtime_admin_audit (
+    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation TEXT NOT NULL,
+    target_kind TEXT NOT NULL,
+    target_digest TEXT NOT NULL,
+    result_counts TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
@@ -407,4 +418,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (6, RUN_CONTROL_SCHEMA),
     (7, AGENT_WRITE_SCOPE_SCHEMA),
     (8, CHECKPOINT_SOURCE_SCHEMA),
+    (9, ADMIN_AUDIT_SCHEMA),
 )

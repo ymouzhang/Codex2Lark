@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined single-node disk protection and exact local purge before
+  implementation: validated capacity ceilings, a pre-download hard gate,
+  metadata-only attachment fallback, content-safe pressure status, and
+  stopped-Gateway message/chat purge covering derived runtime payloads and
+  unreferenced blobs. Implementation area: Gateway configuration, capacity
+  monitor, attachment loader, storage maintenance/CLI, and pressure/purge tests.
+
 - Defined authoritative IM invalidation before implementation: durable
   pre-ACK recall and bot-removal admission, monotonic tombstones, immediate chat
   access revocation, reference-safe attachment cleanup, indexed checkpoint

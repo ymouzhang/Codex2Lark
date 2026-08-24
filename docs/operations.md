@@ -175,6 +175,18 @@ Expired leases are recovered after restart. Press `Ctrl+C` for a draining stop;
 the service stops event intake, completes its bounded drain, checkpoints SQLite,
 and then exits.
 
+### Disk capacity settings
+
+The Gateway blocks only new attachment downloads at hard storage pressure;
+message admission, text-only work, replies, status, and cleanup remain usable.
+Optional overrides are positive byte counts:
+
+```bash
+export CODEX2LARK_STORAGE_MAX_BYTES=$((10 * 1024 * 1024 * 1024))
+export CODEX2LARK_STORAGE_MIN_FREE_BYTES=$((512 * 1024 * 1024))
+export CODEX2LARK_MAX_ATTACHMENT_BYTES=$((20 * 1024 * 1024))
+```
+
 ## 6. Runtime storage operations
 
 Routine diagnostics need only the configured data directory and never print
@@ -185,7 +197,22 @@ uv run codex2lark storage status
 ```
 
 The JSON result reports SQLite integrity, schema version, database/blob byte
-counts, and task/outbox states. A non-`ok` integrity result exits non-zero.
+counts, filesystem free bytes, storage-pressure state, and task/outbox states. A
+non-`ok` integrity result exits non-zero. Stop the Gateway before running
+`storage gc` or a targeted purge.
+
+Remove one exact message or chat and its local derived state:
+
+```bash
+uv run codex2lark storage purge-message \
+  --tenant-key tenant_x --app-id cli_x --message-id om_x --yes
+
+uv run codex2lark storage purge-chat \
+  --tenant-key tenant_x --app-id cli_x --chat-id oc_x --yes
+```
+
+The command fails for an unknown target and prints only counts and reclaimed
+bytes. It does not delete the corresponding upstream Feishu message or chat.
 
 Create a portable encrypted-state backup only while the Gateway is stopped:
 

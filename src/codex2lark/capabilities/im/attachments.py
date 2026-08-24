@@ -13,6 +13,7 @@ from pypdf import PdfReader
 
 from codex2lark.runtime.context import ContextEvidence
 from codex2lark.storage.blobs import EncryptedBlobStore
+from codex2lark.storage.capacity import StorageCapacityMonitor
 
 from .models import StoredAttachment
 
@@ -298,6 +299,7 @@ class AttachmentService:
         *,
         max_attachment_bytes: int = 20 * 1024 * 1024,
         parsing_policy_version: str = "1",
+        capacity: StorageCapacityMonitor | None = None,
     ) -> None:
         if max_attachment_bytes < 1 or not parsing_policy_version:
             raise ValueError("attachment byte limit and parsing policy version are required")
@@ -307,6 +309,7 @@ class AttachmentService:
         self._parser = parser
         self._max_attachment_bytes = max_attachment_bytes
         self._parsing_policy_version = parsing_policy_version
+        self._capacity = capacity
 
     async def load(self, request: AttachmentLoadRequest, *, now_ms: int) -> AttachmentEvidence:
         attachment = await self._repository.get_attachment(
@@ -324,6 +327,12 @@ class AttachmentService:
         ):
             raise ValueError("attachment declared size exceeds policy")
         if attachment.blob_id is None:
+            requested = attachment.declared_size or self._max_attachment_bytes
+            if (
+                self._capacity is not None
+                and not self._capacity.snapshot(requested_bytes=requested).permits_download
+            ):
+                return self._storage_pressure_evidence(attachment)
             content = await self._downloader.download_resource(
                 attachment.resource_key,
                 attachment.resource_type,
@@ -333,6 +342,11 @@ class AttachmentService:
                 raise RuntimeError("Feishu attachment download returned no bytes")
             if len(content) > self._max_attachment_bytes:
                 raise ValueError("attachment actual size exceeds policy")
+            if (
+                self._capacity is not None
+                and not self._capacity.snapshot(requested_bytes=len(content)).permits_download
+            ):
+                return self._storage_pressure_evidence(attachment)
             blob_id = self._blobs.put(content)
             await self._repository.record_attachment_blob(
                 attachment,
@@ -367,4 +381,20 @@ class AttachmentService:
                 source_version=blob_id,
             ),
             warning_code=result.warning_code,
+        )
+
+    @staticmethod
+    def _storage_pressure_evidence(attachment: StoredAttachment) -> AttachmentEvidence:
+        return AttachmentEvidence(
+            blob_id="not-downloaded",
+            content_kind="file_metadata",
+            evidence=ContextEvidence(
+                source_ref=(f"im.attachment:{attachment.message_id}:{attachment.resource_key}"),
+                content=(
+                    f"Attachment {attachment.filename or attachment.resource_key} was not "
+                    "downloaded because local storage is at its hard capacity threshold."
+                ),
+                source_version="storage-pressure-hard",
+            ),
+            warning_code="storage_pressure_hard",
         )

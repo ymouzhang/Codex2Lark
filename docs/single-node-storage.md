@@ -405,9 +405,25 @@ Storage configuration includes:
 - maximum parser output bytes and tokens;
 - minimum free bytes reserved for SQLite and shutdown.
 
-At warning level, garbage collection runs early. At the hard level, new file
+At warning level, readiness and status expose an operator signal so the Gateway
+can be stopped for bounded garbage collection. At the hard level, new file
 downloads and backfills stop, while event admission, text-only processing,
 terminal replies, retention deletion, and operator diagnostics continue.
+
+The first production capacity gate is evaluated immediately before an upstream
+attachment download. It combines managed data bytes with filesystem free space
+and the declared/requested allocation. Existing encrypted blobs remain readable
+at every pressure level. The defaults are a 10 GiB managed-data ceiling, 80%
+warning level, 90% hard level, 512 MiB filesystem reserve, and 20 MiB per-file
+limit. Operators can override byte ceilings through validated Gateway
+configuration. A hard denial becomes attributed attachment evidence with the
+`storage_pressure_hard` warning; it does not fail the text-only Agent request.
+
+`storage status` reports `pressure`, `managed_bytes`, `maximum_managed_bytes`,
+and `filesystem_free_bytes` without inspecting or decrypting business content.
+The warning level is an operator signal in the first implementation; stopped-
+Gateway `storage gc` remains the only deletion path and is never raced against
+the live Gateway lock.
 
 ## 13. Backup and restore
 
@@ -448,6 +464,22 @@ The CLI must eventually provide bounded operator commands for:
 Destructive commands resolve exact targets, show counts and byte estimates, and
 require explicit confirmation. Purge writes a content-free audit record but does
 not retain deleted business content.
+
+The first targeted purge commands are:
+
+```text
+codex2lark storage purge-message --tenant-key T --app-id A --message-id M --yes
+codex2lark storage purge-chat --tenant-key T --app-id A --chat-id C --yes
+```
+
+They require the Gateway to be stopped, take the data-directory lock, remove IM
+content, parser results, source-indexed checkpoints, related queued/run/outbox
+payloads, and unreferenced encrypted blobs, then return content-free row and byte
+counts. Message purge leaves the chat policy intact. Chat purge removes the
+local chat row; a later live event may recreate it unless persistence for that
+chat is separately disabled by policy. Unknown exact targets fail without
+changing storage. Broad tenant/all-business-data purge remains unavailable
+until its audit and identity-retention contract is implemented.
 
 ## 15. Failure guarantees
 

@@ -18,6 +18,7 @@ from .runtime.resources import ResourceLoader
 from .storage.maintenance import (
     BackupResult,
     GarbageCollectionResult,
+    PurgeResult,
     StorageMaintenance,
     StorageStatus,
 )
@@ -210,12 +211,26 @@ def _parser() -> argparse.ArgumentParser:
     gc = storage_commands.add_parser("gc", help="delete explicitly expired runtime content")
     gc.add_argument("--batch-size", type=int, default=500)
     gc.add_argument("--yes", action="store_true")
+    purge_message = storage_commands.add_parser(
+        "purge-message", help="purge one exact local IM message and derived state"
+    )
+    purge_message.add_argument("--tenant-key", required=True)
+    purge_message.add_argument("--app-id", required=True)
+    purge_message.add_argument("--message-id", required=True)
+    purge_message.add_argument("--yes", action="store_true")
+    purge_chat = storage_commands.add_parser(
+        "purge-chat", help="purge one exact local IM chat and derived state"
+    )
+    purge_chat.add_argument("--tenant-key", required=True)
+    purge_chat.add_argument("--app-id", required=True)
+    purge_chat.add_argument("--chat-id", required=True)
+    purge_chat.add_argument("--yes", action="store_true")
     return parser
 
 
 def _storage(arguments: argparse.Namespace) -> int:
     try:
-        result: StorageStatus | BackupResult | GarbageCollectionResult
+        result: StorageStatus | BackupResult | GarbageCollectionResult | PurgeResult
         if arguments.storage_command == "status":
             result = StorageMaintenance(resolve_data_dir()).status()
         elif arguments.storage_command == "backup":
@@ -230,9 +245,25 @@ def _storage(arguments: argparse.Namespace) -> int:
             result = StorageMaintenance(resolve_data_dir()).garbage_collect(
                 batch_size=arguments.batch_size
             )
+        elif arguments.storage_command == "purge-message":
+            if not arguments.yes:
+                raise ValueError("storage purge-message requires explicit --yes confirmation")
+            result = StorageMaintenance(resolve_data_dir()).purge_message(
+                tenant_key=arguments.tenant_key,
+                app_id=arguments.app_id,
+                message_id=arguments.message_id,
+            )
+        elif arguments.storage_command == "purge-chat":
+            if not arguments.yes:
+                raise ValueError("storage purge-chat requires explicit --yes confirmation")
+            result = StorageMaintenance(resolve_data_dir()).purge_chat(
+                tenant_key=arguments.tenant_key,
+                app_id=arguments.app_id,
+                chat_id=arguments.chat_id,
+            )
         else:
             return 2
-    except (FileNotFoundError, FileExistsError, RuntimeError, ValueError) as exc:
+    except (FileNotFoundError, FileExistsError, LookupError, RuntimeError, ValueError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
         return 1
     print(StorageMaintenance.as_json(result))

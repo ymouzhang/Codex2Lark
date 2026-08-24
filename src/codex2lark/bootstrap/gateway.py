@@ -58,6 +58,7 @@ from codex2lark.runtime.tools import (
 from codex2lark.runtime.types import AgentDefinition, ToolCall, ToolDefinition
 from codex2lark.storage.agent_store import SQLiteAgentGraphStore
 from codex2lark.storage.blobs import EncryptedBlobStore
+from codex2lark.storage.capacity import StorageCapacityMonitor
 from codex2lark.storage.crypto import EnvelopeCipher
 from codex2lark.storage.database import SQLiteDatabase
 from codex2lark.storage.locking import DataDirectoryLock
@@ -243,6 +244,7 @@ def create_v3_gateway(
         app_id=config.feishu_app_id, app_secret=config.feishu_app_secret
     )
     blob_store = EncryptedBlobStore(config.data_dir / "blobs", cipher)
+    capacity = StorageCapacityMonitor(config.data_dir, config.storage_capacity)
     live_context = IMContextProvider(
         OfficialLiveIMReader(api, bot_open_id=bot_open_id),
         im_repository,
@@ -251,6 +253,8 @@ def create_v3_gateway(
             active_channel,
             blob_store,
             SafeAttachmentParser(),
+            max_attachment_bytes=config.max_attachment_bytes,
+            capacity=capacity,
         ),
         clock_ms=lambda: int(time.time() * 1000),
     )

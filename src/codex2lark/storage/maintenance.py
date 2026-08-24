@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .capacity import StorageCapacityMonitor, StorageCapacityPolicy
 from .locking import DataDirectoryLock
 from .migrations import SCHEMA_VERSION
 
@@ -26,6 +27,10 @@ class StorageStatus:
     blob_bytes: int
     task_states: dict[str, int]
     outbox_states: dict[str, int]
+    pressure: str
+    managed_bytes: int
+    maximum_managed_bytes: int
+    filesystem_free_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,17 +54,50 @@ class GarbageCollectionResult:
     bytes_reclaimed: int
 
 
+@dataclass(frozen=True, slots=True)
+class PurgeResult:
+    ok: bool
+    target_kind: str
+    messages_deleted: int
+    attachments_deleted: int
+    checkpoints_deleted: int
+    tasks_deleted: int
+    runs_deleted: int
+    outbox_deleted: int
+    blobs_deleted: int
+    bytes_reclaimed: int
+
+
 class StorageMaintenance:
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self, data_dir: Path, capacity_policy: StorageCapacityPolicy | None = None
+    ) -> None:
         if not data_dir.is_absolute():
             raise ValueError("data directory must be absolute")
         self.data_dir = data_dir.resolve()
         self.database_path = self.data_dir / "runtime.db"
         self.blob_root = self.data_dir / "blobs"
+        self._capacity = StorageCapacityMonitor(
+            self.data_dir, capacity_policy or StorageCapacityPolicy.from_environment()
+        )
 
     def status(self) -> StorageStatus:
+        capacity = self._capacity.snapshot()
         if not self.database_path.is_file():
-            return StorageStatus(False, "database_missing", 0, 0, 0, 0, {}, {})
+            return StorageStatus(
+                False,
+                "database_missing",
+                0,
+                0,
+                0,
+                0,
+                {},
+                {},
+                capacity.pressure.value,
+                capacity.managed_bytes,
+                capacity.maximum_managed_bytes,
+                capacity.filesystem_free_bytes,
+            )
         with self._readonly(self.database_path) as connection:
             integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
             schema_version = self._schema_version(connection)
@@ -78,6 +116,10 @@ class StorageMaintenance:
             blob_bytes=sum(path.stat().st_size for path in present),
             task_states=task_states,
             outbox_states=outbox_states,
+            pressure=capacity.pressure.value,
+            managed_bytes=capacity.managed_bytes,
+            maximum_managed_bytes=capacity.maximum_managed_bytes,
+            filesystem_free_bytes=capacity.filesystem_free_bytes,
         )
 
     def backup(self, archive: Path) -> BackupResult:
@@ -248,6 +290,264 @@ class StorageMaintenance:
             reclaimed,
         )
 
+    def purge_message(self, *, tenant_key: str, app_id: str, message_id: str) -> PurgeResult:
+        return self._purge(
+            target_kind="message",
+            tenant_key=tenant_key,
+            app_id=app_id,
+            resource_id=message_id,
+        )
+
+    def purge_chat(self, *, tenant_key: str, app_id: str, chat_id: str) -> PurgeResult:
+        return self._purge(
+            target_kind="chat",
+            tenant_key=tenant_key,
+            app_id=app_id,
+            resource_id=chat_id,
+        )
+
+    def _purge(
+        self, *, target_kind: str, tenant_key: str, app_id: str, resource_id: str
+    ) -> PurgeResult:
+        if target_kind not in {"message", "chat"}:
+            raise ValueError("unsupported purge target")
+        if not all(value.strip() for value in (tenant_key, app_id, resource_id)):
+            raise ValueError("purge target identifiers are required")
+        if not self.database_path.is_file():
+            raise FileNotFoundError(f"runtime database does not exist: {self.database_path}")
+        with DataDirectoryLock(self.data_dir), sqlite3.connect(self.database_path) as connection:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.row_factory = sqlite3.Row
+            target_column = "message_id" if target_kind == "message" else "chat_id"
+            target = connection.execute(
+                f"""
+                SELECT 1 FROM im_{"messages" if target_kind == "message" else "chats"}
+                WHERE tenant_key = ? AND app_id = ? AND {target_column} = ?
+                """,
+                (tenant_key, app_id, resource_id),
+            ).fetchone()
+            if target is None:
+                raise LookupError(f"exact {target_kind} purge target does not exist")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._prepare_purge_tables(
+                    connection,
+                    target_kind=target_kind,
+                    tenant_key=tenant_key,
+                    app_id=app_id,
+                    resource_id=resource_id,
+                )
+                candidates = tuple(
+                    str(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT DISTINCT blob_id FROM im_attachments
+                        WHERE blob_id IS NOT NULL AND message_id IN (
+                            SELECT message_id FROM purge_messages
+                        ) AND tenant_key = ? AND app_id = ?
+                        """,
+                        (tenant_key, app_id),
+                    )
+                )
+                checkpoints = connection.execute(
+                    """
+                    DELETE FROM runtime_checkpoints WHERE run_id IN (
+                        SELECT run_id FROM purge_runs
+                    ) OR run_id IN (
+                        SELECT s.run_id FROM runtime_checkpoint_sources s
+                        JOIN purge_messages m
+                          ON s.source_ref = 'im.message:' || m.message_id
+                          OR s.source_ref LIKE 'im.attachment:' || m.message_id || ':%'
+                    )
+                    """
+                ).rowcount
+                connection.execute(
+                    "DELETE FROM runtime_run_controls WHERE target_task_id IN "
+                    "(SELECT task_id FROM purge_tasks) OR event_pk IN "
+                    "(SELECT event_pk FROM purge_events)"
+                )
+                outbox = connection.execute(
+                    """
+                    DELETE FROM runtime_outbox
+                    WHERE task_id IN (SELECT task_id FROM purge_tasks)
+                       OR run_id IN (SELECT run_id FROM purge_runs)
+                    """
+                ).rowcount
+                connection.execute(
+                    "DELETE FROM runtime_run_events WHERE run_id IN (SELECT run_id FROM purge_runs)"
+                )
+                connection.execute(
+                    "DELETE FROM runtime_graphs WHERE root_run_id IN "
+                    "(SELECT run_id FROM purge_runs)"
+                )
+                runs = connection.execute(
+                    "DELETE FROM runtime_runs WHERE run_id IN (SELECT run_id FROM purge_runs)"
+                ).rowcount
+                tasks = connection.execute(
+                    "DELETE FROM runtime_tasks WHERE task_id IN (SELECT task_id FROM purge_tasks)"
+                ).rowcount
+                connection.execute(
+                    "DELETE FROM runtime_events WHERE event_pk IN "
+                    "(SELECT event_pk FROM purge_events)"
+                )
+                attachments = connection.execute(
+                    """
+                    DELETE FROM im_attachments
+                    WHERE tenant_key = ? AND app_id = ?
+                      AND message_id IN (SELECT message_id FROM purge_messages)
+                    """,
+                    (tenant_key, app_id),
+                ).rowcount
+                messages = connection.execute(
+                    """
+                    DELETE FROM im_messages
+                    WHERE tenant_key = ? AND app_id = ?
+                      AND message_id IN (SELECT message_id FROM purge_messages)
+                    """,
+                    (tenant_key, app_id),
+                ).rowcount
+                if target_kind == "chat":
+                    connection.execute(
+                        """
+                        DELETE FROM im_chats
+                        WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                        """,
+                        (tenant_key, app_id, resource_id),
+                    )
+                unreferenced = self._drop_blob_metadata(connection, candidates)
+                counts = {
+                    "messages": messages,
+                    "attachments": attachments,
+                    "checkpoints": checkpoints,
+                    "tasks": tasks,
+                    "runs": runs,
+                    "outbox": outbox,
+                    "blobs": len(unreferenced),
+                }
+                connection.execute(
+                    """
+                    INSERT INTO runtime_admin_audit(
+                        operation, target_kind, target_digest, result_counts, created_at_ms
+                    ) VALUES ('purge', ?, ?, ?, ?)
+                    """,
+                    (
+                        target_kind,
+                        hashlib.sha256(f"{tenant_key}:{app_id}:{resource_id}".encode()).hexdigest(),
+                        json.dumps(counts, sort_keys=True, separators=(",", ":")),
+                        int(time.time() * 1000),
+                    ),
+                )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            deleted = 0
+            reclaimed = 0
+            for blob_id in unreferenced:
+                path = self._blob_path(self.blob_root, blob_id)
+                if path.is_file():
+                    reclaimed += path.stat().st_size
+                    path.unlink()
+                    deleted += 1
+            return PurgeResult(
+                True,
+                target_kind,
+                messages,
+                attachments,
+                checkpoints,
+                tasks,
+                runs,
+                outbox,
+                deleted,
+                reclaimed,
+            )
+
+    @staticmethod
+    def _prepare_purge_tables(
+        connection: sqlite3.Connection,
+        *,
+        target_kind: str,
+        tenant_key: str,
+        app_id: str,
+        resource_id: str,
+    ) -> None:
+        for name in ("purge_messages", "purge_tasks", "purge_runs", "purge_events"):
+            connection.execute(f"DROP TABLE IF EXISTS temp.{name}")
+        connection.execute("CREATE TEMP TABLE purge_messages(message_id TEXT PRIMARY KEY)")
+        if target_kind == "message":
+            connection.execute("INSERT INTO purge_messages VALUES (?)", (resource_id,))
+        else:
+            connection.execute(
+                """
+                INSERT INTO purge_messages
+                SELECT message_id FROM im_messages
+                WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                """,
+                (tenant_key, app_id, resource_id),
+            )
+        connection.execute("CREATE TEMP TABLE purge_tasks(task_id TEXT PRIMARY KEY)")
+        if target_kind == "message":
+            connection.execute(
+                """
+                INSERT INTO purge_tasks
+                SELECT t.task_id FROM runtime_tasks t JOIN runtime_events e
+                  ON e.event_pk = t.event_pk
+                WHERE e.tenant_key = ? AND e.app_id = ?
+                  AND e.resource_kind = 'im.message' AND e.resource_id = ?
+                """,
+                (tenant_key, app_id, resource_id),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO purge_tasks
+                SELECT task_id FROM runtime_tasks WHERE session_key LIKE ?
+                """,
+                (f"{tenant_key}/{app_id}/{resource_id}/%",),
+            )
+        connection.execute("CREATE TEMP TABLE purge_runs(run_id TEXT PRIMARY KEY)")
+        connection.execute(
+            """
+            INSERT INTO purge_runs
+            SELECT run_id FROM runtime_runs
+            WHERE task_id IN (SELECT task_id FROM purge_tasks)
+            """
+        )
+        connection.execute("CREATE TEMP TABLE purge_events(event_pk INTEGER PRIMARY KEY)")
+        connection.execute(
+            """
+            INSERT INTO purge_events
+            SELECT event_pk FROM runtime_tasks
+            WHERE task_id IN (SELECT task_id FROM purge_tasks) AND event_pk IS NOT NULL
+            """
+        )
+        if target_kind == "chat":
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO purge_events
+                SELECT event_pk FROM runtime_events
+                WHERE tenant_key = ? AND app_id = ?
+                  AND resource_kind = 'im.chat' AND resource_id = ?
+                """,
+                (tenant_key, app_id, resource_id),
+            )
+
+    @staticmethod
+    def _drop_blob_metadata(
+        connection: sqlite3.Connection, candidates: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        result: list[str] = []
+        for blob_id in candidates:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM im_attachments WHERE blob_id = ? LIMIT 1", (blob_id,)
+                ).fetchone()
+                is None
+            ):
+                connection.execute("DELETE FROM im_file_blobs WHERE blob_id = ?", (blob_id,))
+                result.append(blob_id)
+        return tuple(result)
+
     @classmethod
     def verify_backup(cls, archive: Path) -> BackupResult:
         archive = cls._absolute(archive, "backup archive")
@@ -300,7 +600,9 @@ class StorageMaintenance:
         )
 
     @staticmethod
-    def as_json(result: StorageStatus | BackupResult | GarbageCollectionResult) -> str:
+    def as_json(
+        result: StorageStatus | BackupResult | GarbageCollectionResult | PurgeResult,
+    ) -> str:
         return json.dumps(asdict(result), ensure_ascii=False, sort_keys=True)
 
     @staticmethod

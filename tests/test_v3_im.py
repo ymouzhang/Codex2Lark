@@ -61,6 +61,7 @@ from codex2lark.runtime.types import (
     RunStatus,
 )
 from codex2lark.storage.blobs import EncryptedBlobStore
+from codex2lark.storage.capacity import StorageCapacityMonitor, StorageCapacityPolicy
 from codex2lark.storage.crypto import EnvelopeCipher, MasterKey
 from codex2lark.storage.database import SQLiteDatabase
 from codex2lark.storage.runtime_store import RuntimeStore
@@ -1001,6 +1002,44 @@ async def test_attachment_ingest_encrypts_parses_and_reuses_managed_blob(
         assert b"private attachment text" not in ciphertext
         blob_file = next((tmp_path / "blobs").rglob("*.blob"))
         assert b"private attachment text" not in blob_file.read_bytes()
+    finally:
+        await database.close()
+
+
+async def test_attachment_hard_pressure_keeps_text_request_usable_without_download(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    await repository.upsert_message(
+        message(
+            attachments=(AttachmentReference("file-key", "file", "notes.txt", "text/plain", 12),)
+        )
+    )
+    cipher = EnvelopeCipher(MasterKey("test", b"i" * 32))
+    downloader = FakeDownloader(b"must not download")
+    capacity = StorageCapacityMonitor(
+        tmp_path.resolve(),
+        StorageCapacityPolicy(
+            maximum_managed_bytes=10 * 1024 * 1024,
+            minimum_free_bytes=10**18,
+        ),
+    )
+    service = AttachmentService(
+        repository,
+        downloader,
+        EncryptedBlobStore(tmp_path / "blobs", cipher),
+        SafeAttachmentParser(),
+        capacity=capacity,
+    )
+    try:
+        loaded = await service.load(
+            AttachmentLoadRequest("tenant-1", "app-1", "oc_group", "om_request", "file-key"),
+            now_ms=200,
+        )
+
+        assert downloader.calls == 0
+        assert loaded.warning_code == "storage_pressure_hard"
+        assert "not downloaded" in loaded.evidence.content
     finally:
         await database.close()
 

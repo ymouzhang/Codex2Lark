@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from codex2lark.core.models import Identity
+from codex2lark.storage.capacity import StorageCapacityPolicy
 from codex2lark.storage.crypto import MasterKey
 
 
@@ -31,6 +32,8 @@ class GatewayConfig:
     openai_base_url: str | None = None
     poll_interval_ms: int = 200
     task_concurrency: int = 4
+    storage_capacity: StorageCapacityPolicy = field(default_factory=StorageCapacityPolicy)
+    max_attachment_bytes: int = 20 * 1024 * 1024
 
     def __post_init__(self) -> None:
         required = (
@@ -41,7 +44,7 @@ class GatewayConfig:
         )
         if any(not value.strip() for value in required):
             raise ValueError("Gateway credentials and model are required")
-        if self.poll_interval_ms < 10 or self.task_concurrency < 1:
+        if self.poll_interval_ms < 10 or self.task_concurrency < 1 or self.max_attachment_bytes < 1:
             raise ValueError("Gateway worker configuration is invalid")
         if not self.data_dir.is_absolute():
             raise ValueError("CODEX2LARK_DATA_DIR must be an absolute path")
@@ -64,6 +67,10 @@ class GatewayConfig:
             openai_base_url=values.get("OPENAI_BASE_URL") or None,
             poll_interval_ms=cls._integer(values, "CODEX2LARK_POLL_INTERVAL_MS", 200),
             task_concurrency=cls._integer(values, "CODEX2LARK_TASK_CONCURRENCY", 4),
+            storage_capacity=StorageCapacityPolicy.from_environment(values),
+            max_attachment_bytes=cls._integer(
+                values, "CODEX2LARK_MAX_ATTACHMENT_BYTES", 20 * 1024 * 1024
+            ),
         )
 
     @staticmethod
