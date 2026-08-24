@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Narrowed parallel delegation to children whose selected capabilities are all
+  read-only. Writer children now execute serially until delegation includes
+  trusted explicit targets and obtains durable resource locks; free-form task
+  prose is never treated as proof of disjoint writes. Implementation area:
+  argument-aware parallel-safety guard in ToolRegistry and DelegateAgentTool.
+
 - Removed the volatile queue between official Feishu long-connection callbacks
   and SQLite admission. Message and bot-added callbacks now return only after
   their idempotent event/task/acknowledgement admission transaction commits;

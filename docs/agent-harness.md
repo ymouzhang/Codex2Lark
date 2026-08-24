@@ -276,6 +276,9 @@ read-only and explicitly `parallel_safe`. Results are reassembled in original
 call order before they enter model context and the checkpoint. A mixed batch,
 an ordinary Feishu mutation, or any undeclared tool executes serially. This
 keeps concurrency a trusted capability property rather than a model request.
+Tools may additionally provide a deterministic argument-aware guard that can
+only narrow their static declaration. `agent.delegate` uses this guard to
+reject parallel batching whenever a requested child tool is not read-only.
 
 Tool execution passes through hooks inspired by Pi and Codex policy layers:
 

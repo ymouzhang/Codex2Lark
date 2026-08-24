@@ -125,10 +125,17 @@ class ToolRegistry:
         if len(calls) < 2:
             return False
         try:
-            definitions = tuple(self.require(call.tool_id).definition for call in calls)
+            tools = tuple(self.require(call.tool_id) for call in calls)
         except LookupError:
             return False
-        return all(item.effect is ToolEffect.READ and item.parallel_safe for item in definitions)
+        for tool, call in zip(tools, calls, strict=True):
+            definition = tool.definition
+            if definition.effect is not ToolEffect.READ or not definition.parallel_safe:
+                return False
+            guard = getattr(tool, "parallel_safe_for", None)
+            if callable(guard) and not bool(guard(call.arguments)):
+                return False
+        return True
 
 
 class ToolExecutor:

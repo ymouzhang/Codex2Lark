@@ -294,6 +294,12 @@ class MultiAgentCoordinator:
             "artifact": artifact.payload,
         }
 
+    def tools_are_read_only(self, tool_ids: tuple[str, ...]) -> bool:
+        return all(
+            definition.effect is ToolEffect.READ
+            for definition in self._child_tools.definitions(tool_ids)
+        )
+
     @staticmethod
     def _artifact_for(node_id: str, artifacts: list[Artifact]) -> Artifact | None:
         return next((item for item in artifacts if item.producer_node_id == node_id), None)
@@ -365,6 +371,13 @@ class DelegateAgentTool:
         )
         if not set(_delegated_tool_ids(arguments)).issubset(self.allowed_tool_ids):
             raise PermissionError("delegated tool IDs exceed the configured allowlist")
+
+    def parallel_safe_for(self, arguments: dict[str, object]) -> bool:
+        try:
+            tool_ids = _delegated_tool_ids(arguments)
+        except ValueError:
+            return False
+        return self.coordinator.tools_are_read_only(tool_ids)
 
     async def execute(
         self, arguments: dict[str, object], context: ToolContext

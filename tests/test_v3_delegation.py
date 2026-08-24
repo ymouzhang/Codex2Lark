@@ -145,6 +145,7 @@ async def test_delegate_tool_runs_separate_child_harness_and_returns_typed_artif
         )
 
         tool.validate(arguments)
+        assert tool.parallel_safe_for(arguments) is True
         observation = await tool.execute(arguments, context)
 
         assert observation["artifact_type"] == "ResearchBundle"
@@ -161,6 +162,26 @@ async def test_delegate_tool_runs_separate_child_harness_and_returns_typed_artif
         assert graph is not None and graph.status is GraphStatus.COMPLETED
     finally:
         await database.close()
+
+
+def test_delegate_parallel_guard_rejects_writer_children() -> None:
+    class GuardCoordinator:
+        def tools_are_read_only(self, tool_ids: tuple[str, ...]) -> bool:
+            return tool_ids == ("feishu.docs.inspect",)
+
+    tool = DelegateAgentTool(  # type: ignore[arg-type]
+        GuardCoordinator(),
+        ("feishu.docs.inspect", "feishu.docs.edit"),
+    )
+    base = {
+        "name": "worker",
+        "role": "author",
+        "task_brief": "Handle one bounded item.",
+        "expected_output_type": "Result",
+    }
+
+    assert tool.parallel_safe_for({**base, "tool_ids": ["feishu.docs.inspect"]}) is True
+    assert tool.parallel_safe_for({**base, "tool_ids": ["feishu.docs.edit"]}) is False
 
 
 async def test_prepare_and_finish_are_replay_safe(tmp_path: Path) -> None:
