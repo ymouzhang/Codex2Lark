@@ -13,19 +13,16 @@ having types or isolated primitives is not enough.
 | Area | Status | Shipped production path | Open contract work |
 | --- | --- | --- | --- |
 | Kernel and storage | delivered | SQLite admission, leases, encrypted blobs, idempotency, outbox, retention GC, backup/verify/restore, resumable wrapping-key rotation, one-process data-directory locking, disk high-water attachment admission, message/chat/tenant/all-data purge, and content-safe pressure status | none for the V3 contract |
-| Agent Harness | delivered | versioned resources, model/tool loop, checkpoints, budgets, policy gate, write verification, deterministic recovery, durable safe-boundary steering/follow-up/interrupt/cancel, requester-bound destructive-tool approvals, and observable complete-turn compaction evals | none for the V3 contract |
-| Multi-Agent supervisor | delivered | durable rooted graphs, bounded delegation, child Harnesses, idempotent typed mailboxes and root collaboration tools, typed artifacts, same-requester cancellation cascade, safe parallel readers/writers, live and logical target locks, exact child write scopes, root-only completion, 64-group graph fairness, and three-worker restart-chaos acceptance | none for the V3 contract |
-| Feishu IM | delivered | service-native long connection, durable pre-ACK admission, exact mentions, immediate bot-added membership, live context, encrypted attachments, acknowledgement/progress/approval/terminal outbox replies, hard-pressure metadata fallback, edit/recall/access-loss invalidation, and an executable content-safe live multi-group release gate | no implementation work; each deployment must still collect its own opt-in live evidence |
-| Feishu authoring | delivered | managed-folder Drive/Docs/Whiteboard/Sheets/Base and group-digest semantic tools, deterministic write claims, full group create/edit acceptance fixtures, and live read-back verification | none for the V3 contract |
-| Operations and release | delivered | readiness, process control, lifecycle metrics, retention/purge, backup/verify/restore, key rotation, sticky canary rollout, 64-group load, multi-worker restart chaos, and encrypted pending-task recovery rehearsal | no implementation work; production release still requires deployment-specific live evidence |
+| Agent Harness | partial | versioned resources, model/tool loop, checkpoints, token/tool/write/cost accounting, policy gate, write verification, deterministic recovery, durable controls/approvals, and compaction evals | wall-time enforcement, mandatory verification after attempted writes, and policy/tool-schema checkpoint binding |
+| Multi-Agent supervisor | partial | durable rooted graphs, bounded delegation, typed mailboxes/artifacts, child write locks, cancellation, 64-group fairness, and restart chaos | root/cross-graph write locking and hierarchical tenant/app/group/plugin/provider execution caps |
+| Feishu IM | partial | service-native long connection, durable pre-ACK admission, mentions, membership, encrypted context/attachments, replies, lifecycle invalidation, and live-gate observer | explicit enabled-group/actor admission policy plus bounded source supervision |
+| Feishu authoring | partial | managed-folder Docs/Whiteboard/Sheets/Base/group-digest tools, create/edit fixtures, and read-back verification | current-chat binding for group digest and separate Drive/Sheets/Base/Whiteboard plugin boundaries |
+| Operations and release | partial | process control, metrics, purge, backup/restore, key rotation, canary rollout, load/restart/recovery tests | bounded in-flight shutdown, complete live readiness/trace evidence, and closure of [the completion audit](v3-completion-audit.md) |
 
-Therefore the repository implements the V3 acceptance envelope in
-[requirements.md](requirements.md). This statement describes shipped code and
-deterministic acceptance coverage, not a claim that an arbitrary Feishu tenant
-has passed its release gate. A deployment is release-qualified only after its
-operator runs the opt-in live multi-group gate and any capability-specific live
-read-back required by the change. Operator documentation describes only shipped
-behavior.
+The repository is a strong V3 implementation baseline, but the completion claim
+is withdrawn until every row in [the completion audit](v3-completion-audit.md)
+has production-path evidence. Deployment-specific live evidence remains a
+separate release qualification after implementation completion.
 
 ## Design gate: accepted before implementation
 

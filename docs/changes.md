@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Reopened the V3 completion claim after a requirement-by-requirement audit.
+  Added `v3-completion-audit.md` with concrete contradictions and required
+  evidence for admission authorization, hierarchical limits, wall-time and
+  verification enforcement, root locks, cross-group authority, plugin
+  isolation, checkpoint invalidation, bounded shutdown/source supervision,
+  capability boundaries, and readiness/trace coverage. Implementation area:
+  the remaining V3 workstreams listed in that audit.
+
 - Completed the V3 implementation audit. The roadmap now records delivered IM,
   authoring, and operations paths while separating shipped contract completion
   from tenant-specific live release evidence. The trusted internal lark-cli

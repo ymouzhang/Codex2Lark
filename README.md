@@ -48,11 +48,11 @@ ChatGPT / Codex
 
 The shipped runtime includes the local stdio MCP server and the V3 Gateway's
 durable mention-to-model-to-reply path, bounded multi-Agent delegation, and
-verified semantic authoring tools. The V3 implementation and deterministic
-acceptance envelope are complete. Each production deployment must still collect
-its own opt-in live multi-group and capability read-back evidence; the
-[delivery roadmap](docs/roadmap.md) distinguishes implementation completion
-from deployment release qualification.
+verified semantic authoring tools. A strict completion review found remaining
+normative work, so V3 is not yet declared complete. The
+[completion audit](docs/v3-completion-audit.md) records each missing production
+contract and its required evidence; the [delivery roadmap](docs/roadmap.md)
+tracks implementation separately from deployment release qualification.
 
 ## Quick start
 
