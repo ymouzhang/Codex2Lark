@@ -654,6 +654,61 @@ async def test_harness_discards_stale_source_checkpoint_and_rebuilds() -> None:
     assert all(not message.tool_calls for message in sent.messages)
 
 
+async def test_harness_discards_checkpoint_after_policy_change() -> None:
+    sessions = InMemorySessionStore()
+    first, _ = build_harness(
+        FakeModel(
+            [
+                ModelResponse("", (ToolCall("call-1", "docs.create", {"title": "A"}),)),
+                ConnectionError("simulated worker loss"),
+            ]
+        ),
+        sessions=sessions,
+    )
+    with pytest.raises(ConnectionError, match="worker loss"):
+        await first.run(request(), definition(require_verified=False), now_ms=100)
+
+    recovered_model = FakeModel([ModelResponse("Rebuilt under new policy.")])
+    recovered, _ = build_harness(recovered_model, sessions=sessions)
+    changed = replace(definition(require_verified=False), policy_version=2)
+    outcome = await recovered.run(request(), changed, resume=True, now_ms=200)
+
+    assert outcome.status is RunStatus.COMPLETED
+    assert any(event.event_type == "checkpoint_invalidated" for event in sessions.events["run-1"])
+    sent = recovered_model.requests[0]
+    assert isinstance(sent, ModelRequest)
+    assert all(not message.tool_calls for message in sent.messages)
+
+
+async def test_harness_discards_checkpoint_after_tool_schema_change() -> None:
+    sessions = InMemorySessionStore()
+    first, _ = build_harness(
+        FakeModel(
+            [
+                ModelResponse("", (ToolCall("call-1", "docs.create", {"title": "A"}),)),
+                ConnectionError("simulated worker loss"),
+            ]
+        ),
+        sessions=sessions,
+    )
+    with pytest.raises(ConnectionError, match="worker loss"):
+        await first.run(request(), definition(require_verified=False), now_ms=100)
+
+    changed_tool = FakeWriteTool()
+    changed_tool.definition = replace(changed_tool.definition, version=2)
+    recovered_model = FakeModel([ModelResponse("Rebuilt for the new tool schema.")])
+    recovered, _ = build_harness(recovered_model, tool=changed_tool, sessions=sessions)
+    outcome = await recovered.run(
+        request(), definition(require_verified=False), resume=True, now_ms=200
+    )
+
+    assert outcome.status is RunStatus.COMPLETED
+    invalidated = [
+        event for event in sessions.events["run-1"] if event.event_type == "checkpoint_invalidated"
+    ]
+    assert invalidated[-1].payload == {"reason": "checkpoint tool schema is incompatible"}
+
+
 async def test_harness_redacts_nonpersistable_tool_observation_only_in_checkpoint() -> None:
     tool = FakeWriteTool()
     tool.checkpoint_safe_observation = False

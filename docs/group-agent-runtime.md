@@ -370,6 +370,8 @@ downloads before it threatens Gateway availability.
 
 Deletion, recall, retention expiry, and access loss must remove derived parser
 content and context checkpoints as well as the source row and unreferenced blob.
+Garbage collection deletes checkpoints referencing an expiring message or its
+attachments in the same transaction before deleting that source content.
 
 ## 9. Context management
 

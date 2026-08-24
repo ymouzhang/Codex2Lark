@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined complete checkpoint invalidation before implementation. Checkpoints
+  bind policy version and the canonical allowed-tool schema fingerprint in
+  addition to existing Agent/resource/source/compactor versions; retention GC
+  removes checkpoints derived from expiring messages before deleting sources.
+  Implementation area: tool registry fingerprinting, Harness validation,
+  encrypted checkpoint serialization, storage GC, and recovery/retention tests.
+
 - Defined group-bound capability authority before implementation. Runtime chat
   digest calls derive their group exclusively from trusted `ToolContext`, remove
   model-selected chat fields from the schema, and reject missing/cross-group

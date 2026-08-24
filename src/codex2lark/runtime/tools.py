@@ -172,6 +172,22 @@ class ToolRegistry:
                 return False
         return True
 
+    def schema_fingerprint(self, allowed_ids: tuple[str, ...]) -> str:
+        canonical = [
+            {
+                "tool_id": definition.tool_id,
+                "version": definition.version,
+                "effect": definition.effect.value,
+                "parallel_safe": definition.parallel_safe,
+                "input_schema": definition.input_schema,
+            }
+            for definition in self.definitions(allowed_ids)
+        ]
+        encoded = json.dumps(
+            canonical, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+        ).encode()
+        return hashlib.sha256(encoded).hexdigest()
+
 
 class ToolExecutor:
     def __init__(

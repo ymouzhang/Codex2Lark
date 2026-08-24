@@ -382,6 +382,31 @@ async def test_gc_deletes_due_content_but_preserves_shared_blob(tmp_path: Path) 
                 INSERT INTO runtime_idempotency VALUES (
                     'expired', 'test', 'completed', 'owner', NULL, 10, 1, 1
                 );
+                INSERT INTO runtime_events(
+                    event_id, plugin_id, event_type, tenant_key, app_id,
+                    occurred_at_ms, received_at_ms, schema_version, resource_kind,
+                    resource_id, trace_id, status, created_at_ms
+                ) VALUES (
+                    'gc-event', 'feishu-im', 'im.message.receive_v1', 'tenant', 'app',
+                    1, 1, 1, 'im.message', 'due', 'gc-trace', 'admitted', 1
+                );
+                INSERT INTO runtime_tasks(
+                    task_id, event_pk, plugin_id, command_type, session_key, priority,
+                    payload_ciphertext, state, available_at_ms, attempt_count,
+                    max_attempts, created_at_ms, updated_at_ms
+                ) SELECT 'gc-task', event_pk, 'feishu-im', 'im.handle_mention',
+                    'tenant/app/chat/root', 0, X'01', 'leased', 1, 1, 3, 1, 1
+                  FROM runtime_events WHERE event_id = 'gc-event';
+                INSERT INTO runtime_runs VALUES (
+                    'gc-run', 'gc-task', 'tenant/app/chat/root', 'agent', 1, 1,
+                    'running', 1, 1
+                );
+                INSERT INTO runtime_checkpoints VALUES (
+                    'gc-run', X'01', 2, 'agent', 1, 1, 1, 1
+                );
+                INSERT INTO runtime_checkpoint_sources VALUES (
+                    'gc-run', 'im.message:due', '1'
+                );
                 """
             )
         )
@@ -393,6 +418,7 @@ async def test_gc_deletes_due_content_but_preserves_shared_blob(tmp_path: Path) 
     assert first.messages_deleted == 1
     assert first.attachments_deleted == 1
     assert first.idempotency_deleted == 1
+    assert first.checkpoints_deleted == 1
     assert first.blobs_deleted == 0
     assert blob.exists()
 

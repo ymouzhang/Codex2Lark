@@ -59,6 +59,7 @@ class GarbageCollectionResult:
     attachments_deleted: int
     artifacts_deleted: int
     idempotency_deleted: int
+    checkpoints_deleted: int
     blobs_deleted: int
     bytes_reclaimed: int
 
@@ -245,6 +246,32 @@ class StorageMaintenance:
             ).fetchall()
             candidates = {str(row[0]) for row in candidate_rows}
             connection.execute("BEGIN IMMEDIATE")
+            checkpoints = connection.execute(
+                """
+                DELETE FROM runtime_checkpoints WHERE run_id IN (
+                    SELECT DISTINCT s.run_id
+                    FROM runtime_checkpoint_sources s
+                    JOIN runtime_runs r ON r.run_id = s.run_id
+                    WHERE EXISTS (
+                        SELECT 1 FROM im_messages m
+                        WHERE m.expires_at_ms IS NOT NULL AND m.expires_at_ms <= ?
+                          AND r.session_key LIKE m.tenant_key || '/' || m.app_id || '/%'
+                          AND (
+                            s.source_ref = 'im.message:' || m.message_id
+                            OR s.source_ref LIKE 'im.attachment:' || m.message_id || ':%'
+                          )
+                    ) OR EXISTS (
+                        SELECT 1 FROM im_attachments a
+                        WHERE a.expires_at_ms IS NOT NULL AND a.expires_at_ms <= ?
+                          AND r.session_key LIKE a.tenant_key || '/' || a.app_id || '/%'
+                          AND s.source_ref = 'im.attachment:' || a.message_id || ':'
+                              || a.resource_key
+                    )
+                    LIMIT ?
+                )
+                """,
+                (due, due, batch_size),
+            ).rowcount
             event_payloads = connection.execute(
                 """
                 UPDATE runtime_events SET payload_ciphertext = NULL
@@ -324,6 +351,7 @@ class StorageMaintenance:
             attachments,
             artifacts,
             idempotency,
+            checkpoints,
             deleted,
             reclaimed,
         )

@@ -360,6 +360,8 @@ class SQLiteSessionStore:
             "compactor_version": checkpoint.compactor_version,
             "applied_control_ids": list(checkpoint.applied_control_ids),
             "unresolved_external_effects": list(checkpoint.unresolved_external_effects),
+            "policy_version": checkpoint.policy_version,
+            "tool_schema_fingerprint": checkpoint.tool_schema_fingerprint,
         }
 
     @staticmethod
@@ -405,6 +407,8 @@ class SQLiteSessionStore:
             unresolved_external_effects=tuple(
                 str(item) for item in value.get("unresolved_external_effects", [])
             ),
+            policy_version=int(value.get("policy_version", 0)),
+            tool_schema_fingerprint=str(value.get("tool_schema_fingerprint", "")),
         )
 
     @staticmethod

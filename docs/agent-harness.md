@@ -74,7 +74,7 @@ ToolResult      call ID, typed observation, error category, effect class, verifi
 RunEvent        run ID, monotonic sequence, event type, encrypted typed payload, source time
 Checkpoint      run ID, definition/resource versions, next turn, messages, verified effects,
                 unresolved write effects, blockers, source versions, budget snapshot,
-                compactor version
+                policy version, tool-schema fingerprint, compactor version
 AgentOutcome    terminal state, user-visible summary, verified resource references, warnings
 ```
 
@@ -107,6 +107,12 @@ least one verified external effect.
 A running turn never silently changes definition version. New events may use a
 new version after rollout; an in-flight run remains reproducible against the
 version it started with.
+
+A checkpoint is resumable only when its Agent definition, policy version,
+resource versions, source versions, compactor version, and canonical fingerprint
+of every allowed tool's ID/version/effect/schema all match the active runtime.
+Any mismatch discards the checkpoint and rebuilds context; old serialized tool
+calls are never replayed against a new authority or argument contract.
 
 ### AgentMessage
 

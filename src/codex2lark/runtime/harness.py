@@ -126,6 +126,7 @@ class AgentHarness:
         token = cancellation or CancellationToken()
         clock_ms = now_ms if now_ms is not None else int(time.time() * 1000)
         loaded = self._resources.load(definition.resource_packages)
+        tool_schema_fingerprint = self._tools.schema_fingerprint(definition.tool_ids)
         ledger = BudgetLedger.from_limits(list(definition.budget_limits))
         journal: tuple[ModelMessage, ...] = ()
         verified: tuple[VerificationRecord, ...] = ()
@@ -144,7 +145,11 @@ class AgentHarness:
             if checkpoint is not None:
                 try:
                     self._validate_checkpoint(
-                        checkpoint, definition, loaded.versions, source_versions
+                        checkpoint,
+                        definition,
+                        loaded.versions,
+                        source_versions,
+                        tool_schema_fingerprint,
                     )
                 except ValueError as exc:
                     await self._sessions.discard_checkpoint(request.run_id)
@@ -294,6 +299,8 @@ class AgentHarness:
                             compactor_version=definition.compactor_version,
                             applied_control_ids=tuple(sorted(applied_control_ids)),
                             unresolved_external_effects=unresolved_external_effects,
+                            policy_version=definition.policy_version,
+                            tool_schema_fingerprint=tool_schema_fingerprint,
                         )
                         await self._sessions.save_checkpoint(checkpoint, now_ms=clock_ms)
                         await self._acknowledge_controls(
@@ -410,6 +417,8 @@ class AgentHarness:
                     compactor_version=definition.compactor_version,
                     applied_control_ids=tuple(sorted(applied_control_ids)),
                     unresolved_external_effects=unresolved_external_effects,
+                    policy_version=definition.policy_version,
+                    tool_schema_fingerprint=tool_schema_fingerprint,
                 )
                 await self._sessions.save_checkpoint(checkpoint, now_ms=clock_ms)
                 await self._acknowledge_controls(request.task_id, pending_ack_ids, now_ms=clock_ms)
@@ -571,6 +580,7 @@ class AgentHarness:
         definition: AgentDefinition,
         resource_versions: dict[str, str],
         source_versions: dict[str, str],
+        tool_schema_fingerprint: str,
     ) -> None:
         if (checkpoint.agent_id, checkpoint.agent_version) != (
             definition.agent_id,
@@ -583,6 +593,10 @@ class AgentHarness:
             raise ValueError("checkpoint source evidence is stale")
         if checkpoint.compactor_version != definition.compactor_version:
             raise ValueError("checkpoint compactor is incompatible")
+        if checkpoint.policy_version != definition.policy_version:
+            raise ValueError("checkpoint policy is incompatible")
+        if checkpoint.tool_schema_fingerprint != tool_schema_fingerprint:
+            raise ValueError("checkpoint tool schema is incompatible")
 
     @staticmethod
     def _checkpoint_messages(
