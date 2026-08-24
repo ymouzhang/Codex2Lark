@@ -18,6 +18,7 @@ from codex2lark.capabilities.im.attachments import (
 from codex2lark.capabilities.im.channel_adapter import (
     ChannelMessageNormalizer,
     OfficialChannelEventSource,
+    _DurableDispatcherBridge,
 )
 from codex2lark.capabilities.im.context_provider import (
     IMContextProvider,
@@ -248,6 +249,65 @@ def test_channel_normalizer_uses_raw_explicit_mentions_and_strips_bot_placeholde
     assert normalized.attachments[0].filename == "plan.docx"
 
 
+def raw_channel_event() -> dict[str, Any]:
+    return {
+        "header": {
+            "event_id": "event-raw",
+            "tenant_key": "tenant-1",
+            "create_time": "1720000000000",
+        },
+        "event": {
+            "sender": {
+                "sender_type": "user",
+                "sender_id": {"open_id": "ou_user"},
+            },
+            "message": {
+                "chat_id": "oc_group",
+                "chat_type": "group",
+                "message_id": "om_raw",
+                "message_type": "text",
+                "create_time": "1720000000000",
+                "content": '{"text":"@_user_1 create it"}',
+                "mentions": [
+                    {
+                        "key": "@_user_1",
+                        "id": {"open_id": "ou_bot"},
+                        "name": "Codex2Lark",
+                    }
+                ],
+            },
+        },
+    }
+
+
+def test_raw_channel_normalizer_preserves_durable_admission_fields() -> None:
+    normalized = ChannelMessageNormalizer(app_id="app-1", bot_open_id="ou_bot").normalize_raw(
+        raw_channel_event(), received_at_ms=1_720_000_000_100
+    )
+
+    assert normalized.event_id == "event-raw"
+    assert normalized.message_id == "om_raw"
+    assert normalized.sender_id == "ou_user"
+    assert normalized.body_text == "create it"
+    assert normalized.explicitly_mentions("ou_bot")
+
+
+async def test_pinned_channel_dispatcher_waits_for_durable_handler() -> None:
+    bridge = _DurableDispatcherBridge(lambda value: value)
+    completed: list[str] = []
+
+    async def admit(raw: dict[str, Any]) -> None:
+        await asyncio.sleep(0.01)
+        completed.append(str(raw["header"]["event_id"]))
+
+    bridge.bind(admit, None)
+
+    bridge.dispatch_message(raw_channel_event())
+
+    assert completed == ["event-raw"]
+    bridge.close()
+
+
 class FakeAdmission:
     def __init__(self) -> None:
         self.messages: list[IncomingMessage] = []
@@ -281,7 +341,7 @@ class FakeChannel:
         return self.send_result
 
 
-async def test_official_channel_source_queues_and_normalizes_callbacks() -> None:
+async def test_official_channel_source_normalizes_and_admits_before_callback_returns() -> None:
     channel = FakeChannel()
     admission = FakeAdmission()
     source = OfficialChannelEventSource(
@@ -289,15 +349,10 @@ async def test_official_channel_source_queues_and_normalizes_callbacks() -> None
         admission,
         app_id="app-1",
         received_at_ms=lambda: 500,
-        capacity=1,
     )
     await source.start()
     try:
         await channel.handlers["message"](channel_message())
-        for _ in range(100):
-            if admission.messages:
-                break
-            await asyncio.sleep(0)
         assert admission.messages[0].received_at_ms == 500
     finally:
         await source.stop()
@@ -311,7 +366,7 @@ class FakeBotAddedHandler:
         self.events.append(event)
 
 
-async def test_official_channel_source_queues_bot_added_callbacks() -> None:
+async def test_official_channel_source_durably_handles_bot_added_before_return() -> None:
     channel = FakeChannel()
     membership = FakeBotAddedHandler()
     source = OfficialChannelEventSource(
@@ -320,17 +375,44 @@ async def test_official_channel_source_queues_bot_added_callbacks() -> None:
         app_id="app-1",
         received_at_ms=lambda: 500,
         bot_added_handler=membership,
-        capacity=1,
     )
     event = SimpleNamespace(chat_id="oc_group")
     await source.start()
     try:
         await channel.handlers["botAdded"](event)
-        for _ in range(100):
-            if membership.events:
-                break
-            await asyncio.sleep(0)
         assert membership.events == [event]
+    finally:
+        await source.stop()
+
+
+async def test_channel_callback_backpressures_until_admission_finishes() -> None:
+    class BlockingAdmission(FakeAdmission):
+        def __init__(self) -> None:
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def admit(self, incoming: IncomingMessage) -> object:
+            self.entered.set()
+            await self.release.wait()
+            return await super().admit(incoming)
+
+    channel = FakeChannel()
+    admission = BlockingAdmission()
+    source = OfficialChannelEventSource(
+        channel,
+        admission,
+        app_id="app-1",
+        received_at_ms=lambda: 500,
+    )
+    await source.start()
+    try:
+        callback = asyncio.create_task(channel.handlers["message"](channel_message()))
+        await admission.entered.wait()
+        assert not callback.done()
+        admission.release.set()
+        await callback
+        assert len(admission.messages) == 1
     finally:
         await source.stop()
 

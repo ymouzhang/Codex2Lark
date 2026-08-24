@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Removed the volatile queue between official Feishu long-connection callbacks
+  and SQLite admission. Message and bot-added callbacks now return only after
+  their idempotent event/task/acknowledgement admission transaction commits;
+  slow Agent work remains asynchronous. Implementation area: official Channel
+  event source lifecycle and admission tests.
+
 - Defined explicit `parallel_safe` tool metadata and deterministic concurrent
   execution for all-read, all-safe call batches; enabled it for independent
   `agent.delegate` calls while keeping Feishu mutation tools serial and

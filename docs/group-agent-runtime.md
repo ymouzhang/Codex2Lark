@@ -44,11 +44,11 @@ The Gateway consumes at least these independent event keys:
 
 One event-handler failure must not stop the other event path. The official
 Channel SDK owns one outbound WebSocket connection and resolves bot identity
-before readiness. Runtime-owned bounded queues isolate its message and
-membership callbacks; raw payloads are never exposed to the model.
+before readiness. Its message and membership callbacks perform only bounded
+normalization and durable admission; raw payloads are never exposed to the model.
 
-When `botAdded` arrives, the callback enqueues a normalized reference and
-returns. The membership consumer durably admits one
+When `botAdded` arrives, the callback durably admits a normalized reference and
+returns after that transaction commits. Admission creates one
 `im.ensure_owner_membership` task keyed by tenant/app/event. The task uses the
 operator-bound lark-cli identities to inspect members, add the current
 authenticated user only when absent, and verify user access to the group.
@@ -98,10 +98,22 @@ Ignored events return a typed reason and create neither a task nor an outbox
 intent.
 
 The Channel adapter registers only message and bot-membership callbacks. A
-callback converts the SDK value into the canonical inbound value and submits it
-to a bounded Runtime-owned queue; it never calls the model or performs document
-work. Queue saturation rejects the callback with a content-free diagnostic so
-the source can redeliver instead of silently dropping accepted work.
+callback converts the SDK value into the canonical inbound value and returns
+only after the SQLite transaction containing event deduplication, task creation,
+and acknowledgement intent commits. There is no process-local pre-admission
+queue whose accepted contents could disappear on process exit. Concurrent SDK
+callbacks may wait briefly on the single SQLite actor, but never call the model
+or perform attachment parsing, context backfill, document, or Agent work.
+Backpressure therefore remains at the upstream callback boundary.
+
+The pinned Channel SDK normally schedules its public async handler after its
+WebSocket dispatcher returns. The production adapter therefore binds at the
+pinned P2 dispatcher method, converts the raw SDK model to the canonical value,
+and blocks that dispatcher on a dedicated admission thread for at most 25
+seconds. A committed admission returns normally; validation, storage, or timeout
+failure propagates to the dispatcher so the WebSocket response is non-success
+and Feishu can redeliver. This narrow version-coupled adapter is covered by a
+contract test and must be re-audited before changing `lark-channel-sdk`.
 
 The IM outbox publisher accepts only typed acknowledgement, progress, approval,
 and terminal payloads. It replies to the source `message_id`, preserves thread

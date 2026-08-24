@@ -1,14 +1,63 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any, Protocol, cast
 
 from .models import AttachmentReference, IncomingMessage, Mention
 
 logger = logging.getLogger(__name__)
+
+
+class _DurableDispatcherBridge:
+    def __init__(self, converter: Callable[[object], object]) -> None:
+        self._converter = converter
+        self._message: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        self._bot_added: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="codex2lark-admission"
+        )
+
+    def bind(
+        self,
+        message: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        bot_added: Callable[[dict[str, Any]], Awaitable[None]] | None,
+    ) -> None:
+        self._message = message
+        self._bot_added = bot_added
+
+    def dispatch_message(self, data: object) -> None:
+        self._dispatch(self._message, data, "message")
+
+    def dispatch_bot_added(self, data: object) -> None:
+        self._dispatch(self._bot_added, data, "botAdded")
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=True, cancel_futures=True)
+
+    def _dispatch(
+        self,
+        handler: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        data: object,
+        event_name: str,
+    ) -> None:
+        if handler is None:
+            raise RuntimeError(f"durable {event_name} admission is not ready")
+        raw = self._converter(data)
+        if not isinstance(raw, dict):
+            raise ValueError(f"durable {event_name} event is not an object")
+
+        async def invoke() -> None:
+            await handler(raw)
+
+        future: concurrent.futures.Future[None] = self._executor.submit(
+            lambda: asyncio.run(invoke())
+        )
+        future.result(timeout=25)
 
 
 class ChannelPort(Protocol):
@@ -46,10 +95,38 @@ def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
         SecurityConfig,
         TextBatchConfig,
     )
+    from lark_channel.channel import _coerce  # type: ignore[import-untyped]
+
+    class DurableAdmissionChannel(FeishuChannel):  # type: ignore[misc]
+        def __init__(self, **parameters: object) -> None:
+            super().__init__(**parameters)
+            self._durable_bridge = _DurableDispatcherBridge(_coerce.obj_to_dict)
+
+        def bind_durable_handlers(
+            self,
+            message: Callable[[dict[str, Any]], Awaitable[None]] | None,
+            bot_added: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        ) -> None:
+            self._durable_bridge.bind(message, bot_added)
+
+        def _on_p2_im_message_receive_v1(self, data: object) -> None:
+            self._durable_bridge.dispatch_message(data)
+
+        def _on_p2_bot_added(self, data: object) -> None:
+            self._durable_bridge.dispatch_bot_added(data)
+
+        async def disconnect(self) -> None:
+            try:
+                await super().disconnect()
+            finally:
+                self.close_durable_bridge()
+
+        def close_durable_bridge(self) -> None:
+            self._durable_bridge.close()
 
     return cast(
         ChannelPort,
-        FeishuChannel(
+        DurableAdmissionChannel(
             app_id=app_id,
             app_secret=app_secret,
             transport="ws",
@@ -139,6 +216,58 @@ class ChannelMessageNormalizer:
             updated_at_ms=updated_at_ms,
         )
 
+    def normalize_raw(self, raw: dict[str, Any], *, received_at_ms: int) -> IncomingMessage:
+        header = self._mapping(raw.get("header"))
+        event = self._mapping(raw.get("event"))
+        message = self._mapping(event.get("message"))
+        sender = self._mapping(event.get("sender"))
+        sender_id = self._mapping(sender.get("sender_id"))
+        content = self._mapping_json(message.get("content"))
+        mentions = self._mentions(message.get("mentions"))
+        body = self._text(content.get("text"))
+        raw_mentions = message.get("mentions")
+        for item in raw_mentions if isinstance(raw_mentions, list) else ():
+            mention = self._mapping(item)
+            identity = self._mapping(mention.get("id"))
+            if identity.get("open_id") == self._bot_open_id:
+                key = self._text(mention.get("key"))
+                if key:
+                    body = body.replace(key, "")
+        message_type = self._text(message.get("message_type")) or "unknown"
+        attachments: list[AttachmentReference] = []
+        resource_key = self._text(content.get("file_key") or content.get("image_key"))
+        if resource_key:
+            attachments.append(
+                AttachmentReference(
+                    resource_key,
+                    "image" if message_type == "image" else "file",
+                    self._optional_text(content.get("file_name")),
+                )
+            )
+        return IncomingMessage(
+            event_id=self._required_text(header.get("event_id"), "event_id"),
+            tenant_key=self._required_text(header.get("tenant_key"), "tenant_key"),
+            app_id=self._app_id,
+            chat_id=self._required_text(message.get("chat_id"), "chat_id"),
+            chat_type=self._text(message.get("chat_type")) or "unknown",
+            message_id=self._required_text(message.get("message_id"), "message_id"),
+            message_type=message_type,
+            sender_id=self._required_text(
+                sender_id.get("open_id") or sender_id.get("user_id"), "sender_id"
+            ),
+            sender_type=self._text(sender.get("sender_type")) or "unknown",
+            sender_name=None,
+            body_text=" ".join(body.split()),
+            mentions=mentions,
+            attachments=tuple(attachments),
+            occurred_at_ms=self._timestamp_ms(message.get("create_time")),
+            received_at_ms=received_at_ms,
+            thread_id=self._optional_text(message.get("thread_id")),
+            root_id=self._optional_text(message.get("root_id")),
+            parent_id=self._optional_text(message.get("parent_id")),
+            updated_at_ms=self._optional_timestamp_ms(message.get("update_time")),
+        )
+
     def _body_text(self, value: object, wire_message: dict[str, Any], raw_mentions: object) -> str:
         raw_content = wire_message.get("content")
         content: object = raw_content
@@ -201,6 +330,18 @@ class ChannelMessageNormalizer:
         return value if isinstance(value, dict) else {}
 
     @staticmethod
+    def _mapping_json(value: object) -> dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        return {}
+
+    @staticmethod
     def _text(value: object) -> str:
         return value if isinstance(value, str) else ""
 
@@ -241,31 +382,26 @@ class OfficialChannelEventSource:
         app_id: str,
         received_at_ms: Callable[[], int],
         bot_added_handler: BotAddedHandler | None = None,
-        capacity: int = 256,
     ) -> None:
-        if capacity < 1:
-            raise ValueError("Channel event capacity must be positive")
         self._channel = channel
         self._admission = admission
         self._app_id = app_id
         self._received_at_ms = received_at_ms
         self._bot_added_handler = bot_added_handler
-        self._queue: asyncio.Queue[object] = asyncio.Queue(capacity)
-        self._membership_queue: asyncio.Queue[object] = asyncio.Queue(capacity)
-        self._worker: asyncio.Task[None] | None = None
-        self._membership_worker: asyncio.Task[None] | None = None
+        self._started = False
+        self._ready = asyncio.Event()
         self._normalizer: ChannelMessageNormalizer | None = None
 
     async def start(self) -> None:
-        if self._worker is not None:
+        if self._started:
             raise RuntimeError("official Channel source is already running")
-        self._channel.on("message", self._on_message)
-        if self._bot_added_handler is not None:
-            self._channel.on("botAdded", self._on_bot_added)
-            self._membership_worker = asyncio.create_task(
-                self._consume_membership(), name="feishu-im-membership-admission"
-            )
-        self._worker = asyncio.create_task(self._consume(), name="feishu-im-admission")
+        self._started = True
+        self._ready.clear()
+        durable_binder = getattr(self._channel, "bind_durable_handlers", None)
+        if not callable(durable_binder):
+            self._channel.on("message", self._on_message)
+            if self._bot_added_handler is not None:
+                self._channel.on("botAdded", self._on_bot_added)
         try:
             await self._channel.connect_until_ready(timeout=30.0)
             identity = self._channel.bot_identity
@@ -275,71 +411,58 @@ class OfficialChannelEventSource:
             self._normalizer = ChannelMessageNormalizer(
                 app_id=self._app_id, bot_open_id=bot_open_id
             )
+            if callable(durable_binder):
+                durable_binder(
+                    self._on_raw_message,
+                    self._on_raw_bot_added if self._bot_added_handler is not None else None,
+                )
+            self._ready.set()
         except BaseException:
-            self._worker.cancel()
-            await asyncio.gather(self._worker, return_exceptions=True)
-            self._worker = None
-            if self._membership_worker is not None:
-                self._membership_worker.cancel()
-                await asyncio.gather(self._membership_worker, return_exceptions=True)
-                self._membership_worker = None
+            self._ready.set()
+            self._started = False
             await self._channel.disconnect()
             raise
 
     async def stop(self) -> None:
-        worker = self._worker
-        if worker is None:
+        if not self._started:
             return
+        durable_binder = getattr(self._channel, "bind_durable_handlers", None)
+        if callable(durable_binder):
+            durable_binder(None, None)
         await self._channel.disconnect()
-        await self._queue.join()
-        await self._membership_queue.join()
-        worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
-        if self._membership_worker is not None:
-            self._membership_worker.cancel()
-            await asyncio.gather(self._membership_worker, return_exceptions=True)
-            self._membership_worker = None
-        self._worker = None
+        self._started = False
         self._normalizer = None
+        self._ready.clear()
 
     async def _on_message(self, message: object) -> None:
-        try:
-            self._queue.put_nowait(message)
-        except asyncio.QueueFull as exc:
-            raise RuntimeError("Feishu IM admission queue is full") from exc
+        await self._ready.wait()
+        normalizer = self._normalizer
+        if normalizer is None:
+            raise RuntimeError("official Channel source is not ready for admission")
+        normalized = normalizer.normalize(message, received_at_ms=self._received_at_ms())
+        await self._admission.admit(normalized)
 
     async def _on_bot_added(self, event: object) -> None:
-        try:
-            self._membership_queue.put_nowait(event)
-        except asyncio.QueueFull as exc:
-            raise RuntimeError("Feishu membership admission queue is full") from exc
+        await self._ready.wait()
+        if self._normalizer is None or self._bot_added_handler is None:
+            raise RuntimeError("official Channel membership source is not ready")
+        await self._bot_added_handler.handle_bot_added(event)
 
-    async def _consume(self) -> None:
-        while True:
-            message = await self._queue.get()
-            try:
-                while self._normalizer is None:
-                    await asyncio.sleep(0)
-                normalized = self._normalizer.normalize(
-                    message, received_at_ms=self._received_at_ms()
-                )
-                await self._admission.admit(normalized)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Feishu IM message admission failed")
-            finally:
-                self._queue.task_done()
+    async def _on_raw_message(self, raw: dict[str, Any]) -> None:
+        normalizer = self._normalizer
+        if normalizer is None:
+            raise RuntimeError("official Channel source is not ready for raw admission")
+        normalized = normalizer.normalize_raw(raw, received_at_ms=self._received_at_ms())
+        await self._admission.admit(normalized)
 
-    async def _consume_membership(self) -> None:
-        assert self._bot_added_handler is not None
-        while True:
-            event = await self._membership_queue.get()
-            try:
-                await self._bot_added_handler.handle_bot_added(event)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Feishu bot-added admission failed")
-            finally:
-                self._membership_queue.task_done()
+    async def _on_raw_bot_added(self, raw: dict[str, Any]) -> None:
+        if self._bot_added_handler is None:
+            raise RuntimeError("official Channel bot-added handler is unavailable")
+        event = self._mapping(raw.get("event"))
+        await self._bot_added_handler.handle_bot_added(
+            SimpleNamespace(raw=raw, chat_id=event.get("chat_id"))
+        )
+
+    @staticmethod
+    def _mapping(value: object) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}

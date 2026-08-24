@@ -175,7 +175,9 @@ stateDiagram-v2
 ```
 
 Admission, task creation, acknowledgement intent, and source-event deduplication
-commit atomically. A worker leases the task. On process restart, expired leases
+commit atomically before the long-connection callback returns; no volatile
+pre-admission queue sits between callback success and this commit. A worker
+leases the task. On process restart, expired leases
 return to the queue. External writes use stable operation keys and are inspected
 before retry. Terminal reply intent commits with the terminal state and is sent
 by the outbox worker.
