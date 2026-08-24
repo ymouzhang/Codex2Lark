@@ -12,9 +12,11 @@
 5. Build a typed document specification and call `feishu_docs_publish`. Use
    `feishu_docs_create` only for user-supplied Markdown or an advanced XML block
    not yet represented by the typed compiler.
-6. Create the document once. If a resource partially fails, repair the
+6. Do not supply or remember a Drive folder token. Creation tools resolve or
+   create the managed root folder named `Codex2Lark` from live Feishu data.
+7. Create the document once. If a resource partially fails, repair the
    created document rather than creating duplicate documents.
-7. Read the live document back and verify it.
+8. Read the live document back and verify it.
 
 ## Writing style
 

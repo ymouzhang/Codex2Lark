@@ -20,6 +20,7 @@ defined by:
 - [Authoring and editing policy](docs/document-authoring.md)
 - [Development workflow](docs/development.md)
 - [Installation and operation](docs/operations.md)
+- [Using Codex2Lark from Codex](docs/usage.md)
 - [Delivery roadmap](docs/roadmap.md)
 
 No implementation change may precede the documentation change that specifies
@@ -39,3 +40,16 @@ ChatGPT / Codex
 The first deliverable is a local stdio MCP server for Codex. A remote
 Streamable HTTP transport can be added later without changing the tool
 contracts.
+
+## Quick start
+
+After installing dependencies and completing `lark-cli` authentication, run:
+
+```bash
+uv run codex2lark doctor
+```
+
+Then register the local stdio server with Codex and use natural-language
+authoring requests. See [Using Codex2Lark from Codex](docs/usage.md) for the
+registration command, verification steps, prompt examples, tool inventory, and
+troubleshooting guidance.

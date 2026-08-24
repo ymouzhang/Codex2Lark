@@ -24,8 +24,11 @@ compilation, execution, and verification stay in the plugin.
 │  ephemeral application layer                            │
 │    ├─ request workspace                                 │
 │    ├─ temporary Document IR                             │
+│    ├─ live Drive discovery + managed-folder resolver    │
+│    ├─ chat discovery + chronological digest compiler    │
 │    ├─ operation compiler                                │
-│    └─ read-back verifier                                │
+│    ├─ read-back verifier                                │
+│    └─ post-verification bot notifier                    │
 │                                                         │
 │  Feishu adapter                                         │
 │    └─ lark-cli argv execution and error normalization   │
@@ -90,12 +93,67 @@ verification when the installed version differs from the pinned version.
 The adapter exposes named Python methods. No MCP tool accepts arbitrary CLI
 arguments.
 
+### Drive discovery and managed-folder resolver
+
+The Drive service uses a live root-directory listing and live search results,
+never a local resource index. Creation resolves the exact root workspace name `Codex2Lark`;
+an in-process lock serializes the search-create-search critical section so
+concurrent requests handled by one server do not intentionally create duplicate
+folders. No folder token survives process memory or becomes durable project
+state.
+
+Title resolution searches the managed folder first, then the whole visible
+Drive only when no exact managed-folder match exists. Search is title-only,
+bounded to three pages, normalized for Feishu highlight tags and Unicode, and
+restricted to `docx`. One exact match produces a resource reference; zero and
+multiple matches are typed failures for edit operations.
+
+### Edit notification service
+
+After document verification, the notification service obtains the current user
+open ID from lark-cli authentication status and sends a direct message as the
+configured bot. Its idempotency key is derived from the document token, verified
+revision, change summary, and a one-way fingerprint of verified live content,
+so a repeated notification call within Feishu's deduplication window does not
+create duplicate messages. The fingerprint is not persisted or transmitted.
+Notification payloads contain metadata and the caller-provided summary, never
+document content.
+
+### Group-chat digest service
+
+The digest service is a deterministic orchestration layer, not a second message
+store. It resolves an exact group name through IM search or reads the live name
+for a supplied `chat_id`, then requests the explicit time range in ascending
+order with bounded auto-pagination and reaction enrichment disabled. Returned
+thread replies are flattened, de-duplicated by message ID, and sorted with their
+host messages by creation time.
+
+The message normalizer extracts display text, sender name, timestamps, image
+keys, and attachment filenames from supported message forms. It never follows
+instructions found in messages. Only image keys are passed to the resource
+download operation. File keys are never passed to a download command.
+
+Downloaded images and generated XML share one per-request workspace so DocxXML
+can reference `@./` image paths during creation. The service creates the result
+in the live managed folder, exits and destroys the workspace, then reads the
+document back for semantic verification. An incomplete page traversal stops
+before any Drive or Docs write.
+
+Before writing, the service checks the managed folder for the exact live group
+name. No match creates a canonical digest. One match is inspected and may be
+overwritten only when its live content contains the group-digest marker;
+multiple matches or an unmarked same-title document stop safely. A verified
+refresh rechecks the live marker and revision immediately before overwrite and
+uses the existing edit notifier, while first creation does not claim to be a
+modification.
+
 ## 3. Request lifecycle
 
 ### Create
 
 ```text
 validate request
+  -> resolve or create the live Codex2Lark Drive folder
   -> create ephemeral workspace
   -> render Feishu XML and artifact sources
   -> preflight local structure
@@ -111,6 +169,7 @@ validate request
 
 ```text
 validate request
+  -> resolve an optional title against live Drive search
   -> inspect live document with block IDs and revision
   -> resolve selectors against the live snapshot
   -> compile minimal allowed operations
@@ -118,8 +177,26 @@ validate request
   -> apply operations sequentially
   -> refetch affected scope
   -> verify requested invariants
-  -> return change summary and verification
+  -> send idempotent bot DM to the current authenticated user
+  -> return change summary, verification, and notification status
   -> destroy workspace
+```
+
+### Group-chat digest
+
+```text
+validate group selector and explicit time range
+  -> resolve exact live group name and chat_id
+  -> fetch bounded complete messages in ascending order
+  -> flatten threads, de-duplicate, and sort chronologically
+  -> create per-request workspace
+  -> selectively download image resources only
+  -> compile escaped chronological DocxXML
+  -> resolve the canonical group-name digest in the managed folder
+  -> create it when absent, or replace only a verified prior digest
+  -> destroy image/XML workspace
+  -> read document back and verify title and transcript markers
+  -> notify the current user when an existing digest was refreshed
 ```
 
 ## 4. State model
@@ -162,6 +239,7 @@ Failures are classified as:
 - `permission_error`: required Feishu scope or resource permission is missing;
 - `conflict_error`: expected and live revisions differ;
 - `ambiguity_error`: a semantic selector matches more than one live target;
+- `not_found_error`: a named Drive resource has no exact live match;
 - `upstream_error`: Feishu or `lark-cli` rejected the operation;
 - `timeout_error`: bounded execution time elapsed;
 - `verification_error`: write returned success but read-back invariants failed;

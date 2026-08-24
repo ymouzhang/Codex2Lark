@@ -36,3 +36,10 @@ it. It is not a release changelog.
   health rule before correcting adapter normalization and `doctor` reporting.
 - Pinned the supported external `@larksuite/cli` runtime to `1.0.89` in the
   installation contract before adding adapter and `doctor` version enforcement.
+- Defined the live `Codex2Lark` managed-folder policy, exact title discovery,
+  and post-verification bot notification contract before implementing Drive
+  resolution, title-targeted editing, and edit completion messages.
+- Defined the bounded group-chat digest contract before implementing exact chat
+  discovery, chronological sender-aware normalization, selective ephemeral image
+  handling, filename-only file entries, managed-folder creation, and read-back
+  verification.

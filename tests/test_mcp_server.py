@@ -12,6 +12,8 @@ async def test_mcp_registers_semantic_tools_with_write_annotations() -> None:
 
     assert server.name == "Codex2Lark"
     assert set(tools) == {
+        "feishu_chat_digest_publish",
+        "feishu_docs_search",
         "feishu_docs_inspect",
         "feishu_docs_create",
         "feishu_docs_publish",
@@ -25,5 +27,7 @@ async def test_mcp_registers_semantic_tools_with_write_annotations() -> None:
     }
     assert tools["feishu_docs_inspect"].annotations is not None
     assert tools["feishu_docs_inspect"].annotations.readOnlyHint is True
+    assert tools["feishu_docs_search"].annotations is not None
+    assert tools["feishu_docs_search"].annotations.readOnlyHint is True
     assert tools["feishu_docs_edit"].annotations is not None
     assert tools["feishu_docs_edit"].annotations.destructiveHint is True

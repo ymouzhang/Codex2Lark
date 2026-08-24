@@ -1,6 +1,6 @@
 ---
 name: feishu-authoring
-description: Create or precisely edit Feishu documents from the current conversation, including native tables, whiteboards, Sheets, Base, images, and attachments. Use when the user asks to publish, organize, or modify content in Feishu. Do not use for ordinary local Markdown files or for passive advice that does not authorize a Feishu write.
+description: Create or precisely edit Feishu documents from the current conversation or a bounded Feishu group-chat history, including native tables, whiteboards, Sheets, Base, images, and attachments. Use when the user asks to publish, organize, summarize group messages, or modify content in Feishu. Do not use for ordinary local Markdown files or for passive advice that does not authorize a Feishu write.
 ---
 
 # Feishu Authoring
@@ -15,6 +15,8 @@ task.
 - Editing an existing document: read [references/edit.md](references/edit.md).
 - Creating or updating a whiteboard, Sheet, or Base: also read
   [references/artifacts.md](references/artifacts.md).
+- Publishing a group-chat history: read
+  [references/chat-digest.md](references/chat-digest.md).
 - Before completing any write: read
   [references/verification.md](references/verification.md).
 
@@ -33,5 +35,7 @@ task.
    file paths in the final response.
 6. Serialize writes to the same document. A block replacement or deletion can
    invalidate IDs; inspect again before subsequent ID-based edits.
-7. Finish with the live Feishu URL, a compact change summary, verification
-   status, and unresolved warnings.
+7. Let creation tools place new Docs, Sheets, and Base resources in the managed
+   `Codex2Lark` Drive folder; do not invent or retain a folder token.
+8. Finish with the live Feishu URL, a compact change summary, verification
+   status, notification delivery status, and unresolved warnings.

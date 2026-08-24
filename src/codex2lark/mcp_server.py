@@ -9,12 +9,14 @@ from mcp.types import ToolAnnotations
 from .application import Application, create_application
 from .lark_cli import safe_tool_call_error
 from .models import (
+    ChatDigestRequest,
     CreateBaseRequest,
     CreateDocumentRequest,
     CreateWorkbookRequest,
     EditDocumentRequest,
     InspectDocumentRequest,
     PublishDocumentRequest,
+    SearchDocumentsRequest,
     UpsertBaseRecordsRequest,
     VerifyDocumentRequest,
     WhiteboardRenderRequest,
@@ -49,6 +51,35 @@ def build_mcp(application: Application | None = None) -> FastMCP:
             "all writes. Feishu is the only business-data source of truth."
         ),
     )
+
+    @mcp.tool(
+        name="feishu_chat_digest_publish",
+        description=(
+            "Resolve one Feishu group, fetch a complete bounded time range, and publish a "
+            "chronological sender-aware document. Images are inserted from ephemeral downloads; "
+            "file attachments are never downloaded. This creates an external document."
+        ),
+        annotations=CREATE_WRITE,
+    )
+    async def feishu_chat_digest_publish(request: ChatDigestRequest) -> dict[str, Any]:
+        try:
+            return await app.chat_digest.publish(request)
+        except Exception as exc:
+            return safe_tool_call_error(exc)
+
+    @mcp.tool(
+        name="feishu_docs_search",
+        description=(
+            "Find Feishu documents by exact title, preferring the managed Codex2Lark folder. "
+            "This is read-only and should precede title-based edits."
+        ),
+        annotations=READ_ONLY,
+    )
+    async def feishu_docs_search(request: SearchDocumentsRequest) -> dict[str, Any]:
+        try:
+            return await app.docs.search(request)
+        except Exception as exc:
+            return safe_tool_call_error(exc)
 
     @mcp.tool(
         name="feishu_docs_inspect",
@@ -92,8 +123,9 @@ def build_mcp(application: Application | None = None) -> FastMCP:
     @mcp.tool(
         name="feishu_docs_edit",
         description=(
-            "Apply bounded precise operations to a live Feishu document and verify the result. "
-            "This performs an external write."
+            "Resolve a URL/token or exact title, apply bounded operations, verify the live "
+            "result, and notify the current user as the Feishu bot. This performs an external "
+            "write."
         ),
         annotations=MUTATING_WRITE,
     )

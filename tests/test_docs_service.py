@@ -21,6 +21,43 @@ from codex2lark.models import (
 )
 
 
+class StubDrive:
+    def __init__(self) -> None:
+        self.resolved_titles: list[str] = []
+
+    async def ensure_managed_folder(self, identity: object) -> dict[str, object]:
+        return {
+            "title": "Codex2Lark",
+            "token": "fld_managed",
+            "url": "https://example.feishu.cn/drive/folder/fld_managed",
+        }
+
+    async def search_documents(self, title: str, identity: object) -> dict[str, object]:
+        return {"ok": True, "query": title, "scope": "drive", "matches": []}
+
+    async def resolve_document(self, title: str, identity: object) -> dict[str, object]:
+        self.resolved_titles.append(title)
+        return {
+            "title": title,
+            "token": "docx_test",
+            "url": "https://example.feishu.cn/docx/docx_test",
+        }
+
+
+class StubNotifier:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.summaries: list[str] = []
+
+    async def document_edited(self, **kwargs: object) -> dict[str, object]:
+        summary = kwargs["change_summary"]
+        assert isinstance(summary, str)
+        self.summaries.append(summary)
+        if self.fail:
+            raise RuntimeError("notification unavailable")
+        return {"status": "sent", "message_id": "om_test"}
+
+
 class RecordingLarkCli(LarkCli):
     def __init__(self, content: str | None = None) -> None:
         super().__init__("unused")
@@ -53,7 +90,7 @@ class RecordingLarkCli(LarkCli):
 
 def service() -> tuple[DocsService, RecordingLarkCli]:
     lark = RecordingLarkCli()
-    return DocsService(lark), lark
+    return DocsService(lark, StubDrive(), StubNotifier()), lark
 
 
 @pytest.mark.asyncio
@@ -78,6 +115,7 @@ async def test_publish_compiles_creates_and_reads_back() -> None:
     assert lark.uploaded_content is not None
     assert '<p align="left">Expected text</p>' in lark.uploaded_content
     assert lark.calls[0][0][:2] == ("docs", "+create")
+    assert lark.calls[0][0][-2:] == ("--parent-token", "fld_managed")
     assert lark.calls[1][0][:2] == ("docs", "+fetch")
 
 
@@ -90,6 +128,7 @@ async def test_edit_rejects_stale_revision_before_write() -> None:
                 resource=ResourceRef(token="docx_test"),
                 expected_revision=6,
                 operations=[EditOperation(command=EditCommand.APPEND, content="<p>new</p>")],
+                change_summary="新增说明",
             )
         )
     assert len(lark.calls) == 1
@@ -112,6 +151,7 @@ async def test_edit_rejects_ambiguous_exact_replacement() -> None:
                         content="different",
                     )
                 ],
+                change_summary="替换重复文本",
             )
         )
     assert len(lark.calls) == 1
@@ -135,6 +175,7 @@ async def test_edit_refetches_before_following_block_operation() -> None:
                     block_id="expected",
                 ),
             ],
+            change_summary="更新概览并删除旧段落",
         )
     )
 
@@ -146,3 +187,44 @@ async def test_edit_refetches_before_following_block_operation() -> None:
         "+update",
         "+fetch",
     ]
+    assert result["notification"]["status"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_edit_resolves_exact_document_title_before_inspection() -> None:
+    lark = RecordingLarkCli()
+    drive = StubDrive()
+    notifier = StubNotifier()
+    docs = DocsService(lark, drive, notifier)
+
+    result = await docs.edit(
+        EditDocumentRequest(
+            document_title="Test",
+            operations=[EditOperation(command=EditCommand.APPEND, content="<p>new</p>")],
+            change_summary="新增一段说明",
+        )
+    )
+
+    assert drive.resolved_titles == ["Test"]
+    assert lark.calls[0][0][lark.calls[0][0].index("--doc") + 1].endswith("docx_test")
+    assert result["notification"]["status"] == "sent"
+    assert notifier.summaries == ["新增一段说明"]
+
+
+@pytest.mark.asyncio
+async def test_verified_edit_reports_notification_failure_without_failing_edit() -> None:
+    lark = RecordingLarkCli()
+    docs = DocsService(lark, StubDrive(), StubNotifier(fail=True))
+
+    result = await docs.edit(
+        EditDocumentRequest(
+            resource=ResourceRef(token="docx_test"),
+            operations=[EditOperation(command=EditCommand.APPEND, content="<p>new</p>")],
+            change_summary="新增一段说明",
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["verification"]["status"] == "passed"
+    assert result["notification"]["status"] == "failed"
+    assert "do not repeat the edit" in result["warnings"][-1]

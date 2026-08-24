@@ -10,6 +10,7 @@ class ErrorCategory(StrEnum):
     PERMISSION = "permission_error"
     CONFLICT = "conflict_error"
     AMBIGUITY = "ambiguity_error"
+    NOT_FOUND = "not_found_error"
     UPSTREAM = "upstream_error"
     TIMEOUT = "timeout_error"
     VERIFICATION = "verification_error"
@@ -54,6 +55,11 @@ class ConflictError(Codex2LarkError):
 class AmbiguityError(Codex2LarkError):
     def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(ErrorCategory.AMBIGUITY, message, details=details)
+
+
+class NotFoundError(Codex2LarkError):
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+        super().__init__(ErrorCategory.NOT_FOUND, message, details=details)
 
 
 class VerificationError(Codex2LarkError):

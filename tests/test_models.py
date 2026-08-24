@@ -4,8 +4,10 @@ import pytest
 from pydantic import ValidationError
 
 from codex2lark.models import (
+    ChatDigestRequest,
     DiagramFormat,
     EditCommand,
+    EditDocumentRequest,
     EditOperation,
     ResourceRef,
     RichTextSpan,
@@ -34,6 +36,43 @@ def test_edit_operation_requires_command_specific_fields() -> None:
     with pytest.raises(ValidationError):
         EditOperation(command=EditCommand.BLOCK_DELETE)
     assert EditOperation(command=EditCommand.STR_REPLACE, pattern="old", content="new")
+
+
+def test_edit_request_requires_one_target_and_change_summary() -> None:
+    operation = EditOperation(command=EditCommand.APPEND, content="<p>new</p>")
+    with pytest.raises(ValidationError):
+        EditDocumentRequest(operations=[operation], change_summary="新增内容")
+    with pytest.raises(ValidationError):
+        EditDocumentRequest(
+            resource=ResourceRef(token="docx_test"),
+            document_title="Test",
+            operations=[operation],
+            change_summary="新增内容",
+        )
+    assert EditDocumentRequest(
+        document_title="Test",
+        operations=[operation],
+        change_summary="新增内容",
+    )
+
+
+def test_chat_digest_requires_one_group_and_explicit_range() -> None:
+    with pytest.raises(ValidationError):
+        ChatDigestRequest(start="2026-08-24", end="2026-08-25")
+    with pytest.raises(ValidationError):
+        ChatDigestRequest(
+            chat_id="oc_test",
+            chat_name="项目群",
+            start="2026-08-24",
+            end="2026-08-25",
+        )
+    with pytest.raises(ValidationError):
+        ChatDigestRequest(chat_name="项目群", start="2026-08-24", end="2026-08-24")
+    assert ChatDigestRequest(
+        chat_name="项目群",
+        start="2026-08-24",
+        end="2026-08-25",
+    )
 
 
 def test_whiteboard_target_depends_on_mode() -> None:

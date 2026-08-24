@@ -269,14 +269,12 @@ class CreateDocumentRequest(StrictModel):
     title: str = Field(min_length=1, max_length=800)
     format: DocumentFormat = DocumentFormat.XML
     content: str = Field(min_length=1, max_length=8_000_000)
-    folder_token: str | None = Field(default=None, max_length=1024)
     identity: Identity = Identity.USER
     verification: VerificationPolicy = Field(default_factory=VerificationPolicy)
 
 
 class PublishDocumentRequest(StrictModel):
     document: DocumentSpec
-    folder_token: str | None = Field(default=None, max_length=1024)
     identity: Identity = Identity.USER
     verification: VerificationPolicy = Field(default_factory=VerificationPolicy)
 
@@ -323,11 +321,45 @@ class EditOperation(StrictModel):
 
 
 class EditDocumentRequest(StrictModel):
-    resource: ResourceRef
+    resource: ResourceRef | None = None
+    document_title: str | None = Field(default=None, min_length=1, max_length=800)
     operations: list[EditOperation] = Field(min_length=1, max_length=20)
+    change_summary: str = Field(min_length=1, max_length=1000)
     expected_revision: int | None = Field(default=None, ge=0)
     identity: Identity = Identity.USER
     verification: VerificationPolicy = Field(default_factory=VerificationPolicy)
+
+    @model_validator(mode="after")
+    def exactly_one_document_target(self) -> EditDocumentRequest:
+        if (self.resource is None) == (self.document_title is None):
+            raise ValueError("exactly one of resource or document_title is required")
+        return self
+
+
+class SearchDocumentsRequest(StrictModel):
+    title: str = Field(min_length=1, max_length=800)
+    identity: Identity = Identity.USER
+
+
+class ChatDigestRequest(StrictModel):
+    chat_id: str | None = Field(default=None, min_length=1, max_length=1024)
+    chat_name: str | None = Field(default=None, min_length=1, max_length=256)
+    start: str = Field(min_length=1, max_length=100)
+    end: str = Field(min_length=1, max_length=100)
+    timezone: str = Field(default="Asia/Shanghai", min_length=1, max_length=100)
+    page_limit: int = Field(default=10, ge=1, le=100)
+    max_messages: int = Field(default=500, ge=1, le=2000)
+    max_images: int = Field(default=100, ge=0, le=500)
+    identity: Identity = Identity.USER
+    verification: VerificationPolicy = Field(default_factory=VerificationPolicy)
+
+    @model_validator(mode="after")
+    def exactly_one_chat_target(self) -> ChatDigestRequest:
+        if (self.chat_id is None) == (self.chat_name is None):
+            raise ValueError("exactly one of chat_id or chat_name is required")
+        if self.start == self.end:
+            raise ValueError("start and end must describe a non-empty range")
+        return self
 
 
 class VerifyDocumentRequest(StrictModel):
@@ -367,7 +399,6 @@ class CreateWorkbookRequest(StrictModel):
     title: str = Field(min_length=1, max_length=800)
     sheets: list[SheetSpec] = Field(min_length=1, max_length=50)
     styles: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
-    folder_token: str | None = Field(default=None, max_length=1024)
     identity: Identity = Identity.USER
 
 
@@ -387,7 +418,6 @@ class BaseTableSpec(StrictModel):
 class CreateBaseRequest(StrictModel):
     name: str = Field(min_length=1, max_length=800)
     tables: list[BaseTableSpec] = Field(default_factory=list, max_length=50)
-    folder_token: str | None = Field(default=None, max_length=1024)
     identity: Identity = Identity.USER
 
 

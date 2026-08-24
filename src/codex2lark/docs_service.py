@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from .compiler import block_exists, compile_document, count_exact_pattern, preflight_content
+from .drive_service import DriveService
 from .errors import AmbiguityError, ConflictError, VerificationError
-from .lark_cli import LarkCli, LarkCliResult
+from .lark_cli import LarkCli, LarkCliResult, safe_tool_call_error
 from .models import (
     CreateDocumentRequest,
     DetailLevel,
@@ -14,15 +15,27 @@ from .models import (
     InspectDocumentRequest,
     PublishDocumentRequest,
     ResourceRef,
+    SearchDocumentsRequest,
     VerifyDocumentRequest,
 )
+from .notification_service import NotificationService
 from .runtime import EphemeralWorkspace
 from .verifier import extract_content, extract_resource, extract_revision, verify_document
 
 
 class DocsService:
-    def __init__(self, lark: LarkCli) -> None:
+    def __init__(
+        self,
+        lark: LarkCli,
+        drive: DriveService | None = None,
+        notifier: NotificationService | None = None,
+    ) -> None:
         self.lark = lark
+        self.drive = drive or DriveService(lark)
+        self.notifier = notifier or NotificationService(lark)
+
+    async def search(self, request: SearchDocumentsRequest) -> dict[str, Any]:
+        return await self.drive.search_documents(request.title, request.identity)
 
     async def inspect(self, request: InspectDocumentRequest) -> dict[str, Any]:
         result = await self.lark.execute(
@@ -51,6 +64,7 @@ class DocsService:
 
     async def create(self, request: CreateDocumentRequest) -> dict[str, Any]:
         preflight_content(request.content, request.format)
+        managed_folder = await self.drive.ensure_managed_folder(request.identity)
         verification_policy = request.verification.model_copy(
             update={"expected_title": request.verification.expected_title or request.title}
         )
@@ -70,9 +84,9 @@ class DocsService:
                 request.identity.value,
                 "--format",
                 "json",
+                "--parent-token",
+                managed_folder["token"],
             ]
-            if request.folder_token:
-                args.extend(["--folder-token", request.folder_token])
             created = await self.lark.execute(args, cwd=workspace.path)
 
         resource = extract_resource(created.data)
@@ -108,6 +122,7 @@ class DocsService:
         return {
             "ok": True,
             "resource": resource,
+            "managed_folder": managed_folder,
             "verification": verification.as_dict(),
             "warnings": warnings,
         }
@@ -118,16 +133,27 @@ class DocsService:
                 title=request.document.title,
                 format=DocumentFormat.XML,
                 content=compile_document(request.document),
-                folder_token=request.folder_token,
                 identity=request.identity,
                 verification=request.verification,
             )
         )
 
     async def edit(self, request: EditDocumentRequest) -> dict[str, Any]:
+        resource = request.resource
+        if resource is None:
+            assert request.document_title is not None
+            resolved = await self.drive.resolve_document(request.document_title, request.identity)
+            resolved_url = resolved.get("url")
+            resolved_token = resolved.get("token")
+            if isinstance(resolved_url, str):
+                resource = ResourceRef(url=resolved_url)
+            elif isinstance(resolved_token, str):
+                resource = ResourceRef(token=resolved_token)
+            else:
+                raise VerificationError("resolved document did not contain a usable URL or token")
         before = await self.inspect(
             InspectDocumentRequest(
-                resource=request.resource,
+                resource=resource,
                 format=DocumentFormat.XML,
                 detail=DetailLevel.FULL,
                 identity=request.identity,
@@ -156,7 +182,7 @@ class DocsService:
             if index > 0:
                 snapshot = await self.inspect(
                     InspectDocumentRequest(
-                        resource=request.resource,
+                        resource=resource,
                         format=DocumentFormat.XML,
                         detail=DetailLevel.FULL,
                         identity=request.identity,
@@ -190,7 +216,7 @@ class DocsService:
                     "docs",
                     "+update",
                     "--doc",
-                    request.resource.value,
+                    resource.value,
                     "--command",
                     operation.command.value,
                     "--doc-format",
@@ -214,7 +240,7 @@ class DocsService:
 
         inspected = await self.inspect(
             InspectDocumentRequest(
-                resource=request.resource,
+                resource=resource,
                 format=DocumentFormat.XML,
                 detail=DetailLevel.FULL,
                 identity=request.identity,
@@ -226,12 +252,30 @@ class DocsService:
                 "document edit completed but read-back verification failed",
                 details={"verification": verification.as_dict()},
             )
+        live_resource = extract_resource(inspected["data"])
+        try:
+            notification = await self.notifier.document_edited(
+                resource=live_resource,
+                change_summary=request.change_summary,
+                revision=inspected["revision"],
+                operations_applied=len(results),
+            )
+        except Exception as exc:
+            notification = {
+                "status": "failed",
+                "error": safe_tool_call_error(exc)["error"],
+            }
+            warnings.append(
+                "document edit was verified, but the completion notification failed; "
+                "do not repeat the edit solely to resend the message"
+            )
         return {
             "ok": True,
-            "resource": extract_resource(inspected["data"]),
+            "resource": live_resource,
             "revision": inspected["revision"],
             "operations_applied": len(results),
             "verification": verification.as_dict(),
+            "notification": notification,
             "warnings": warnings,
         }
 

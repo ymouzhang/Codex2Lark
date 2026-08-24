@@ -5,6 +5,7 @@ from typing import Any
 
 from .compiler import whiteboard_xml
 from .docs_service import DocsService
+from .drive_service import DriveService
 from .errors import VerificationError
 from .lark_cli import LarkCli
 from .models import (
@@ -22,9 +23,10 @@ from .verifier import extract_resource, find_first_value
 
 
 class ArtifactsService:
-    def __init__(self, lark: LarkCli, docs: DocsService) -> None:
+    def __init__(self, lark: LarkCli, docs: DocsService, drive: DriveService) -> None:
         self.lark = lark
         self.docs = docs
+        self.drive = drive
 
     async def render_whiteboard(self, request: WhiteboardRenderRequest) -> dict[str, Any]:
         if request.mode == "create":
@@ -41,6 +43,7 @@ class ArtifactsService:
                 EditDocumentRequest(
                     resource=request.document,
                     operations=[EditOperation.model_validate(operation)],
+                    change_summary="新增或更新文档内的画板",
                     identity=request.identity,
                     verification=VerificationPolicy(min_blocks={"whiteboard": 1}),
                 )
@@ -75,6 +78,7 @@ class ArtifactsService:
         }
 
     async def create_workbook(self, request: CreateWorkbookRequest) -> dict[str, Any]:
+        managed_folder = await self.drive.ensure_managed_folder(request.identity)
         sheets = [sheet.model_dump(mode="json") for sheet in request.sheets]
         with EphemeralWorkspace() as workspace:
             sheets_path = workspace.write_text(
@@ -91,6 +95,8 @@ class ArtifactsService:
                 request.identity.value,
                 "--format",
                 "json",
+                "--folder-token",
+                managed_folder["token"],
             ]
             if request.styles:
                 styles_path = workspace.write_text(
@@ -98,12 +104,11 @@ class ArtifactsService:
                     json.dumps(request.styles, ensure_ascii=False, separators=(",", ":")),
                 )
                 args.extend(["--styles", workspace.relative_reference(styles_path)])
-            if request.folder_token:
-                args.extend(["--folder-token", request.folder_token])
             result = await self.lark.execute(args, cwd=workspace.path)
         return {
             "ok": True,
             "resource": extract_resource(result.data),
+            "managed_folder": managed_folder,
             "verification": {"status": "upstream_confirmed", "checks": []},
             "warnings": list(result.warnings),
         }
@@ -175,6 +180,7 @@ class ArtifactsService:
         }
 
     async def create_base(self, request: CreateBaseRequest) -> dict[str, Any]:
+        managed_folder = await self.drive.ensure_managed_folder(request.identity)
         args = [
             "base",
             "+base-create",
@@ -184,9 +190,9 @@ class ArtifactsService:
             request.identity.value,
             "--format",
             "json",
+            "--folder-token",
+            managed_folder["token"],
         ]
-        if request.folder_token:
-            args.extend(["--folder-token", request.folder_token])
         created = await self.lark.execute(args)
         base_token = find_first_value(created.data, {"app_token", "base_token"})
         if not isinstance(base_token, str):
@@ -211,6 +217,7 @@ class ArtifactsService:
         return {
             "ok": True,
             "resource": {"base_token": base_token, "tables": tables},
+            "managed_folder": managed_folder,
             "verification": {"status": "upstream_confirmed", "checks": []},
             "warnings": list(created.warnings),
         }

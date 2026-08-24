@@ -64,6 +64,17 @@ Inputs:
 The default is XML with `full` detail for editing and Markdown with `simple`
 detail for reading. The caller must choose explicitly in the MCP request.
 
+### `feishu_docs_search`
+
+Finds live `docx` resources by exact title. It searches the managed
+`Codex2Lark` folder first and falls back to the whole visible Drive only when the
+managed scope contains no exact match. The result reports the selected scope and
+compact candidates containing title, token, URL, type, and update time.
+
+The tool is read-only and never creates the managed folder. It checks at most
+three pages using a title-only query. Callers must not choose among multiple
+exact candidates without additional user direction.
+
 ### `feishu_docs_create`
 
 Creates a document from Feishu XML or Markdown.
@@ -73,9 +84,11 @@ Inputs:
 - title;
 - format;
 - content;
-- optional folder token;
 - identity;
 - verification policy.
+
+The destination is not caller-selectable: the server resolves or creates the
+managed `Codex2Lark` Drive folder and passes its live token to lark-cli.
 
 The implementation writes content through an ephemeral `@file` rather than a
 shell argument.
@@ -101,6 +114,11 @@ The generated XML is never returned or stored after the request completes.
 
 Applies a bounded list of precise operations to a live document.
 
+The target is exactly one of a resource reference or `document_title`. A title
+is resolved with the same managed-folder-first policy as
+`feishu_docs_search`; zero exact matches return `not_found_error` and multiple
+exact matches return `ambiguity_error` with compact candidates.
+
 Allowed first-release operations:
 
 - `append`;
@@ -123,6 +141,14 @@ The request may include `expected_revision`. When the selected lark-cli command
 cannot enforce it atomically, the server performs a just-in-time revision check
 and returns a warning that the guarantee is best-effort.
 
+The request also requires `change_summary`, a concise user-facing description
+of what the authorized edit changes. After read-back verification, the service
+sends one idempotent bot direct message to the current authenticated user with
+the document title/link, this summary, and verification status. The result
+contains `notification.status` (`sent` or `failed`). A failed notification does
+not turn the already verified edit into an error and must not trigger an edit
+retry.
+
 ### `feishu_docs_verify`
 
 Reads a document back and checks requested invariants:
@@ -132,6 +158,43 @@ Reads a document back and checks requested invariants:
 - forbidden text fragments;
 - minimum block counts by supported type;
 - current revision when returned by Feishu.
+
+### `feishu_chat_digest_publish`
+
+Creates a verified chronological document from one explicit group-chat time
+range.
+
+Inputs:
+
+- exactly one of `chat_id` or exact `chat_name`;
+- required `start` and `end` values accepted by lark-cli (ISO 8601 or date);
+- bounded `page_limit` and `max_messages` safeguards;
+- IANA timezone used for rendered timestamps, default `Asia/Shanghai`;
+- identity, default `user`;
+- verification policy.
+
+The tool resolves the live group name and uses it as the exact document title.
+Group-name lookup continues only for one normalized exact match. Messages and
+expanded thread replies are de-duplicated and sorted by creation time. If
+auto-pagination reports incomplete traversal or the normalized message count
+exceeds `max_messages`, the tool fails before creating a folder or document.
+
+The managed folder holds one canonical digest for the exact group name. The tool
+creates it when absent. It refreshes an existing match only after live
+inspection confirms the `群聊记录` digest marker; duplicate matches or an
+unmarked same-title document are conflicts, never overwrite candidates. A
+refresh rechecks the marker and revision immediately before overwrite, and a
+verified refresh sends the standard bot edit notification.
+
+Image resources are downloaded one at a time with resource type `image` into
+the request workspace and embedded in the document. File messages render the
+metadata filename plus `not downloaded`; their `file_key` is never sent to a
+download operation. Image failures become explicit transcript placeholders and
+warnings rather than causing file downloads or silent omission.
+
+The result reports `action` (`created` or `updated`), the live document, managed
+folder, chat identity, requested range, normalized message/image/file counts,
+verification and notification results, and warnings.
 
 ### `feishu_whiteboard_render`
 
@@ -143,7 +206,7 @@ is deferred.
 
 Creates a workbook with one or more sheets and optionally typed cell data and
 styles. The exact lark-cli payload is server-generated from the strict request
-schema.
+schema. The workbook is created in the managed `Codex2Lark` Drive folder.
 
 ### `feishu_sheets_write`
 
@@ -153,7 +216,8 @@ back for verification.
 ### `feishu_base_create`
 
 Creates a Base application and optional tables. It does not expose arbitrary
-Base automation or permission APIs in the first release.
+Base automation or permission APIs in the first release. The Base application
+is created in the managed `Codex2Lark` Drive folder.
 
 ### `feishu_base_upsert_records`
 

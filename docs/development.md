@@ -49,7 +49,10 @@ src/codex2lark/
 ├── errors.py              stable error taxonomy
 ├── runtime.py             ephemeral workspace lifecycle
 ├── lark_cli.py            safe subprocess adapter
+├── drive_service.py       live search and managed-folder resolution
 ├── docs_service.py        document orchestration
+├── notification_service.py post-verification bot direct messages
+├── chat_digest_service.py group-message retrieval and digest publishing
 ├── artifacts_service.py   whiteboard, Sheet, and Base orchestration
 ├── compiler.py            supported XML construction/preflight
 └── verifier.py            live read-back checks
