@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined production multi-Agent composition before implementation: every IM
+  task prepares a durable root graph, `agent.delegate` creates or reuses a
+  bounded child with subset authority, a separate child Harness commits an
+  encrypted typed artifact, and only the root closes the graph and replies.
+
 - Defined the V3 bot-added membership path before implementation: the official
   Channel callback enters a bounded queue, durable admission creates one
   replay-safe membership task, and the configured current user is added and

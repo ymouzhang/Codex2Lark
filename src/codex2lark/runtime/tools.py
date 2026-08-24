@@ -23,6 +23,7 @@ class ToolContext:
     session_key: str
     identity_ref: str
     policy_version: int
+    task_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

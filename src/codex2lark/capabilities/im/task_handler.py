@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from codex2lark.core.events import LeasedTask, OutboxDraft, TaskState
@@ -11,6 +12,20 @@ from codex2lark.runtime.tools import ToolContext
 from codex2lark.runtime.types import AgentDefinition, AgentOutcome, RunStatus
 
 from .context_provider import IMContextProvider, IMContextRequest
+
+
+class AgentGraphLifecycle(Protocol):
+    async def prepare(
+        self,
+        *,
+        run_id: str,
+        task: LeasedTask,
+        binding: dict[str, str],
+        definition: AgentDefinition,
+        now_ms: int,
+    ) -> None: ...
+
+    async def finish(self, run_id: str, status: RunStatus, *, now_ms: int) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +58,7 @@ class IMMentionTaskHandler:
         definition: AgentDefinition,
         templates: IMResponseTemplates,
         identity_ref: str,
+        graph_lifecycle: AgentGraphLifecycle | None = None,
     ) -> None:
         if not identity_ref:
             raise ValueError("IM execution identity reference is required")
@@ -52,45 +68,65 @@ class IMMentionTaskHandler:
         self._definition = definition
         self._templates = templates
         self._identity_ref = identity_ref
+        self._graph_lifecycle = graph_lifecycle
 
     async def execute(self, task: LeasedTask, *, now_ms: int) -> TaskExecutionResult:
         binding = self._binding(task)
-        context = await self._context.collect(
-            IMContextRequest(
-                binding["tenant_key"],
-                binding["app_id"],
-                binding["chat_id"],
-                binding["message_id"],
-            )
-        )
         run_id = self.run_id_for_task(task.task_id)
-        status = await self._sessions.run_status(run_id)
-        outcome = await self._sessions.load_outcome(run_id)
-        if outcome is None:
-            if status is not None and status is not RunStatus.RUNNING:
-                raise RuntimeError("terminal Agent run is missing its observable outcome")
-            outcome = await self._harness.run(
-                HarnessRequest(
-                    run_id=run_id,
-                    task_id=task.task_id,
-                    node_id="/root",
-                    user_request=context.trigger.body_text,
-                    tool_context=ToolContext(
-                        run_id=run_id,
-                        node_id="/root",
-                        tenant_key=binding["tenant_key"],
-                        app_id=binding["app_id"],
-                        actor_id=binding["sender_id"],
-                        session_key=task.session_key,
-                        identity_ref=self._identity_ref,
-                        policy_version=self._definition.policy_version,
-                    ),
-                    evidence=context.evidence,
-                ),
-                self._definition,
-                resume=status is RunStatus.RUNNING,
+        if self._graph_lifecycle is not None:
+            await self._graph_lifecycle.prepare(
+                run_id=run_id,
+                task=task,
+                binding=binding,
+                definition=self._definition,
                 now_ms=now_ms,
             )
+        try:
+            context = await self._context.collect(
+                IMContextRequest(
+                    binding["tenant_key"],
+                    binding["app_id"],
+                    binding["chat_id"],
+                    binding["message_id"],
+                )
+            )
+            status = await self._sessions.run_status(run_id)
+            outcome = await self._sessions.load_outcome(run_id)
+            if outcome is None:
+                if status is not None and status is not RunStatus.RUNNING:
+                    raise RuntimeError("terminal Agent run is missing its observable outcome")
+                outcome = await self._harness.run(
+                    HarnessRequest(
+                        run_id=run_id,
+                        task_id=task.task_id,
+                        node_id="/root",
+                        user_request=context.trigger.body_text,
+                        tool_context=ToolContext(
+                            run_id=run_id,
+                            node_id="/root",
+                            tenant_key=binding["tenant_key"],
+                            app_id=binding["app_id"],
+                            actor_id=binding["sender_id"],
+                            session_key=task.session_key,
+                            identity_ref=self._identity_ref,
+                            policy_version=self._definition.policy_version,
+                            task_id=task.task_id,
+                        ),
+                        evidence=context.evidence,
+                    ),
+                    self._definition,
+                    resume=status is RunStatus.RUNNING,
+                    now_ms=now_ms,
+                )
+        except Exception:
+            if self._graph_lifecycle is not None and task.attempt_count >= task.max_attempts:
+                await self._graph_lifecycle.finish(run_id, RunStatus.FAILED, now_ms=now_ms)
+            raise
+        if self._graph_lifecycle is not None:
+            graph_status = (
+                RunStatus.BLOCKED if outcome.status is RunStatus.WAITING else outcome.status
+            )
+            await self._graph_lifecycle.finish(run_id, graph_status, now_ms=now_ms)
         if context.warnings:
             outcome = AgentOutcome(
                 outcome.status,

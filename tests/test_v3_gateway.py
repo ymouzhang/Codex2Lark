@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -228,3 +229,6 @@ async def test_composed_gateway_admits_executes_and_sends_one_terminal_reply(
     assert "认真帮你处理" in str(channel.sent[0]["message"])
     assert "已经为你整理好摘要" in str(channel.sent[1]["message"])
     assert "已经处理完成" in str(channel.sent[1]["message"])
+    with sqlite3.connect(tmp_path / "runtime.db") as connection:
+        graph = connection.execute("SELECT status FROM runtime_graphs").fetchone()
+    assert graph == ("completed",)

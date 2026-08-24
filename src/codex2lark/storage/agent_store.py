@@ -122,6 +122,14 @@ class SQLiteAgentGraphStore:
             raise LookupError(f"graph does not exist: {graph_id}")
         return self._graph(row)
 
+    async def find_graph_by_root_run(self, root_run_id: str) -> GraphRecord | None:
+        row = await self._database.call(
+            lambda connection: connection.execute(
+                "SELECT * FROM runtime_graphs WHERE root_run_id = ?", (root_run_id,)
+            ).fetchone()
+        )
+        return None if row is None else self._graph(row)
+
     async def get_node(self, node_id: str) -> AgentNode:
         def operation(connection: sqlite3.Connection) -> tuple[sqlite3.Row | None, tuple[str, ...]]:
             row = connection.execute(

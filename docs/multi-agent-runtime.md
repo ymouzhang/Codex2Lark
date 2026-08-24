@@ -110,6 +110,24 @@ Budget is reserved atomically at spawn and unused budget returns to the graph.
 Workers cannot recursively expand the graph merely because spare global slots
 exist.
 
+### Runtime API 1 delegation tool
+
+Every admitted mention prepares the durable root graph before the root Harness
+starts. The root may call `agent.delegate` only when it has one concrete,
+independent child deliverable. Its strict arguments are child name, approved
+role, task brief, expected artifact type, and an explicit subset of the root's
+tool IDs. Tenant/app/chat identity and the parent node are bound from
+`ToolContext`, never model arguments.
+
+The coordinator idempotently reuses the child canonical path, leases the child
+through `MultiAgentSupervisor`, and runs a separate Harness session with the
+child role instructions, smaller token/tool/write budgets, selected evidence,
+and only the requested tool subset. The child returns a typed encrypted
+artifact; its observable summary and verified resource references are supplied
+to the root as a non-persistable tool observation. A worker cannot publish an IM
+result. When the root Harness reaches a terminal state, the IM handler maps that
+state to the graph terminal transition using the root node identity.
+
 ## 5. Context inheritance
 
 Full transcript inheritance is not the default. The parent constructs a typed

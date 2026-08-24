@@ -33,7 +33,9 @@ from codex2lark.core.budgets import BudgetKind, BudgetLimit
 from codex2lark.core.models import Identity
 from codex2lark.interfaces.application import create_application
 from codex2lark.runtime.context import ContextEngine
+from codex2lark.runtime.delegation import DelegateAgentTool, MultiAgentCoordinator
 from codex2lark.runtime.harness import AgentHarness, ModelProvider
+from codex2lark.runtime.multi_agent import MultiAgentSupervisor
 from codex2lark.runtime.outbox import OutboxDispatcher
 from codex2lark.runtime.plugins import PluginManager
 from codex2lark.runtime.resources import ResourceLoader
@@ -42,12 +44,14 @@ from codex2lark.runtime.tasks import DurableTaskWorker
 from codex2lark.runtime.tools import (
     ApprovalBroker,
     PolicyDecision,
+    SemanticTool,
     ToolContext,
     ToolExecutor,
     ToolPolicy,
     ToolRegistry,
 )
 from codex2lark.runtime.types import AgentDefinition, ToolCall, ToolDefinition
+from codex2lark.storage.agent_store import SQLiteAgentGraphStore
 from codex2lark.storage.crypto import EnvelopeCipher
 from codex2lark.storage.database import SQLiteDatabase
 from codex2lark.storage.runtime_store import RuntimeStore
@@ -224,20 +228,46 @@ def create_v3_gateway(
     plugins.register(create_im_plugin())
     plugins.register(docs_plugin)
     plugins.register(artifacts_plugin)
-    enabled_tools = [*docs_plugin.tools, *artifacts_plugin.tools]
+    business_tools = [*docs_plugin.tools, *artifacts_plugin.tools]
+    business_registry = ToolRegistry(business_tools)
+    selected_model = model or OpenAIResponsesModel.from_api_key(
+        api_key=config.openai_api_key,
+        base_url=config.openai_base_url,
+    )
+    policy = AllowConfiguredTools()
+    approvals = DenyUnconfiguredApprovals()
+    child_harness = AgentHarness(
+        model=selected_model,
+        tools=business_registry,
+        tool_executor=ToolExecutor(
+            business_registry,
+            policy,
+            approvals,
+        ),
+        resources=ResourceLoader([]),
+        context=ContextEngine(),
+        sessions=sessions,
+    )
+    graph_store = SQLiteAgentGraphStore(database, cipher)
+    supervisor = MultiAgentSupervisor(graph_store)
+    coordinator = MultiAgentCoordinator(
+        supervisor=supervisor,
+        store=graph_store,
+        child_harness=child_harness,
+        sessions=sessions,
+        child_tools=business_registry,
+        model_profile=config.model,
+    )
+    delegation = DelegateAgentTool(
+        coordinator,
+        tuple(tool.definition.tool_id for tool in business_tools),
+    )
+    enabled_tools: list[SemanticTool] = [*business_tools, delegation]
     registry = ToolRegistry(enabled_tools)
     harness = AgentHarness(
-        model=model
-        or OpenAIResponsesModel.from_api_key(
-            api_key=config.openai_api_key,
-            base_url=config.openai_base_url,
-        ),
+        model=selected_model,
         tools=registry,
-        tool_executor=ToolExecutor(
-            registry,
-            AllowConfiguredTools(),
-            DenyUnconfiguredApprovals(),
-        ),
+        tool_executor=ToolExecutor(registry, policy, approvals),
         resources=ResourceLoader([]),
         context=ContextEngine(),
         sessions=sessions,
@@ -253,7 +283,12 @@ def create_v3_gateway(
         ),
         model_profile=config.model,
         tool_ids=tuple(tool.definition.tool_id for tool in enabled_tools),
-        budget_limits=(BudgetLimit(BudgetKind.MODEL_TOKENS, 32_000),),
+        budget_limits=(
+            BudgetLimit(BudgetKind.MODEL_TOKENS, 32_000),
+            BudgetLimit(BudgetKind.TOOL_CALLS, 16),
+            BudgetLimit(BudgetKind.EXTERNAL_WRITES, 6),
+            BudgetLimit(BudgetKind.AGENT_NODES, 8),
+        ),
         max_turns=8,
         max_context_tokens=32_000,
     )
@@ -264,6 +299,7 @@ def create_v3_gateway(
         definition=definition,
         templates=templates,
         identity_ref=f"bot:{config.feishu_app_id}",
+        graph_lifecycle=coordinator,
     )
     task_worker = DurableTaskWorker(
         runtime_store,
