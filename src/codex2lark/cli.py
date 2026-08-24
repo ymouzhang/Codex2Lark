@@ -5,13 +5,15 @@ import asyncio
 import json
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 
 from . import __version__
 from .adapters.lark_cli import SUPPORTED_LARK_CLI_VERSION, safe_tool_call_error
-from .bootstrap.config import GatewayConfig
+from .bootstrap.config import GatewayConfig, resolve_data_dir
 from .bootstrap.gateway import create_v3_gateway
 from .interfaces.application import create_application
 from .interfaces.mcp import run_stdio
+from .storage.maintenance import BackupResult, StorageMaintenance, StorageStatus
 
 
 async def _doctor() -> int:
@@ -123,7 +125,37 @@ def _parser() -> argparse.ArgumentParser:
     subcommands.add_parser("mcp", help="run the stdio MCP server")
     subcommands.add_parser("gateway", help="run the standalone Feishu event gateway")
     subcommands.add_parser("doctor", help="check lark-cli and authentication")
+    storage = subcommands.add_parser("storage", help="inspect and protect V3 runtime state")
+    storage_commands = storage.add_subparsers(dest="storage_command", required=True)
+    storage_commands.add_parser("status", help="check storage integrity and safe counts")
+    backup = storage_commands.add_parser("backup", help="create an encrypted-state backup")
+    backup.add_argument("archive", type=Path)
+    verify = storage_commands.add_parser("verify-backup", help="verify a backup archive")
+    verify.add_argument("archive", type=Path)
+    restore = storage_commands.add_parser("restore", help="restore into a new data directory")
+    restore.add_argument("archive", type=Path)
+    restore.add_argument("--data-dir", required=True, type=Path)
     return parser
+
+
+def _storage(arguments: argparse.Namespace) -> int:
+    try:
+        result: StorageStatus | BackupResult
+        if arguments.storage_command == "status":
+            result = StorageMaintenance(resolve_data_dir()).status()
+        elif arguments.storage_command == "backup":
+            result = StorageMaintenance(resolve_data_dir()).backup(arguments.archive)
+        elif arguments.storage_command == "verify-backup":
+            result = StorageMaintenance.verify_backup(arguments.archive)
+        elif arguments.storage_command == "restore":
+            result = StorageMaintenance.restore(arguments.archive, arguments.data_dir)
+        else:
+            return 2
+    except (FileNotFoundError, FileExistsError, RuntimeError, ValueError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        return 1
+    print(StorageMaintenance.as_json(result))
+    return 0 if result.ok else 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -142,6 +174,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         except KeyboardInterrupt:
             return 130
+    if arguments.command == "storage":
+        return _storage(arguments)
     return 2
 
 

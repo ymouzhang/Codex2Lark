@@ -9,6 +9,16 @@ from codex2lark.core.models import Identity
 from codex2lark.storage.crypto import MasterKey
 
 
+def resolve_data_dir(environment: Mapping[str, str] | None = None) -> Path:
+    values = os.environ if environment is None else environment
+    state_root = values.get("XDG_STATE_HOME")
+    default_dir = (
+        Path(state_root).expanduser() if state_root else Path.home() / ".local" / "state"
+    ) / "codex2lark"
+    data_dir = Path(values.get("CODEX2LARK_DATA_DIR", str(default_dir))).expanduser()
+    return data_dir if data_dir.is_absolute() else (Path.cwd() / data_dir).resolve()
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayConfig:
     feishu_app_id: str
@@ -39,13 +49,7 @@ class GatewayConfig:
     @classmethod
     def from_environment(cls, environment: Mapping[str, str] | None = None) -> GatewayConfig:
         values = os.environ if environment is None else environment
-        state_root = values.get("XDG_STATE_HOME")
-        default_dir = (
-            Path(state_root).expanduser() if state_root else Path.home() / ".local" / "state"
-        ) / "codex2lark"
-        data_dir = Path(values.get("CODEX2LARK_DATA_DIR", str(default_dir))).expanduser()
-        if not data_dir.is_absolute():
-            data_dir = (Path.cwd() / data_dir).resolve()
+        data_dir = resolve_data_dir(values)
         return cls(
             feishu_app_id=cls._required(values, "CODEX2LARK_FEISHU_APP_ID"),
             feishu_app_secret=cls._required(values, "CODEX2LARK_FEISHU_APP_SECRET"),

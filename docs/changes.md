@@ -3,6 +3,11 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined content-safe storage status and a stopped-Gateway backup,
+  verification, and restore workflow with a hashed archive manifest, referenced
+  encrypted blobs, no embedded key, and safe empty-directory restore.
+  Implementation area: storage maintenance and CLI administration.
+
 - Defined crash-safe retry exhaustion for durable tasks: an expired final lease
   now enters a repeatable terminal-finalization step instead of becoming a
   silent failed row. Implementation area: task leasing and durable worker

@@ -146,7 +146,45 @@ Expired leases are recovered after restart. Press `Ctrl+C` for a draining stop;
 the service stops event intake, completes its bounded drain, checkpoints SQLite,
 and then exits.
 
-## 6. Stop and uninstall
+## 7. Stop and uninstall
+
+## 6. Runtime storage operations
+
+Routine diagnostics need only the configured data directory and never print
+message, attachment, prompt, or document content:
+
+```bash
+uv run codex2lark storage status
+```
+
+The JSON result reports SQLite integrity, schema version, database/blob byte
+counts, and task/outbox states. A non-`ok` integrity result exits non-zero.
+
+Create a portable encrypted-state backup only while the Gateway is stopped:
+
+```bash
+uv run codex2lark storage backup /absolute/path/codex2lark-backup.zip
+uv run codex2lark storage verify-backup /absolute/path/codex2lark-backup.zip
+```
+
+The command uses SQLite's backup API, includes only blob files referenced by
+the snapshot, records a SHA-256 manifest, and fails rather than overwriting an
+existing output. A process lock makes the command fail if the Gateway still
+owns the data directory. The archive contains encrypted state, not the external master
+key. Back up `CODEX2LARK_MASTER_KEY_BASE64` separately in the secret provider;
+without the matching key the restored ciphertext is intentionally unreadable.
+
+Restore requires a new or empty target directory and a stopped Gateway:
+
+```bash
+uv run codex2lark storage restore \
+  /absolute/path/codex2lark-backup.zip \
+  --data-dir /absolute/path/new-codex2lark-state
+```
+
+Restore verifies every manifest hash and the SQLite integrity check before it
+publishes the recovered files. It rejects unexpected archive paths and never
+extracts the master key.
 
 ### Stop foreground processes
 

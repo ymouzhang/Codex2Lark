@@ -383,6 +383,15 @@ The supported backup flow uses SQLite's online backup mechanism, then copies the
 immutable encrypted blobs referenced by that snapshot. Restore runs compatibility
 and integrity checks before the Gateway starts event sources.
 
+The first supported operator workflow requires a stopped Gateway so the
+database snapshot and referenced immutable blobs form one simple consistency
+boundary. Backup never overwrites an existing archive and never includes the
+external master key. A manifest contains only schema/version metadata, relative
+paths, sizes, and SHA-256 hashes. Verification and restore reject undeclared or
+unsafe archive paths, hash mismatches, missing referenced blobs, schema versions
+newer than this binary, and failed SQLite integrity checks. Restore publishes
+files only into a new or empty data directory.
+
 Because Feishu is upstream truth, losing a backup may allow message and resource
 backfill within Feishu API limits, but queued task state, run checkpoints, and
 expired upstream content may be unrecoverable.

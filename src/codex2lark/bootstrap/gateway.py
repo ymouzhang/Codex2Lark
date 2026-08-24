@@ -56,6 +56,7 @@ from codex2lark.storage.agent_store import SQLiteAgentGraphStore
 from codex2lark.storage.blobs import EncryptedBlobStore
 from codex2lark.storage.crypto import EnvelopeCipher
 from codex2lark.storage.database import SQLiteDatabase
+from codex2lark.storage.locking import DataDirectoryLock
 from codex2lark.storage.runtime_store import RuntimeStore
 from codex2lark.storage.session_store import SQLiteSessionStore
 
@@ -100,6 +101,7 @@ class V3Gateway:
         outbox: OutboxDispatcher,
         poll_interval_ms: int,
         clock_ms: Callable[[], int] | None = None,
+        data_lock: DataDirectoryLock | None = None,
     ) -> None:
         self._database = database
         self._plugins = plugins
@@ -108,22 +110,30 @@ class V3Gateway:
         self._outbox = outbox
         self._poll_interval = poll_interval_ms / 1000
         self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
+        self._data_lock = data_lock
         self._stop = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._worker is not None:
             raise RuntimeError("V3 gateway is already running")
-        await self._database.open()
+        if self._data_lock is not None:
+            self._data_lock.acquire()
         try:
-            await self._plugins.start()
+            await self._database.open()
             try:
-                await self._source.start()
+                await self._plugins.start()
+                try:
+                    await self._source.start()
+                except BaseException:
+                    await self._plugins.stop()
+                    raise
             except BaseException:
-                await self._plugins.stop()
+                await self._database.close()
                 raise
         except BaseException:
-            await self._database.close()
+            if self._data_lock is not None:
+                self._data_lock.release()
             raise
         self._stop.clear()
         self._worker = asyncio.create_task(self._run(), name="codex2lark-v3-worker")
@@ -146,7 +156,11 @@ class V3Gateway:
             try:
                 await self._plugins.stop()
             finally:
-                await self._database.close()
+                try:
+                    await self._database.close()
+                finally:
+                    if self._data_lock is not None:
+                        self._data_lock.release()
             self._worker = None
             logger.info("V3 gateway stopped")
         if source_failure is not None:
@@ -334,4 +348,5 @@ def create_v3_gateway(
         tasks=task_worker,
         outbox=outbox,
         poll_interval_ms=config.poll_interval_ms,
+        data_lock=DataDirectoryLock(config.data_dir),
     )

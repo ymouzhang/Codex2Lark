@@ -30,6 +30,14 @@ def test_parser_exposes_independent_gateway_command() -> None:
     assert cli._parser().parse_args(["gateway"]).command == "gateway"
 
 
+def test_parser_exposes_storage_administration_commands(tmp_path) -> None:
+    arguments = cli._parser().parse_args(
+        ["storage", "restore", str(tmp_path / "backup.zip"), "--data-dir", str(tmp_path)]
+    )
+    assert arguments.command == "storage"
+    assert arguments.storage_command == "restore"
+
+
 def test_gateway_reports_invalid_configuration_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
