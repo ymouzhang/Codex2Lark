@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 from . import __version__
 from .application import create_application
-from .lark_cli import safe_tool_call_error
+from .lark_cli import SUPPORTED_LARK_CLI_VERSION, safe_tool_call_error
 from .mcp_server import run_stdio
 
 
@@ -30,9 +30,60 @@ async def _doctor() -> int:
         )
         return 1
     try:
-        status = await application.lark.execute(["auth", "status", "--json", "--verify"])
+        installed_version = await application.lark.version()
     except Exception as exc:
         print(json.dumps(safe_tool_call_error(exc), ensure_ascii=False))
+        return 1
+    if installed_version != SUPPORTED_LARK_CLI_VERSION:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "checks": {
+                        "lark_cli": "available",
+                        "lark_cli_version": {
+                            "installed": installed_version,
+                            "required": SUPPORTED_LARK_CLI_VERSION,
+                        },
+                        "business_data_persistence": "disabled",
+                    },
+                    "next_action": (
+                        f"install the pinned CLI with "
+                        f"npx @larksuite/cli@{SUPPORTED_LARK_CLI_VERSION} install"
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 1
+    try:
+        status = await application.lark.auth_status(verify=True)
+    except Exception as exc:
+        print(json.dumps(safe_tool_call_error(exc), ensure_ascii=False))
+        return 1
+    identities = status.data.get("identities")
+    active_status = identities.get(status.identity) if isinstance(identities, dict) else None
+    authentication_available = (
+        status.identity not in (None, "none")
+        and isinstance(active_status, dict)
+        and active_status.get("available") is True
+    )
+    if not authentication_available:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "checks": {
+                        "lark_cli": "available",
+                        "lark_cli_version": installed_version,
+                        "authentication": status.data,
+                        "business_data_persistence": "disabled",
+                    },
+                    "next_action": "configure credentials or run lark-cli auth login --recommend",
+                },
+                ensure_ascii=False,
+            )
+        )
         return 1
     print(
         json.dumps(
@@ -41,6 +92,7 @@ async def _doctor() -> int:
                 "version": __version__,
                 "checks": {
                     "lark_cli": "available",
+                    "lark_cli_version": installed_version,
                     "authentication": status.data,
                     "business_data_persistence": "disabled",
                 },

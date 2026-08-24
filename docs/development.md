@@ -5,7 +5,8 @@
 - Python 3.12 or newer.
 - `uv` for Python version, virtual environment, dependency, lockfile, and command
   management.
-- `lark-cli` as an external runtime dependency.
+- `@larksuite/cli@1.0.89` as the exact supported external runtime dependency;
+  `doctor` rejects other versions.
 - Official Python MCP SDK for the initial stdio server.
 - `pytest`, `ruff`, and `mypy` for validation.
 
@@ -88,6 +89,9 @@ authenticated identity.
 
 - Runtime dependencies must have a direct, documented use.
 - Versions are resolved and locked by `uv.lock`.
+- The external Node.js `@larksuite/cli` dependency is not representable in
+  `uv.lock`; its exact version is pinned by the operations install command and
+  the runtime compatibility constant checked by `doctor`.
 - Subprocess and XML functionality use the standard library where practical.
 - The project does not depend on a database, ORM, cache server, or task queue.
 - Until the MCP SDK resolves its `Settings.lifespan` forward reference before

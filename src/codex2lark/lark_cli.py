@@ -16,6 +16,8 @@ _SECRET_PATTERN = re.compile(
     r"(?i)(app_secret|access_token|refresh_token|authorization)"
     r"([\"'\s:=]+)(?:Bearer\s+)?([^\s\"']+)"
 )
+SUPPORTED_LARK_CLI_VERSION = "1.0.89"
+_VERSION_PATTERN = re.compile(r"^lark-cli version (?P<version>\S+)$")
 
 
 def redact_secrets(value: str) -> str:
@@ -56,6 +58,81 @@ class LarkCli:
         *,
         cwd: Path | None = None,
     ) -> LarkCliResult:
+        payload, return_code, stderr_text = await self._invoke(args, cwd=cwd)
+
+        if return_code != 0 or payload.get("ok") is not True:
+            raise self._upstream_error(payload, return_code, stderr_text)
+
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            data = {"value": data}
+        raw_meta = payload.get("meta")
+        meta: dict[str, Any] = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+        warnings_value = data.get("warnings", payload.get("warnings", []))
+        warnings = tuple(str(item) for item in warnings_value) if warnings_value else ()
+        return LarkCliResult(
+            data=data,
+            identity=payload.get("identity"),
+            meta=meta,
+            warnings=warnings,
+        )
+
+    async def auth_status(self, *, verify: bool = True) -> LarkCliResult:
+        args = ["auth", "status", "--json"]
+        if verify:
+            args.append("--verify")
+        payload, return_code, stderr_text = await self._invoke(args)
+
+        if return_code != 0 or payload.get("ok") is False:
+            raise self._upstream_error(payload, return_code, stderr_text)
+
+        identity = payload.get("identity")
+        identities = payload.get("identities")
+        if not isinstance(identity, str) or not isinstance(identities, dict):
+            raise LarkCliError(
+                ErrorCategory.UPSTREAM,
+                "lark-cli returned an invalid authentication status",
+                details={"return_code": return_code},
+            )
+        return LarkCliResult(data=payload, identity=identity)
+
+    async def version(self) -> str:
+        stdout_text, stderr_text, return_code = await self._run(["--version"])
+        if return_code != 0:
+            raise LarkCliError(
+                ErrorCategory.UPSTREAM,
+                "lark-cli version check failed",
+                details={
+                    "return_code": return_code,
+                    "stderr": redact_secrets(stderr_text[:500]),
+                },
+            )
+        match = _VERSION_PATTERN.fullmatch(stdout_text)
+        if match is None:
+            raise LarkCliError(
+                ErrorCategory.UPSTREAM,
+                "lark-cli returned an invalid version response",
+                details={"response": redact_secrets(stdout_text[:500])},
+            )
+        return match.group("version")
+
+    async def _invoke(
+        self,
+        args: Sequence[str],
+        *,
+        cwd: Path | None = None,
+    ) -> tuple[dict[str, Any], int, str]:
+        stdout_text, stderr_text, return_code = await self._run(args, cwd=cwd)
+        payload_text = stdout_text if return_code == 0 else (stderr_text or stdout_text)
+        payload = self._parse_payload(payload_text)
+        return payload, return_code, stderr_text
+
+    async def _run(
+        self,
+        args: Sequence[str],
+        *,
+        cwd: Path | None = None,
+    ) -> tuple[str, str, int]:
         argv = (*self.executable, *self._validated_args(args))
         env = os.environ.copy()
         env.update(
@@ -101,25 +178,13 @@ class LarkCli:
 
         stdout_text = stdout.decode("utf-8", errors="replace").strip()
         stderr_text = stderr.decode("utf-8", errors="replace").strip()
-        payload_text = stdout_text if process.returncode == 0 else (stderr_text or stdout_text)
-        payload = self._parse_payload(payload_text)
-
-        if process.returncode != 0 or payload.get("ok") is not True:
-            raise self._upstream_error(payload, process.returncode, stderr_text)
-
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            data = {"value": data}
-        raw_meta = payload.get("meta")
-        meta: dict[str, Any] = dict(raw_meta) if isinstance(raw_meta, dict) else {}
-        warnings_value = data.get("warnings", payload.get("warnings", []))
-        warnings = tuple(str(item) for item in warnings_value) if warnings_value else ()
-        return LarkCliResult(
-            data=data,
-            identity=payload.get("identity"),
-            meta=meta,
-            warnings=warnings,
-        )
+        return_code = process.returncode
+        if return_code is None:
+            raise LarkCliError(
+                ErrorCategory.UPSTREAM,
+                "lark-cli process completed without an exit status",
+            )
+        return stdout_text, stderr_text, return_code
 
     @staticmethod
     def _validated_args(args: Sequence[str]) -> tuple[str, ...]:

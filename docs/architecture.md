@@ -76,6 +76,16 @@ revisions cannot safely be embedded in a durable document model.
 `lark-cli` is invoked as a child process with an argument array, an isolated
 working directory, bounded output, and a timeout. The adapter normalizes the
 CLI's JSON success/error envelopes and rejects non-JSON or contradictory output.
+Authentication status is an explicit exception to the normal envelope contract:
+`lark-cli auth status --json` returns a bare JSON status object even when the
+process exits successfully. A named adapter method validates and normalizes that
+object without weakening envelope validation for document and artifact commands.
+
+Codex2Lark supports exactly `@larksuite/cli` version `1.0.89`. This external
+Node.js runtime cannot be represented in Python's `uv.lock`, so the compatible
+version is pinned in the installation command and in a runtime constant. The
+adapter reads `lark-cli --version`, and `doctor` fails before authentication
+verification when the installed version differs from the pinned version.
 
 The adapter exposes named Python methods. No MCP tool accepts arbitrary CLI
 arguments.

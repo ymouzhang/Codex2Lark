@@ -65,6 +65,76 @@ async def test_success_envelope_is_normalized(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
+async def test_auth_status_bare_object_is_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    process = FakeProcess(
+        0,
+        json.dumps(
+            {
+                "appId": "cli_test",
+                "identities": {
+                    "user": {"status": "ready", "available": True},
+                    "bot": {"status": "missing", "available": False},
+                },
+                "identity": "user",
+            }
+        ),
+    )
+    calls = install_process(monkeypatch, process)
+    client = LarkCli("lark-cli")
+
+    result = await client.auth_status()
+
+    assert result.identity == "user"
+    assert result.data["identities"]["user"]["available"] is True
+    assert calls[0][0] == ("lark-cli", "auth", "status", "--json", "--verify")
+
+
+@pytest.mark.asyncio
+async def test_version_output_is_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = install_process(monkeypatch, FakeProcess(0, "lark-cli version 1.0.89\n"))
+    client = LarkCli("lark-cli")
+
+    version = await client.version()
+
+    assert version == "1.0.89"
+    assert calls[0][0] == ("lark-cli", "--version")
+
+
+@pytest.mark.asyncio
+async def test_invalid_version_output_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_process(monkeypatch, FakeProcess(0, "1.0.89"))
+    client = LarkCli("lark-cli")
+
+    with pytest.raises(LarkCliError, match="invalid version response"):
+        await client.version()
+
+
+@pytest.mark.asyncio
+async def test_bare_status_is_still_rejected_by_normal_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install_process(
+        monkeypatch,
+        FakeProcess(0, json.dumps({"identities": {}, "identity": "none"})),
+    )
+    client = LarkCli("lark-cli")
+
+    with pytest.raises(LarkCliError) as raised:
+        await client.execute(["docs", "+fetch"])
+
+    assert raised.value.category is ErrorCategory.UPSTREAM
+
+
+@pytest.mark.asyncio
+async def test_malformed_auth_status_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    install_process(monkeypatch, FakeProcess(0, json.dumps({"identity": "user"})))
+    client = LarkCli("lark-cli")
+
+    with pytest.raises(LarkCliError, match="invalid authentication status"):
+        await client.auth_status()
+
+
+@pytest.mark.asyncio
 async def test_permission_error_is_classified_and_redacted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

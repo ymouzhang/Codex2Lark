@@ -32,3 +32,7 @@ it. It is not a release changelog.
   ID validation rules before tightening the edit service.
 - Documented the temporary MCP SDK settings-model compatibility shim before
   removing its noisy startup warning.
+- Defined the bare `lark-cli auth status` response contract and usable-identity
+  health rule before correcting adapter normalization and `doctor` reporting.
+- Pinned the supported external `@larksuite/cli` runtime to `1.0.89` in the
+  installation contract before adding adapter and `doctor` version enforcement.
