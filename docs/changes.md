@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined direct single-node Gateway process control before implementation:
+  foreground/run compatibility, daemon start readiness waiting, content-safe
+  PID/status/log files, exact process validation before SIGTERM, bounded graceful
+  stop, stale-state refusal, and separation from systemd/Docker ownership.
+  Implementation area: CLI parser, Gateway signal lifecycle, process controller,
+  usage/operations docs, and subprocess lifecycle tests.
+
 - Defined resumable wrapping-key rotation before implementation: stopped-
   Gateway exclusive ownership, current/new key separation, a crash marker,
   mixed-envelope repeatability, database/blob verification, startup refusal

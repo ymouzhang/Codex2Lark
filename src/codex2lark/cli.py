@@ -5,7 +5,10 @@ import asyncio
 import json
 import logging
 import os
+import signal
+import time
 from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import asdict
 from pathlib import Path
 
@@ -13,6 +16,7 @@ from . import __version__
 from .adapters.lark_cli import SUPPORTED_LARK_CLI_VERSION, safe_tool_call_error
 from .bootstrap.config import GatewayConfig, resolve_data_dir
 from .bootstrap.gateway import create_v3_gateway
+from .bootstrap.process_control import GatewayProcessController, GatewayStatusFiles
 from .interfaces.application import create_application
 from .interfaces.mcp import run_stdio
 from .runtime.resources import ResourceLoader
@@ -184,12 +188,35 @@ def _doctor_gateway() -> int:
 
 
 async def _gateway() -> int:
-    gateway = create_v3_gateway(GatewayConfig.from_environment())
-    await gateway.start()
+    config = GatewayConfig.from_environment()
+    gateway = create_v3_gateway(config)
+    status_files = GatewayStatusFiles(config.data_dir)
+    pid = os.getpid()
+    started_at_ms = int(time.time() * 1000)
+    shutdown = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        with suppress(NotImplementedError):
+            loop.add_signal_handler(signum, shutdown.set)
+    if os.environ.get("CODEX2LARK_DAEMON_CHILD") == "1":
+        for _ in range(100):
+            if status_files.read_pid() == pid:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise RuntimeError("daemon parent did not publish the Gateway PID")
+    else:
+        status_files.publish("starting", pid=pid, started_at_ms=started_at_ms)
     try:
-        await asyncio.Event().wait()
+        await gateway.start()
+        status_files.publish("ready", pid=pid, started_at_ms=started_at_ms)
+        await shutdown.wait()
     finally:
-        await gateway.stop()
+        status_files.publish("stopping", pid=pid, started_at_ms=started_at_ms)
+        try:
+            await gateway.stop()
+        finally:
+            status_files.clear_if_owner(pid)
     return 0
 
 
@@ -198,7 +225,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("mcp", help="run the stdio MCP server")
-    subcommands.add_parser("gateway", help="run the standalone Feishu event gateway")
+    gateway = subcommands.add_parser("gateway", help="control the standalone Feishu Gateway")
+    gateway.add_argument(
+        "gateway_action",
+        nargs="?",
+        choices=("run", "start", "status", "stop"),
+        default="run",
+    )
     doctor = subcommands.add_parser("doctor", help="check interactive or Gateway readiness")
     doctor.add_argument("--gateway", action="store_true")
     storage = subcommands.add_parser("storage", help="inspect and protect V3 runtime state")
@@ -303,8 +336,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.command == "gateway":
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         try:
+            controller = GatewayProcessController(resolve_data_dir())
+            if arguments.gateway_action == "start":
+                print(GatewayStatusFiles.as_json(controller.start()))
+                return 0
+            if arguments.gateway_action == "status":
+                status = controller.files.read()
+                print(GatewayStatusFiles.as_json(status))
+                return 0 if status.ok else 1
+            if arguments.gateway_action == "stop":
+                print(GatewayStatusFiles.as_json(controller.stop()))
+                return 0
             return asyncio.run(_gateway())
-        except ValueError as exc:
+        except (RuntimeError, TimeoutError, ValueError) as exc:
             logging.error("Gateway configuration is invalid: %s", exc)
             return 2
         except KeyboardInterrupt:

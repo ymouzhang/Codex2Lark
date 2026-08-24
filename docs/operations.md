@@ -160,13 +160,15 @@ procedure.
 Start the Gateway:
 
 ```bash
-uv run codex2lark gateway
+uv run codex2lark gateway start
+uv run codex2lark gateway status
 ```
 
-A healthy startup includes:
+A healthy status is content-safe and includes `"state":"ready"`. For foreground
+debugging use:
 
-```text
-INFO V3 gateway ready
+```bash
+uv run codex2lark gateway run
 ```
 
 The Gateway needs outbound internet access but no public IP, Webhook, RabbitMQ,
@@ -174,6 +176,13 @@ or Redis. Admission, tasks, run checkpoints, and reply intents are durable.
 Expired leases are recovered after restart. Press `Ctrl+C` for a draining stop;
 the service stops event intake, completes its bounded drain, checkpoints SQLite,
 and then exits.
+
+The built-in single-node controller stores only a PID, timestamps, and lifecycle
+state under the data directory; logs go to `gateway.log` and must remain
+content-safe. `gateway stop` validates the live process command before signaling
+it and waits up to the bounded shutdown deadline. A stale or mismatched PID is
+reported and never signaled. Use this controller only for direct single-node
+operation; systemd/Docker deployments continue to own their process lifecycle.
 
 ### Disk capacity settings
 

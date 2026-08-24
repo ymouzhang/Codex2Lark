@@ -48,6 +48,7 @@ redesign target, not a claim about the current tree.
 ```text
 src/codex2lark/
 ├── __init__.py
+├── __main__.py                 minimal `python -m codex2lark` entrypoint
 ├── cli.py
 ├── core/                       pure domain types and utilities
 │   ├── ids.py

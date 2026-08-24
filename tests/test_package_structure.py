@@ -14,7 +14,7 @@ def imported_modules(path: Path) -> set[str]:
 def test_root_package_contains_only_public_entrypoints() -> None:
     root_modules = {path.name for path in PACKAGE_ROOT.glob("*.py")}
 
-    assert root_modules == {"__init__.py", "cli.py"}
+    assert root_modules == {"__init__.py", "__main__.py", "cli.py"}
 
 
 def test_mcp_interface_does_not_import_gateway_bootstrap() -> None:

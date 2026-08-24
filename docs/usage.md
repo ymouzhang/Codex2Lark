@@ -105,14 +105,18 @@ After configuring the environment in
 start the Gateway for mention-driven group work:
 
 ```bash
-uv run codex2lark gateway
+uv run codex2lark gateway start
 ```
 
-The following log indicates that the long connection is ready:
+The command returns a content-safe JSON result after the long connection is
+ready. Inspect it at any time:
 
-```text
-INFO V3 gateway ready
+```bash
+uv run codex2lark gateway status
 ```
+
+For foreground debugging, run `uv run codex2lark gateway run`; bare
+`uv run codex2lark gateway` is the same foreground mode.
 
 The Gateway is independent of Codex and MCP. Closing Codex does not stop it. In
 production, run this command with systemd, Docker, or another process manager.
@@ -162,14 +166,17 @@ different terminal.
 
 ### Stop the Gateway
 
-When the Gateway runs in the foreground, press `Ctrl+C` in its terminal. The
-following log confirms that it stopped:
+Stop a Gateway started by `gateway start` with:
 
-```text
-INFO V3 gateway stopped
+```bash
+uv run codex2lark gateway stop
 ```
 
-When systemd or Docker manages it, use the corresponding service stop command.
+The command sends a graceful termination request only after validating that the
+recorded process is the Codex2Lark Gateway, then waits for its drain and lock
+release. When the Gateway runs in foreground mode, press `Ctrl+C`. When systemd
+or Docker manages it, use the corresponding service stop command and do not also
+use the built-in daemon start command.
 
 ### Prevent Codex from loading MCP again
 
