@@ -15,15 +15,17 @@ having types or isolated primitives is not enough.
 | Kernel and storage | delivered | SQLite admission, leases, encrypted blobs, idempotency, outbox, retention GC, backup/verify/restore, resumable wrapping-key rotation, one-process data-directory locking, disk high-water attachment admission, message/chat/tenant/all-data purge, and content-safe pressure status | none for the V3 contract |
 | Agent Harness | delivered | versioned resources, model/tool loop, checkpoints, budgets, policy gate, write verification, deterministic recovery, durable safe-boundary steering/follow-up/interrupt/cancel, requester-bound destructive-tool approvals, and observable complete-turn compaction evals | none for the V3 contract |
 | Multi-Agent supervisor | delivered | durable rooted graphs, bounded delegation, child Harnesses, idempotent typed mailboxes and root collaboration tools, typed artifacts, same-requester cancellation cascade, safe parallel readers/writers, live and logical target locks, exact child write scopes, root-only completion, 64-group graph fairness, and three-worker restart-chaos acceptance | none for the V3 contract |
-| Feishu IM | partial | service-native long connection, durable pre-ACK admission, exact mentions, immediate bot-added membership, live context, encrypted attachments, acknowledgement/progress/approval/terminal outbox replies, hard-pressure metadata fallback, and edit/recall/access-loss invalidation | opt-in live multi-group acceptance |
-| Feishu authoring | partial | managed-folder Drive/Docs/Whiteboard/Sheets/Base semantic tools, deterministic write claims, and live read-back verification | richer capability-specific editing, complete group-to-professional-document acceptance, and service-native replacement of remaining lark-cli authoring adapters |
-| Operations and release | partial | `doctor --gateway`, foreground and daemon start/status/graceful-stop control, storage status, retention GC, message/chat/tenant/all-data purge, backup, verification, restore, resumable key rotation, packaged resources, 64-group scheduler burst, and in-process restart-chaos fixtures | metrics, soak/extended chaos suites, canary rollout, and rehearsed live recovery |
+| Feishu IM | delivered | service-native long connection, durable pre-ACK admission, exact mentions, immediate bot-added membership, live context, encrypted attachments, acknowledgement/progress/approval/terminal outbox replies, hard-pressure metadata fallback, edit/recall/access-loss invalidation, and an executable content-safe live multi-group release gate | no implementation work; each deployment must still collect its own opt-in live evidence |
+| Feishu authoring | delivered | managed-folder Drive/Docs/Whiteboard/Sheets/Base and group-digest semantic tools, deterministic write claims, full group create/edit acceptance fixtures, and live read-back verification | none for the V3 contract |
+| Operations and release | delivered | readiness, process control, lifecycle metrics, retention/purge, backup/verify/restore, key rotation, sticky canary rollout, 64-group load, multi-worker restart chaos, and encrypted pending-task recovery rehearsal | no implementation work; production release still requires deployment-specific live evidence |
 
-Therefore the repository currently provides a usable **V3 production
-baseline**, not the completed V3 acceptance envelope in
-[requirements.md](requirements.md). Operator documentation must describe only
-the shipped column. Design documents may describe target behavior, but must not
-present open work as executable.
+Therefore the repository implements the V3 acceptance envelope in
+[requirements.md](requirements.md). This statement describes shipped code and
+deterministic acceptance coverage, not a claim that an arbitrary Feishu tenant
+has passed its release gate. A deployment is release-qualified only after its
+operator runs the opt-in live multi-group gate and any capability-specific live
+read-back required by the change. Operator documentation describes only shipped
+behavior.
 
 ## Design gate: accepted before implementation
 
@@ -134,3 +136,9 @@ Exit: the single-node service meets the acceptance criteria in
 - Multi-host availability: only after a concrete SLO and storage/leadership
   design exist.
 - Untrusted plugin marketplace and durable cross-session semantic memory.
+- Replacing the trusted internal argument-array `lark-cli` authoring adapter
+  with service-native adapters. V3 exposes only bounded semantic tools and keeps
+  this adapter outside model control; replacement is a post-V3 transport change
+  when direct adapters cover the same verified capabilities.
+- Richer capability-specific editors beyond the bounded Docs, Whiteboard,
+  Sheets, Base, and group-digest contracts required by V3.

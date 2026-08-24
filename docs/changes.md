@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Completed the V3 implementation audit. The roadmap now records delivered IM,
+  authoring, and operations paths while separating shipped contract completion
+  from tenant-specific live release evidence. The trusted internal lark-cli
+  authoring transport and richer post-V3 editors are classified as deferred
+  transport/capability expansion rather than open V3 behavior.
+
 - Defined the opt-in live multi-group release gate before implementation. Given
   two or more exact chat IDs and a start timestamp, a content-safe observer
   verifies completed graph/task state, sent acknowledgement, and exactly one

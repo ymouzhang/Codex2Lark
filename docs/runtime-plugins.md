@@ -360,7 +360,7 @@ The IM acknowledgement and terminal suffix bundle is likewise versioned package
 data. It is loaded once at composition and mapped to the typed response-template
 object; event content and model output cannot select a different locale or
 override these trusted strings. The first production profile ships
-`group-agent-core@1.1.0`, `delegated-worker-core@1.0.0`, and `im-zh-CN@1`.
+`group-agent-core@1.1.0`, `delegated-worker-core@1.0.0`, and `im-zh-CN@2`.
 The group package teaches the root to include exact structured targets only for
 existing resources that a capability can resolve live; it keeps create and
 unresolved writer delegation serial.
