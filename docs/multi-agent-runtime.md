@@ -275,12 +275,22 @@ placed into the root journal in original call order.
 
 New messages are classified outside the model:
 
-- a reply in the same source thread may steer or follow up the active root;
-- an explicit cancellation requests graph cancellation;
+- a same-requester reply in the same source thread may steer or follow up the
+  active root using the deterministic command grammar in
+  [agent-harness.md](agent-harness.md#7-steering-follow-up-and-approvals);
+- an explicit same-requester cancellation or interruption targets the active
+  root graph and is observed at the next safe Harness boundary;
 - an approval response resolves one exact pending approval;
 - an unrelated mention creates a new queued graph only if SessionKey policy
   permits it;
 - messages from unauthorized users remain context evidence at most.
+
+Run controls are addressed by the trusted task/session binding, not a model-
+supplied graph or node ID. The persisted control is encrypted and contains its
+source message ID and actor binding. The root Harness is the only consumer;
+children receive resulting scoped instructions only through supervisor-owned
+mailboxes. Root cancellation cascades through the durable graph before the
+terminal reply is published.
 
 The root acknowledges admission immediately. Progress messages are throttled
 and factual. Only the root publishes the terminal response. Worker Agents never

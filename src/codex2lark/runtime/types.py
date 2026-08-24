@@ -160,6 +160,7 @@ class RunCheckpoint:
     source_versions: dict[str, str]
     consumed_budget: dict[str, int]
     compactor_version: int
+    applied_control_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

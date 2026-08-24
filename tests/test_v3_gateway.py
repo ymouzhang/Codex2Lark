@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -133,14 +134,21 @@ class FakeChannel:
             self.completed.set()
         return SimpleNamespace(success=True, message_id=f"om_reply_{len(self.sent)}")
 
-    async def emit_mention(self) -> None:
+    async def emit_mention(
+        self,
+        *,
+        event_id: str = "event-e2e",
+        message_id: str = "om_trigger",
+        text: str = "summarize this",
+        root_id: str | None = None,
+    ) -> None:
         value = SimpleNamespace(
             raw={
-                "header": {"event_id": "event-e2e", "tenant_key": "tenant-1"},
+                "header": {"event_id": event_id, "tenant_key": "tenant-1"},
                 "event": {
                     "sender": {"sender_type": "user"},
                     "message": {
-                        "content": '{"text":"@_user_1 summarize this"}',
+                        "content": json.dumps({"text": f"@_user_1 {text}"}),
                         "message_type": "text",
                         "mentions": [
                             {
@@ -149,6 +157,7 @@ class FakeChannel:
                                 "name": "Agent",
                             }
                         ],
+                        "root_id": root_id,
                     },
                 },
             },
@@ -157,10 +166,10 @@ class FakeChannel:
             sender_name="Aaron",
             chat_id="oc_group",
             chat_type="group",
-            message_id="om_trigger",
+            message_id=message_id,
             raw_content_type="text",
-            safe_content_text="summarize this",
-            content_text="summarize this",
+            safe_content_text=text,
+            content_text=text,
             create_time="100",
             conversation=SimpleNamespace(chat_type="group", thread_id=None),
             resources=[],
@@ -194,6 +203,18 @@ class E2EModel:
     async def complete(self, request: ModelRequest) -> ModelResponse:
         assert request.messages[-1].content == "summarize this"
         return ModelResponse("已经为你整理好摘要。", usage=ModelUsage(10, 8))
+
+
+class BlockingE2EModel:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        del request
+        self.started.set()
+        await self.release.wait()
+        return ModelResponse("This answer must be cancelled.")
 
 
 def e2e_config(path: Path) -> GatewayConfig:
@@ -232,3 +253,48 @@ async def test_composed_gateway_admits_executes_and_sends_one_terminal_reply(
     with sqlite3.connect(tmp_path / "runtime.db") as connection:
         graph = connection.execute("SELECT status FROM runtime_graphs").fetchone()
     assert graph == ("completed",)
+
+
+async def test_composed_gateway_routes_same_requester_cancel_to_active_root(
+    tmp_path: Path,
+) -> None:
+    channel = FakeChannel()
+    model = BlockingE2EModel()
+    service = create_v3_gateway(
+        e2e_config(tmp_path),
+        channel=channel,  # type: ignore[arg-type]
+        model=model,
+        im_api=E2EMessageAPI(),
+    )
+    await service.start()
+    try:
+        await channel.emit_mention()
+        await asyncio.wait_for(model.started.wait(), timeout=1)
+        await channel.emit_mention(
+            event_id="event-cancel",
+            message_id="om_cancel",
+            text="/cancel",
+            root_id="om_trigger",
+        )
+        model.release.set()
+
+        async def terminal_was_sent() -> None:
+            while len(channel.sent) < 3:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(terminal_was_sent(), timeout=1)
+    finally:
+        model.release.set()
+        await service.stop()
+
+    assert len(channel.sent) == 3
+    assert "取消" in str(channel.sent[-1]["message"])
+    with sqlite3.connect(tmp_path / "runtime.db") as connection:
+        graph = connection.execute("SELECT status FROM runtime_graphs").fetchone()
+        nodes = connection.execute("SELECT DISTINCT status FROM runtime_agent_nodes").fetchall()
+        control = connection.execute(
+            "SELECT state, target_task_id FROM runtime_run_controls"
+        ).fetchone()
+    assert graph == ("cancelled",)
+    assert nodes == [("cancelled",)]
+    assert control is not None and control[0] == "applied"

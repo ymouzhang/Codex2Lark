@@ -184,6 +184,86 @@ class SQLiteSessionStore:
 
         await self._database.transaction(operation)
 
+    async def try_finish_with_outcome(
+        self,
+        run_id: str,
+        outcome: AgentOutcome,
+        *,
+        applied_control_ids: tuple[str, ...] = (),
+        now_ms: int,
+    ) -> bool:
+        if outcome.status in (RunStatus.RUNNING, RunStatus.WAITING):
+            raise ValueError("terminal outcome is required")
+
+        def operation(connection: sqlite3.Connection) -> bool:
+            run = connection.execute(
+                "SELECT task_id, status FROM runtime_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if run is None:
+                raise LookupError(f"run does not exist: {run_id}")
+            if run["status"] != RunStatus.RUNNING.value:
+                raise ValueError("run is already terminal")
+            if applied_control_ids:
+                placeholders = ",".join("?" for _ in applied_control_ids)
+                connection.execute(
+                    f"""
+                    UPDATE runtime_run_controls
+                    SET state = 'applied', applied_at_ms = ?
+                    WHERE target_task_id = ? AND state = 'pending'
+                      AND control_id IN ({placeholders})
+                    """,
+                    (now_ms, run["task_id"], *applied_control_ids),
+                )
+            pending = connection.execute(
+                """
+                SELECT 1 FROM runtime_run_controls
+                WHERE target_task_id = ? AND state = 'pending' LIMIT 1
+                """,
+                (run["task_id"],),
+            ).fetchone()
+            if pending is not None and outcome.status is RunStatus.COMPLETED:
+                return False
+            if pending is not None:
+                connection.execute(
+                    """
+                    UPDATE runtime_run_controls
+                    SET state = 'superseded', applied_at_ms = ?
+                    WHERE target_task_id = ? AND state = 'pending'
+                    """,
+                    (now_ms, run["task_id"]),
+                )
+            sequence = int(
+                connection.execute(
+                    """
+                    SELECT COALESCE(MAX(sequence), 0) + 1
+                    FROM runtime_run_events WHERE run_id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()[0]
+            )
+            payload = {
+                "status": outcome.status.value,
+                "summary": outcome.summary,
+                "resource_refs": list(outcome.resource_refs),
+                "warnings": list(outcome.warnings),
+            }
+            encrypted = self._encrypt_json(payload, aad=self._event_aad(run_id, sequence))
+            connection.execute(
+                """
+                INSERT INTO runtime_run_events(
+                    run_id, sequence, event_type, payload_ciphertext, created_at_ms
+                ) VALUES (?, ?, 'run_terminal', ?, ?)
+                """,
+                (run_id, sequence, encrypted, now_ms),
+            )
+            connection.execute(
+                "UPDATE runtime_runs SET status = ?, updated_at_ms = ? WHERE run_id = ?",
+                (outcome.status.value, now_ms, run_id),
+            )
+            return True
+
+        return await self._database.transaction(operation)
+
     async def events(self, run_id: str) -> list[RunEvent]:
         rows = await self._database.call(
             lambda connection: connection.execute(
@@ -257,6 +337,7 @@ class SQLiteSessionStore:
             "source_versions": checkpoint.source_versions,
             "consumed_budget": checkpoint.consumed_budget,
             "compactor_version": checkpoint.compactor_version,
+            "applied_control_ids": list(checkpoint.applied_control_ids),
         }
 
     @staticmethod
@@ -298,6 +379,7 @@ class SQLiteSessionStore:
             source_versions={str(k): str(v) for k, v in value["source_versions"].items()},
             consumed_budget={str(k): int(v) for k, v in value["consumed_budget"].items()},
             compactor_version=int(value["compactor_version"]),
+            applied_control_ids=tuple(str(item) for item in value.get("applied_control_ids", [])),
         )
 
     @staticmethod

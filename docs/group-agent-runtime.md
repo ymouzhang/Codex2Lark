@@ -122,6 +122,22 @@ and treats an SDK result as sent only when success and an upstream message
 reference are both present. Failed or ambiguous sends remain retryable and are
 never converted into task completion.
 
+### Active-run control admission
+
+An exact mention in the active source thread is classified before task
+creation. Only the requester who opened the active task can issue `/cancel`,
+`/interrupt`, deterministic steering prefixes, or a follow-up for that run.
+The event, encrypted control, trusted target task, and acknowledgement outbox
+intent commit atomically before the long-connection callback returns. Other
+participants cannot steer or cancel that work; their mentions follow normal
+per-SessionKey ordering.
+
+Control acknowledgement means only that the update is durable. It is not a
+claim that an in-flight Feishu write was interrupted. The Harness consumes the
+control at its next complete model/tool boundary, checkpoints applied control
+IDs, and then acknowledges the inbox item. Duplicate Feishu delivery and
+process restart must not duplicate the instruction.
+
 ## 4. Acknowledgement and terminal replies
 
 After admission and durable task creation, the bot replies to the source message

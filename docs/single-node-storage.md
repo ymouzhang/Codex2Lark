@@ -148,6 +148,13 @@ prevents a successful transaction with a forgotten reply intent. It does not
 claim exactly-once upstream delivery; the publisher uses the stable idempotency
 key and verifies the observable result where supported.
 
+Lease acquisition time is not reused as task completion time. A worker reads a
+fresh injected clock after asynchronous model/tool execution for retry and
+terminal transactions. This preserves causal outbox ordering when a steering or
+cancellation acknowledgement arrives while a long model call is running: that
+acknowledgement is older than, and must be delivered before, the resulting
+terminal reply.
+
 ### `runtime_idempotency`
 
 Stores bounded operation keys, states, result references, and expiry. It never
@@ -163,7 +170,7 @@ verified resource reference, never the write body or tool observation.
 ### Multi-Agent coordination
 
 The kernel additionally owns typed `runtime_graphs`, `runtime_agent_nodes`,
-`runtime_agent_edges`, `runtime_mailbox`, `runtime_artifacts`,
+`runtime_agent_edges`, `runtime_mailbox`, `runtime_run_controls`, `runtime_artifacts`,
 `runtime_resource_locks`, `runtime_agent_checkpoints`, and
 `runtime_budget_ledger` tables. They persist graph topology, scoped assignments,
 lifecycle, mailbox delivery, typed artifact references, write exclusion,

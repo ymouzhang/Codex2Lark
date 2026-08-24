@@ -155,6 +155,77 @@ async def test_admission_mirrors_encrypts_and_deduplicates_message(tmp_path: Pat
         await database.close()
 
 
+async def test_same_requester_follow_up_becomes_durable_control_without_new_task(
+    tmp_path: Path,
+) -> None:
+    database, _repository, runtime_store, service = await setup(tmp_path)
+    try:
+        original = await service.admit(message())
+        update = message(
+            event_id="event-2",
+            message_id="om_update",
+            body_text="更正：Use the V3 title.",  # noqa: RUF001 - intentional user syntax
+            occurred_at_ms=120,
+            received_at_ms=130,
+        )
+
+        controlled = await service.admit(update)
+        duplicate = await service.admit(update)
+
+        assert controlled.task_id == original.task_id
+        assert controlled.control_id is not None
+        assert controlled.created is True
+        assert duplicate.control_id == controlled.control_id
+        assert duplicate.created is False
+        controls = await runtime_store.pending_controls(str(original.task_id))
+        assert [(item.kind.value, item.text) for item in controls] == [
+            ("steer", "Use the V3 title.")
+        ]
+        counts = await database.call(
+            lambda connection: (
+                connection.execute("SELECT COUNT(*) FROM runtime_tasks").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM runtime_run_controls").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM runtime_outbox").fetchone()[0],
+                connection.execute(
+                    "SELECT payload_ciphertext FROM runtime_run_controls"
+                ).fetchone()[0],
+            )
+        )
+        assert counts[:3] == (1, 1, 2)
+        assert b"V3 title" not in counts[3]
+    finally:
+        await database.close()
+
+
+async def test_other_participant_cannot_control_active_request(tmp_path: Path) -> None:
+    database, _repository, _runtime_store, service = await setup(tmp_path)
+    try:
+        await service.admit(message())
+
+        decision = await service.admit(
+            message(
+                event_id="event-2",
+                message_id="om_other",
+                sender_id="ou_other",
+                sender_name="Other",
+                body_text="/cancel",
+                occurred_at_ms=120,
+                received_at_ms=130,
+            )
+        )
+
+        counts = await database.call(
+            lambda connection: (
+                connection.execute("SELECT COUNT(*) FROM runtime_tasks").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM runtime_run_controls").fetchone()[0],
+            )
+        )
+        assert decision.control_id is None
+        assert counts == (2, 0)
+    finally:
+        await database.close()
+
+
 async def test_newer_tombstone_wins_and_recent_context_is_chronological(
     tmp_path: Path,
 ) -> None:

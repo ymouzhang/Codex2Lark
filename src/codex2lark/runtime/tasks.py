@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -76,6 +78,7 @@ class DurableTaskWorker:
         lease_ms: int = 300_000,
         retry_delay_ms: int = 2_000,
         concurrency: int = 4,
+        clock_ms: Callable[[], int] | None = None,
     ) -> None:
         if not worker_id or min(lease_ms, concurrency) < 1 or retry_delay_ms < 0:
             raise ValueError("task worker configuration is invalid")
@@ -85,6 +88,7 @@ class DurableTaskWorker:
         self._lease_ms = lease_ms
         self._retry_delay_ms = retry_delay_ms
         self._concurrency = concurrency
+        self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
 
     async def run_once(self, *, now_ms: int) -> TaskBatch:
         tasks = await self._store.lease_tasks(
@@ -108,12 +112,13 @@ class DurableTaskWorker:
                 raise PermanentTaskError(task.recovery_error_code)
             result = await handler.execute(task, now_ms=now_ms)
         except Exception as exc:
+            transition_ms = max(now_ms, self._clock_ms())
             if not isinstance(exc, PermanentTaskError) and task.attempt_count < task.max_attempts:
                 await self._store.retry_task(
                     task.task_id,
                     worker_id=self._worker_id,
-                    available_at_ms=now_ms + self._retry_delay_ms,
-                    now_ms=now_ms,
+                    available_at_ms=transition_ms + self._retry_delay_ms,
+                    now_ms=transition_ms,
                     error_code=type(exc).__name__,
                 )
                 return task.task_id, True
@@ -125,11 +130,12 @@ class DurableTaskWorker:
                     error_code="handler_unavailable",
                 )
             )
+        transition_ms = max(now_ms, self._clock_ms())
         await self._store.finish_task(
             task.task_id,
             worker_id=self._worker_id,
             state=result.state,
-            now_ms=now_ms,
+            now_ms=transition_ms,
             error_code=result.error_code,
             terminal_message=result.terminal_message,
         )

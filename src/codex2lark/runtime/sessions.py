@@ -38,6 +38,15 @@ class SessionStore(Protocol):
 
     async def finish_run(self, run_id: str, status: RunStatus, *, now_ms: int) -> None: ...
 
+    async def try_finish_with_outcome(
+        self,
+        run_id: str,
+        outcome: AgentOutcome,
+        *,
+        applied_control_ids: tuple[str, ...] = (),
+        now_ms: int,
+    ) -> bool: ...
+
 
 class InMemorySessionStore:
     def __init__(self) -> None:
@@ -114,3 +123,26 @@ class InMemorySessionStore:
         if status in (RunStatus.RUNNING, RunStatus.WAITING):
             raise ValueError("finish_run requires a terminal status")
         self.runs[run_id] = status
+
+    async def try_finish_with_outcome(
+        self,
+        run_id: str,
+        outcome: AgentOutcome,
+        *,
+        applied_control_ids: tuple[str, ...] = (),
+        now_ms: int,
+    ) -> bool:
+        del applied_control_ids
+        await self.append_event(
+            run_id=run_id,
+            event_type="run_terminal",
+            payload={
+                "status": outcome.status.value,
+                "summary": outcome.summary,
+                "resource_refs": list(outcome.resource_refs),
+                "warnings": list(outcome.warnings),
+            },
+            now_ms=now_ms,
+        )
+        await self.finish_run(run_id, outcome.status, now_ms=now_ms)
+        return True

@@ -4,6 +4,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from codex2lark.core.events import (
     LeasedOutboxMessage,
@@ -14,6 +15,7 @@ from codex2lark.core.events import (
     TaskState,
 )
 from codex2lark.core.ids import new_outbox_id, new_task_id
+from codex2lark.runtime.controls import RunControl, RunControlKind
 
 from .crypto import EnvelopeCipher
 from .database import SQLiteDatabase
@@ -22,6 +24,13 @@ from .database import SQLiteDatabase
 @dataclass(frozen=True, slots=True)
 class AdmissionResult:
     created: bool
+    task_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ControlAdmissionResult:
+    created: bool
+    control_id: str
     task_id: str
 
 
@@ -126,6 +135,182 @@ class RuntimeStore:
             return AdmissionResult(created=True, task_id=task_id)
 
         return await self._database.transaction(operation)
+
+    async def admit_control(
+        self,
+        event: NormalizedEvent,
+        *,
+        session_key: str,
+        actor_id: str,
+        kind: RunControlKind,
+        text: str,
+        acknowledgement: OutboxDraft,
+        now_ms: int,
+    ) -> ControlAdmissionResult | None:
+        def operation(connection: sqlite3.Connection) -> ControlAdmissionResult | None:
+            existing = connection.execute(
+                """
+                SELECT c.control_id, c.target_task_id
+                FROM runtime_events e
+                JOIN runtime_run_controls c ON c.event_pk = e.event_pk
+                WHERE e.tenant_key = ? AND e.app_id = ? AND e.event_id = ?
+                """,
+                (event.tenant_key, event.app_id, event.event_id),
+            ).fetchone()
+            if existing is not None:
+                return ControlAdmissionResult(
+                    False, existing["control_id"], existing["target_task_id"]
+                )
+            already_admitted = connection.execute(
+                """
+                SELECT 1 FROM runtime_events
+                WHERE tenant_key = ? AND app_id = ? AND event_id = ?
+                """,
+                (event.tenant_key, event.app_id, event.event_id),
+            ).fetchone()
+            if already_admitted is not None:
+                return None
+
+            candidates = connection.execute(
+                """
+                SELECT t.task_id, t.payload_ciphertext
+                FROM runtime_tasks t
+                LEFT JOIN runtime_runs r ON r.task_id = t.task_id
+                WHERE t.session_key = ? AND t.command_type = 'im.handle_mention'
+                  AND t.state IN ('pending', 'leased')
+                  AND (r.run_id IS NULL OR r.status = 'running')
+                ORDER BY CASE t.state WHEN 'leased' THEN 0 ELSE 1 END,
+                         t.created_at_ms, t.task_id
+                LIMIT 1
+                """,
+                (session_key,),
+            ).fetchall()
+            if not candidates:
+                return None
+            candidate = candidates[0]
+            target_task_id = str(candidate["task_id"])
+            task_payload = self._decrypt_json(
+                candidate["payload_ciphertext"], associated_data=self._task_aad(target_task_id)
+            )
+            if task_payload.get("sender_id") != actor_id:
+                return None
+
+            source_ciphertext = None
+            if event.source_payload is not None:
+                source_ciphertext = self._cipher.encrypt(
+                    event.source_payload,
+                    associated_data=self._event_aad(event),
+                )
+            cursor = connection.execute(
+                """
+                INSERT INTO runtime_events(
+                    event_id, plugin_id, event_type, tenant_key, app_id,
+                    occurred_at_ms, received_at_ms, schema_version, resource_kind,
+                    resource_id, correlation_id, trace_id, payload_ciphertext,
+                    payload_expires_at_ms, status, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'admitted', ?)
+                """,
+                (
+                    event.event_id,
+                    event.plugin_id,
+                    event.event_type,
+                    event.tenant_key,
+                    event.app_id,
+                    event.occurred_at_ms,
+                    event.received_at_ms,
+                    event.schema_version,
+                    event.resource_kind,
+                    event.resource_id,
+                    event.correlation_id,
+                    event.trace_id,
+                    source_ciphertext,
+                    event.payload_expires_at_ms,
+                    now_ms,
+                ),
+            )
+            if cursor.lastrowid is None:
+                raise RuntimeError("control event insert did not return an identity")
+            control_id = str(uuid4())
+            payload = self._encrypt_json(
+                {
+                    "text": text,
+                    "actor_id": actor_id,
+                    "source_message_id": event.resource_id,
+                },
+                associated_data=self._control_aad(control_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO runtime_run_controls(
+                    control_id, event_pk, target_task_id, session_key, kind,
+                    payload_ciphertext, state, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+                """,
+                (
+                    control_id,
+                    cursor.lastrowid,
+                    target_task_id,
+                    session_key,
+                    kind.value,
+                    payload,
+                    now_ms,
+                ),
+            )
+            self._insert_outbox(connection, acknowledgement, task_id=target_task_id, now_ms=now_ms)
+            return ControlAdmissionResult(True, control_id, target_task_id)
+
+        return await self._database.transaction(operation)
+
+    async def pending_controls(self, task_id: str) -> tuple[RunControl, ...]:
+        rows = await self._database.call(
+            lambda connection: connection.execute(
+                """
+                SELECT control_id, target_task_id, kind, payload_ciphertext, created_at_ms
+                FROM runtime_run_controls
+                WHERE target_task_id = ? AND state = 'pending'
+                ORDER BY created_at_ms, control_id
+                """,
+                (task_id,),
+            ).fetchall()
+        )
+        result: list[RunControl] = []
+        for row in rows:
+            control_id = str(row["control_id"])
+            payload = self._decrypt_json(
+                row["payload_ciphertext"], associated_data=self._control_aad(control_id)
+            )
+            result.append(
+                RunControl(
+                    control_id=control_id,
+                    target_task_id=str(row["target_task_id"]),
+                    kind=RunControlKind(str(row["kind"])),
+                    text=str(payload["text"]),
+                    actor_id=str(payload["actor_id"]),
+                    source_message_id=str(payload["source_message_id"]),
+                    created_at_ms=int(row["created_at_ms"]),
+                )
+            )
+        return tuple(result)
+
+    async def acknowledge_controls(
+        self, task_id: str, control_ids: tuple[str, ...], *, now_ms: int
+    ) -> None:
+        if not control_ids:
+            return
+
+        def operation(connection: sqlite3.Connection) -> None:
+            placeholders = ",".join("?" for _ in control_ids)
+            connection.execute(
+                f"""
+                UPDATE runtime_run_controls
+                SET state = 'applied', applied_at_ms = ?
+                WHERE target_task_id = ? AND state = 'pending'
+                  AND control_id IN ({placeholders})
+                """,
+                (now_ms, task_id, *control_ids),
+            )
+
+        await self._database.transaction(operation)
 
     async def lease_tasks(
         self,
@@ -618,3 +803,7 @@ class RuntimeStore:
     @staticmethod
     def _outbox_aad(outbox_id: str) -> bytes:
         return f"runtime_outbox:{outbox_id}:v1".encode()
+
+    @staticmethod
+    def _control_aad(control_id: str) -> bytes:
+        return f"runtime_run_controls:{control_id}:v1".encode()

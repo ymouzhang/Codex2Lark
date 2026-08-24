@@ -130,6 +130,7 @@ class IMAdmissionDecision:
     reason: IMAdmissionReason
     task_id: str | None = None
     created: bool = False
+    control_id: str | None = None
 
     @property
     def admitted(self) -> bool:

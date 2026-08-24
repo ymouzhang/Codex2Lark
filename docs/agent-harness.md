@@ -296,14 +296,46 @@ the model-visible schema.
 
 If a new message arrives for an active SessionKey:
 
-- a reply explicitly correcting or cancelling current work becomes a steering
+- an exact `/cancel`, `取消任务`, or `停止任务` command from the originating
+  requester becomes a cancellation control;
+- an exact `/interrupt` or `暂停任务` command from the originating requester
+  becomes an interruption control;
+- `/steer <instruction>`, `更正：<instruction>`, `调整：<instruction>`, or
+  `改为：<instruction>` from the originating requester becomes a steering
   message;
-- an independent request becomes a follow-up message;
+- another non-empty mention from the originating requester in the same source
+  thread becomes a follow-up message;
+- a message from another participant is never allowed to control the active
+  run; it remains a separately ordered request;
 - ordinary unaddressed chat remains in Feishu and is not injected mid-run.
 
 Steering is applied only at safe boundaries: after a model response or completed
 tool call, never halfway through an external write. Cancellation stops future
 work but does not claim to roll back already verified Feishu side effects.
+
+The long-connection callback durably stores the normalized source event,
+encrypted control payload, target task, and acknowledgement intent in one
+SQLite transaction before returning success to Feishu. If no eligible active
+task exists, normal mention admission is used instead. Duplicate event delivery
+returns the original control identity and never creates a second control.
+
+The Harness polls the durable control inbox before a model turn and after each
+complete model/tool boundary. Steering and follow-up text is appended as
+untrusted user content. Applied control IDs are included in the next complete-
+turn checkpoint before the inbox rows are acknowledged. Recovery therefore
+reapplies a control when no checkpoint contains it, and acknowledges without
+duplicating it when the checkpoint already contains its ID. Cancellation and
+interruption reach a terminal `cancelled` result at the next safe boundary;
+interruption uses a distinct reason/event so a future resume policy can elect
+to create a replacement run without changing cancellation safety.
+
+Terminal closure is also a control-inbox boundary. One SQLite transaction
+applies the control IDs that caused a cancellation, verifies that no other
+pending controls target the task, appends the terminal run event, and changes
+the run status. If a control won the race immediately before closure, the
+transaction declines to close; the Harness consumes that control and performs
+another bounded turn. This prevents a durably acknowledged update from being
+silently stranded behind a terminal run.
 
 High-risk writes emit an approval card containing action, target, risk, and
 expiry. Only an authorized group/user decision resumes the run. Approval state

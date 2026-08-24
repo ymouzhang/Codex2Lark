@@ -141,6 +141,7 @@ async def test_task_worker_commits_terminal_failure_when_retries_are_exhausted(
             store,
             {"im.handle_mention": ConcurrentHandler(1, fail=True)},
             worker_id="worker",
+            clock_ms=lambda: 50,
         )
 
         batch = await worker.run_once(now_ms=2)
@@ -150,9 +151,11 @@ async def test_task_worker_commits_terminal_failure_when_retries_are_exhausted(
             lambda connection: (
                 connection.execute("SELECT state FROM runtime_tasks").fetchone()[0],
                 connection.execute("SELECT message_kind FROM runtime_outbox").fetchone()[0],
+                connection.execute("SELECT updated_at_ms FROM runtime_tasks").fetchone()[0],
+                connection.execute("SELECT created_at_ms FROM runtime_outbox").fetchone()[0],
             )
         )
-        assert states == ("failed", "failed")
+        assert states == ("failed", "failed", 50, 50)
     finally:
         await database.close()
 

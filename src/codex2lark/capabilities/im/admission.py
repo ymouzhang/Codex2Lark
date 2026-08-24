@@ -6,6 +6,7 @@ from typing import Protocol
 
 from codex2lark.core.events import NormalizedEvent, OutboxDraft, TaskCommand
 from codex2lark.core.ids import new_trace_id
+from codex2lark.runtime.controls import RunControlKind
 from codex2lark.storage.runtime_store import RuntimeStore
 
 from .models import IMAdmissionDecision, IMAdmissionReason, IncomingMessage
@@ -93,6 +94,23 @@ class IMAdmissionService:
             },
             available_at_ms=message.received_at_ms,
         )
+        control_kind, control_text = self._classify_control(message.body_text)
+        controlled = await self._runtime_store.admit_control(
+            event,
+            session_key=message.session_key,
+            actor_id=message.sender_id,
+            kind=control_kind,
+            text=control_text,
+            acknowledgement=acknowledgement,
+            now_ms=message.received_at_ms,
+        )
+        if controlled is not None:
+            return IMAdmissionDecision(
+                IMAdmissionReason.ADMITTED,
+                task_id=controlled.task_id,
+                created=controlled.created,
+                control_id=controlled.control_id,
+            )
         admitted = await self._runtime_store.admit(
             event,
             command,
@@ -104,6 +122,30 @@ class IMAdmissionService:
             task_id=admitted.task_id,
             created=admitted.created,
         )
+
+    @staticmethod
+    def _classify_control(body: str) -> tuple[RunControlKind, str]:
+        text = body.strip()
+        normalized = text.casefold()
+        if normalized in {"/cancel", "取消任务", "停止任务"}:
+            return RunControlKind.CANCEL, text
+        if normalized in {"/interrupt", "暂停任务"}:
+            return RunControlKind.INTERRUPT, text
+        prefixes = (
+            "/steer ",
+            "更正：",  # noqa: RUF001 - intentional user syntax
+            "更正:",
+            "调整：",  # noqa: RUF001 - intentional user syntax
+            "调整:",
+            "改为：",  # noqa: RUF001 - intentional user syntax
+            "改为:",
+        )
+        for prefix in prefixes:
+            if normalized.startswith(prefix.casefold()):
+                instruction = text[len(prefix) :].strip()
+                if instruction:
+                    return RunControlKind.STEER, instruction
+        return RunControlKind.FOLLOW_UP, text
 
     def _evaluate(self, message: IncomingMessage) -> IMAdmissionReason:
         if message.chat_type != "group":

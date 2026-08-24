@@ -297,6 +297,7 @@ def create_v3_gateway(
         resources=resource_loader,
         context=ContextEngine(),
         sessions=sessions,
+        controls=runtime_store,
     )
     definition = AgentDefinition(
         agent_id="feishu-group-root",

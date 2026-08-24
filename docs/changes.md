@@ -3,6 +3,19 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined durable active-run controls before implementation: deterministic,
+  same-requester IM classification; transactional pre-ACK event/control/outbox
+  admission; safe-boundary Harness consumption; checkpointed applied IDs;
+  restart-safe steering/follow-up; and root cancellation/interruption.
+  Implementation area: IM admission, runtime control inbox, Harness checkpoints,
+  graph lifecycle, atomic control-aware terminal closure, SQLite migration, and
+  end-to-end recovery tests.
+
+- Required durable workers to timestamp retry/terminal transitions with a
+  fresh post-execution clock rather than the earlier lease-acquisition clock.
+  Implementation area: task worker timing and acknowledgement-before-terminal
+  outbox acceptance.
+
 - Bounded the interactive `doctor` version/authentication probe by one
   20-second deadline and defined a content-safe timeout result with an operator
   next action. Implementation area: CLI diagnostics only; authoring-operation

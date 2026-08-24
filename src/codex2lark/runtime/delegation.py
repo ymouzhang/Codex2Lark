@@ -213,6 +213,9 @@ class MultiAgentCoordinator:
             raise LookupError("root Agent graph is unavailable")
         if graph.status is not GraphStatus.ACTIVE:
             return
+        if status is RunStatus.CANCELLED:
+            await self._supervisor.cancel(graph.root_node_id, now_ms=now_ms)
+            return
         await self._supervisor.publish_terminal(
             graph.graph_id, graph.root_node_id, status, now_ms=now_ms
         )

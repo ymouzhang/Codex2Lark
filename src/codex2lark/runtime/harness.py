@@ -10,6 +10,7 @@ from codex2lark.core.budgets import BudgetKind, BudgetLedger
 from codex2lark.core.cancellation import CancellationToken, CancelledByPolicyError
 
 from .context import ContextEngine, ContextEvidence
+from .controls import RunControlInbox, RunControlKind
 from .resources import ResourceLoader
 from .sessions import SessionStore
 from .tools import ToolContext, ToolExecutor, ToolRegistry
@@ -52,6 +53,7 @@ class AgentHarness:
         resources: ResourceLoader,
         context: ContextEngine,
         sessions: SessionStore,
+        controls: RunControlInbox | None = None,
     ) -> None:
         self._model = model
         self._tools = tools
@@ -59,6 +61,7 @@ class AgentHarness:
         self._resources = resources
         self._context = context
         self._sessions = sessions
+        self._controls = controls
 
     async def run(
         self,
@@ -78,6 +81,8 @@ class AgentHarness:
         nonpersistable_calls: set[str] = set()
         source_versions = {item.source_ref: item.source_version for item in request.evidence}
         first_turn = 1
+        applied_control_ids: set[str] = set()
+        pending_ack_ids: list[str] = []
 
         if resume:
             checkpoint = await self._sessions.load_checkpoint(request.run_id)
@@ -89,6 +94,11 @@ class AgentHarness:
                 journal = checkpoint.messages
                 verified = checkpoint.verified_effects
                 first_turn = checkpoint.next_turn
+                applied_control_ids.update(checkpoint.applied_control_ids)
+                if self._controls is not None and checkpoint.applied_control_ids:
+                    await self._controls.acknowledge_controls(
+                        request.task_id, checkpoint.applied_control_ids, now_ms=clock_ms
+                    )
                 for key, amount in checkpoint.consumed_budget.items():
                     kind = BudgetKind(key)
                     if kind in ledger.limits:
@@ -116,6 +126,13 @@ class AgentHarness:
 
         try:
             for turn in range(first_turn, definition.max_turns + 1):
+                journal = await self._apply_controls(
+                    request,
+                    journal,
+                    token,
+                    applied_control_ids,
+                    pending_ack_ids,
+                )
                 token.raise_if_cancelled()
                 context = self._context.build(
                     definition=definition,
@@ -171,9 +188,43 @@ class AgentHarness:
                     clock_ms,
                 )
 
+                journal = await self._apply_controls(
+                    request,
+                    journal,
+                    token,
+                    applied_control_ids,
+                    pending_ack_ids,
+                )
+                token.raise_if_cancelled()
+
                 if not response.tool_calls:
+                    if pending_ack_ids:
+                        checkpoint = RunCheckpoint(
+                            run_id=request.run_id,
+                            agent_id=definition.agent_id,
+                            agent_version=definition.version,
+                            resource_versions=loaded.versions,
+                            next_turn=turn + 1,
+                            messages=self._checkpoint_messages(journal, nonpersistable_calls),
+                            verified_effects=verified,
+                            blockers=(),
+                            source_versions=context.source_versions,
+                            consumed_budget={
+                                kind.value: amount for kind, amount in ledger.consumed.items()
+                            },
+                            compactor_version=definition.compactor_version,
+                            applied_control_ids=tuple(sorted(applied_control_ids)),
+                        )
+                        await self._sessions.save_checkpoint(checkpoint, now_ms=clock_ms)
+                        await self._acknowledge_controls(
+                            request.task_id, pending_ack_ids, now_ms=clock_ms
+                        )
+                        pending_ack_ids.clear()
+                        continue
                     outcome = self._outcome(response.content, definition, verified)
-                    return await self._finish(request.run_id, outcome, clock_ms)
+                    if await self._finish(request.run_id, outcome, clock_ms):
+                        return outcome
+                    continue
 
                 for call in response.tool_calls:
                     token.raise_if_cancelled()
@@ -237,6 +288,15 @@ class AgentHarness:
                         clock_ms,
                     )
 
+                journal = await self._apply_controls(
+                    request,
+                    journal,
+                    token,
+                    applied_control_ids,
+                    pending_ack_ids,
+                )
+                token.raise_if_cancelled()
+
                 checkpoint = RunCheckpoint(
                     run_id=request.run_id,
                     agent_id=definition.agent_id,
@@ -251,8 +311,11 @@ class AgentHarness:
                         kind.value: amount for kind, amount in ledger.consumed.items()
                     },
                     compactor_version=definition.compactor_version,
+                    applied_control_ids=tuple(sorted(applied_control_ids)),
                 )
                 await self._sessions.save_checkpoint(checkpoint, now_ms=clock_ms)
+                await self._acknowledge_controls(request.task_id, pending_ack_ids, now_ms=clock_ms)
+                pending_ack_ids.clear()
                 await self._event(
                     request.run_id,
                     "checkpoint_saved",
@@ -265,32 +328,83 @@ class AgentHarness:
                 summary="The Agent reached its maximum turn budget before completing the task.",
                 warnings=("turn_budget_exhausted",),
             )
-            return await self._finish(request.run_id, outcome, clock_ms)
+            await self._finish(request.run_id, outcome, clock_ms)
+            return outcome
         except CancelledByPolicyError as exc:
             outcome = AgentOutcome(status=RunStatus.CANCELLED, summary=str(exc))
-            return await self._finish(request.run_id, outcome, clock_ms)
+            await self._finish(
+                request.run_id,
+                outcome,
+                clock_ms,
+                applied_control_ids=tuple(pending_ack_ids),
+            )
+            await self._acknowledge_controls(request.task_id, pending_ack_ids, now_ms=clock_ms)
+            return outcome
         except (LookupError, ValueError, RuntimeError) as exc:
             outcome = AgentOutcome(
                 status=RunStatus.FAILED,
                 summary=str(exc),
                 warnings=(type(exc).__name__,),
             )
-            return await self._finish(request.run_id, outcome, clock_ms)
+            await self._finish(request.run_id, outcome, clock_ms)
+            return outcome
 
-    async def _finish(self, run_id: str, outcome: AgentOutcome, now_ms: int) -> AgentOutcome:
-        await self._event(
+    async def _apply_controls(
+        self,
+        request: HarnessRequest,
+        journal: tuple[ModelMessage, ...],
+        cancellation: CancellationToken,
+        applied_control_ids: set[str],
+        pending_ack_ids: list[str],
+    ) -> tuple[ModelMessage, ...]:
+        if self._controls is None:
+            return journal
+        controls = await self._controls.pending_controls(request.task_id)
+        updated = journal
+        for control in controls:
+            if control.control_id in applied_control_ids:
+                if control.control_id not in pending_ack_ids:
+                    pending_ack_ids.append(control.control_id)
+                continue
+            applied_control_ids.add(control.control_id)
+            pending_ack_ids.append(control.control_id)
+            if control.kind is RunControlKind.CANCEL:
+                cancellation.cancel("Cancelled by the originating requester.")
+            elif control.kind is RunControlKind.INTERRUPT:
+                cancellation.cancel("Interrupted by the originating requester.")
+            else:
+                label = "Steering update" if control.kind is RunControlKind.STEER else "Follow-up"
+                updated = (
+                    *updated,
+                    ModelMessage(
+                        MessageRole.USER,
+                        f"{label} from the originating requester:\n{control.text}",
+                    ),
+                )
+        return updated
+
+    async def _acknowledge_controls(
+        self, task_id: str, control_ids: list[str], *, now_ms: int
+    ) -> None:
+        if self._controls is not None and control_ids:
+            await self._controls.acknowledge_controls(
+                task_id, tuple(dict.fromkeys(control_ids)), now_ms=now_ms
+            )
+
+    async def _finish(
+        self,
+        run_id: str,
+        outcome: AgentOutcome,
+        now_ms: int,
+        *,
+        applied_control_ids: tuple[str, ...] = (),
+    ) -> bool:
+        return await self._sessions.try_finish_with_outcome(
             run_id,
-            "run_terminal",
-            {
-                "status": outcome.status.value,
-                "summary": outcome.summary,
-                "resource_refs": list(outcome.resource_refs),
-                "warnings": list(outcome.warnings),
-            },
-            now_ms,
+            outcome,
+            applied_control_ids=applied_control_ids,
+            now_ms=now_ms,
         )
-        await self._sessions.finish_run(run_id, outcome.status, now_ms=now_ms)
-        return outcome
 
     async def _event(
         self,

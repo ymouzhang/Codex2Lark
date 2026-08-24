@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -361,10 +361,30 @@ CREATE INDEX IF NOT EXISTS im_attachments_blob_idx
 ON im_attachments(blob_id);
 """
 
+RUN_CONTROL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runtime_run_controls (
+    control_id TEXT PRIMARY KEY,
+    event_pk INTEGER NOT NULL UNIQUE,
+    target_task_id TEXT NOT NULL,
+    session_key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload_ciphertext BLOB NOT NULL,
+    state TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    applied_at_ms INTEGER,
+    FOREIGN KEY (event_pk) REFERENCES runtime_events(event_pk),
+    FOREIGN KEY (target_task_id) REFERENCES runtime_tasks(task_id)
+);
+
+CREATE INDEX IF NOT EXISTS runtime_run_controls_target_idx
+ON runtime_run_controls(target_task_id, state, created_at_ms, control_id);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
     (3, MULTI_AGENT_SCHEMA),
     (4, IM_SCHEMA),
     (5, IM_BLOB_SCHEMA),
+    (6, RUN_CONTROL_SCHEMA),
 )

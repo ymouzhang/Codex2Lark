@@ -122,6 +122,25 @@ Webhook, RabbitMQ, Redis, or external database. It persists recoverable state in
 local SQLite and stores attachment bytes encrypted under the configured master
 key.
 
+### 3.3 Update or cancel active group work
+
+Reply in the same Feishu source thread and mention the bot. Only the person who
+started the active request can control it:
+
+| Message | Effect at the next safe model/tool boundary |
+| --- | --- |
+| `/steer Use the V3 title` | Correct the current instruction |
+| `更正：使用 V3 标题` | Same steering behavior in Chinese |
+| another ordinary mention | Add a follow-up requirement to the active task |
+| `/interrupt` or `暂停任务` | Interrupt and end the active run safely |
+| `/cancel`, `取消任务`, or `停止任务` | Cancel the active run safely |
+
+The immediate bot reply confirms that the update is durably received; it does
+not claim that an in-flight Feishu write was stopped midway. Verified writes
+already completed before cancellation are not rolled back. A different group
+participant cannot steer or cancel the original request and instead receives a
+separately ordered task.
+
 ## 4. Stop the processes
 
 ### Stop MCP
