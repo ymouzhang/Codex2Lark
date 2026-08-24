@@ -14,7 +14,7 @@ import pytest
 from codex2lark.bootstrap.config import GatewayConfig
 from codex2lark.bootstrap.gateway import V3Gateway, create_v3_gateway
 from codex2lark.capabilities.im.live_reader import WireMessagePage
-from codex2lark.core.models import CreateDocumentRequest, Identity
+from codex2lark.core.models import CreateDocumentRequest, EditDocumentRequest, Identity
 from codex2lark.runtime.types import ModelRequest, ModelResponse, ModelUsage, ToolCall
 from codex2lark.storage.crypto import MasterKey
 
@@ -296,6 +296,50 @@ class ProfessionalDocumentService:
         raise AssertionError("professional-document fixture must create, not edit")
 
 
+class ExistingDocumentService:
+    url = "https://example.feishu.cn/docx/existing_architecture"
+
+    def __init__(self) -> None:
+        self.search_count = 0
+        self.inspect_count = 0
+        self.edits: list[EditDocumentRequest] = []
+
+    async def search(self, request: object) -> dict[str, object]:
+        del request
+        self.search_count += 1
+        return {
+            "ok": True,
+            "scope": "managed_folder",
+            "matches": [{"title": "Existing Architecture", "url": self.url}],
+        }
+
+    async def inspect(self, request: object) -> dict[str, object]:
+        del request
+        self.inspect_count += 1
+        return {
+            "ok": True,
+            "resource": {"document_id": "existing_architecture", "url": self.url},
+            "data": {"content": "<p>Current architecture.</p>"},
+            "revision": 7,
+        }
+
+    async def create(self, request: object) -> dict[str, object]:
+        del request
+        raise AssertionError("existing-document fixture must edit, not create")
+
+    async def edit(self, request: object) -> dict[str, object]:
+        assert isinstance(request, EditDocumentRequest)
+        assert request.document_title == "Existing Architecture"
+        assert request.operations[0].content == "<p>Added recovery section.</p>"
+        self.edits.append(request)
+        return {
+            "ok": True,
+            "resource": {"title": "Existing Architecture", "url": self.url},
+            "revision": 8,
+            "verification": {"status": "passed"},
+        }
+
+
 class UnusedArtifactService:
     async def render_whiteboard(self, request: object) -> dict[str, object]:
         del request
@@ -333,8 +377,8 @@ class UnusedChatDigestService:
 
 
 class AuthoringFixture:
-    def __init__(self) -> None:
-        self.docs = ProfessionalDocumentService()
+    def __init__(self, docs: object | None = None) -> None:
+        self.docs = docs or ProfessionalDocumentService()
         self.artifacts = UnusedArtifactService()
         self.membership = UnusedMembershipService()
         self.chat_digest = UnusedChatDigestService()
@@ -375,6 +419,62 @@ class ProfessionalDocumentModel:
         return ModelResponse(
             "《Codex2Lark V3 Architecture》已创建并完成回读验证: "
             "https://example.feishu.cn/docx/professional_v3"
+        )
+
+
+class ExistingDocumentEditModel:
+    def __init__(self) -> None:
+        self.turn = 0
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.turn += 1
+        if self.turn == 1:
+            return ModelResponse(
+                "",
+                (
+                    ToolCall(
+                        "search-existing",
+                        "feishu.docs.search",
+                        {"title": "Existing Architecture"},
+                    ),
+                ),
+            )
+        if self.turn == 2:
+            assert ExistingDocumentService.url in request.messages[-1].content
+            return ModelResponse(
+                "",
+                (
+                    ToolCall(
+                        "inspect-existing",
+                        "feishu.docs.inspect",
+                        {"resource": ExistingDocumentService.url},
+                    ),
+                ),
+            )
+        if self.turn == 3:
+            assert "Current architecture" in request.messages[-1].content
+            return ModelResponse(
+                "",
+                (
+                    ToolCall(
+                        "edit-existing",
+                        "feishu.docs.edit",
+                        {
+                            "resource": None,
+                            "document_title": "Existing Architecture",
+                            "command": "append",
+                            "content_xml": "<p>Added recovery section.</p>",
+                            "pattern": None,
+                            "block_id": None,
+                            "change_summary": "Add recovery section",
+                            "required_text": ["Added recovery section."],
+                        },
+                    ),
+                ),
+            )
+        assert '"state": "verified"' in request.messages[-1].content
+        return ModelResponse(
+            "《Existing Architecture》已修改并完成回读验证: " + ExistingDocumentService.url
         )
 
 
@@ -490,6 +590,39 @@ async def test_canary_definition_is_bound_at_admission_and_used_by_harness(
             "SELECT agent_definition_version, status FROM runtime_graphs"
         ).fetchone()
     assert graph == (2, "completed")
+
+
+async def test_group_request_finds_inspects_edits_and_verifies_existing_document(
+    tmp_path: Path,
+) -> None:
+    channel = FakeChannel()
+    docs = ExistingDocumentService()
+    service = create_v3_gateway(
+        e2e_config(tmp_path),
+        channel=channel,  # type: ignore[arg-type]
+        model=ExistingDocumentEditModel(),
+        im_api=E2EMessageAPI("update the Existing Architecture document"),
+        authoring=AuthoringFixture(docs),  # type: ignore[arg-type]
+    )
+    await service.start()
+    try:
+        await channel.emit_mention(text="update the Existing Architecture document")
+
+        async def terminal_was_sent() -> None:
+            while len(channel.sent) < 3:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(terminal_was_sent(), timeout=1)
+    finally:
+        await service.stop()
+
+    assert len(docs.edits) == 1
+    assert docs.search_count >= 1
+    assert docs.inspect_count >= 1
+    assert len(channel.sent) == 3
+    assert "Existing Architecture" in str(channel.sent[-1]["message"])
+    assert ExistingDocumentService.url in str(channel.sent[-1]["message"])
+    assert "已经处理完成" in str(channel.sent[-1]["message"])
 
 
 async def test_composed_gateway_routes_same_requester_cancel_to_active_root(

@@ -296,6 +296,14 @@ exact chat target and bounded time range; identity remains trusted runtime
 context. The workflow reuses the tested chronological renderer and returns a
 verified managed-folder document reference before the root may claim completion.
 
+Acceptance criterion 9 is exercised through the production composition path.
+The deterministic fixture admits a group mention, calls exact-title search,
+inspects the single live match before mutation, applies a bounded semantic edit,
+receives capability-level read-back verification, and sends exactly one root
+terminal reply naming the modified document and verified resource. Ambiguous or
+missing search results must prevent the edit and cannot be converted into a
+model-authored success claim.
+
 16. Backup/restore returns a compatible encrypted runtime to a recoverable state.
 17. The default deployment passes readiness without RabbitMQ, Redis, PostgreSQL,
     public Webhook, or a running Codex task.

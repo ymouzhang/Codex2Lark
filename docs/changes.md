@@ -3,6 +3,11 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined the exact-title group edit vertical acceptance before implementation.
+  The production Gateway path must search, inspect, edit, read back, and publish
+  one verified terminal result; ambiguity never reaches mutation. Implementation
+  area: full-composition acceptance fixture using the existing document tools.
+
 - Defined deterministic single-node root-Agent canary rollout before
   implementation. Trusted group bindings select a stable or canary definition
   at durable admission; retry/restart preserve the stored version, and zero
