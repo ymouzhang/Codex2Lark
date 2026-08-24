@@ -247,7 +247,9 @@ class OfficialChannelEventSource:
         self._received_at_ms = received_at_ms
         self._bot_added_handler = bot_added_handler
         self._queue: asyncio.Queue[object] = asyncio.Queue(capacity)
+        self._membership_queue: asyncio.Queue[object] = asyncio.Queue(capacity)
         self._worker: asyncio.Task[None] | None = None
+        self._membership_worker: asyncio.Task[None] | None = None
         self._normalizer: ChannelMessageNormalizer | None = None
 
     async def start(self) -> None:
@@ -255,7 +257,10 @@ class OfficialChannelEventSource:
             raise RuntimeError("official Channel source is already running")
         self._channel.on("message", self._on_message)
         if self._bot_added_handler is not None:
-            self._channel.on("botAdded", self._bot_added_handler.handle_bot_added)
+            self._channel.on("botAdded", self._on_bot_added)
+            self._membership_worker = asyncio.create_task(
+                self._consume_membership(), name="feishu-im-membership-admission"
+            )
         self._worker = asyncio.create_task(self._consume(), name="feishu-im-admission")
         try:
             await self._channel.connect_until_ready(timeout=30.0)
@@ -270,6 +275,10 @@ class OfficialChannelEventSource:
             self._worker.cancel()
             await asyncio.gather(self._worker, return_exceptions=True)
             self._worker = None
+            if self._membership_worker is not None:
+                self._membership_worker.cancel()
+                await asyncio.gather(self._membership_worker, return_exceptions=True)
+                self._membership_worker = None
             await self._channel.disconnect()
             raise
 
@@ -279,8 +288,13 @@ class OfficialChannelEventSource:
             return
         await self._channel.disconnect()
         await self._queue.join()
+        await self._membership_queue.join()
         worker.cancel()
         await asyncio.gather(worker, return_exceptions=True)
+        if self._membership_worker is not None:
+            self._membership_worker.cancel()
+            await asyncio.gather(self._membership_worker, return_exceptions=True)
+            self._membership_worker = None
         self._worker = None
         self._normalizer = None
 
@@ -289,6 +303,12 @@ class OfficialChannelEventSource:
             self._queue.put_nowait(message)
         except asyncio.QueueFull as exc:
             raise RuntimeError("Feishu IM admission queue is full") from exc
+
+    async def _on_bot_added(self, event: object) -> None:
+        try:
+            self._membership_queue.put_nowait(event)
+        except asyncio.QueueFull as exc:
+            raise RuntimeError("Feishu membership admission queue is full") from exc
 
     async def _consume(self) -> None:
         while True:
@@ -306,3 +326,16 @@ class OfficialChannelEventSource:
                 logger.exception("Feishu IM message admission failed")
             finally:
                 self._queue.task_done()
+
+    async def _consume_membership(self) -> None:
+        assert self._bot_added_handler is not None
+        while True:
+            event = await self._membership_queue.get()
+            try:
+                await self._bot_added_handler.handle_bot_added(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Feishu bot-added admission failed")
+            finally:
+                self._membership_queue.task_done()

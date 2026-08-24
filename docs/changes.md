@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the V3 bot-added membership path before implementation: the official
+  Channel callback enters a bounded queue, durable admission creates one
+  replay-safe membership task, and the configured current user is added and
+  live-access verified immediately without Codex/MCP.
+
 - Defined the V3 authoring-artifact plugin before implementation: bounded
   Whiteboard, Sheets, and Base semantic tools share operator-bound identity,
   strict validation, write verification, and non-persistable observations.

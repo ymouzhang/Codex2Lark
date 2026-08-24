@@ -21,11 +21,16 @@ from codex2lark.capabilities.im.live_reader import (
     OfficialIMMessageAPI,
     OfficialLiveIMReader,
 )
+from codex2lark.capabilities.im.membership import (
+    BotAddedAdmissionService,
+    MembershipTaskHandler,
+)
 from codex2lark.capabilities.im.plugin import create_plugin as create_im_plugin
 from codex2lark.capabilities.im.publisher import IMOutboxPublisher
 from codex2lark.capabilities.im.repository import SQLiteIMRepository
 from codex2lark.capabilities.im.task_handler import IMMentionTaskHandler, IMResponseTemplates
 from codex2lark.core.budgets import BudgetKind, BudgetLimit
+from codex2lark.core.models import Identity
 from codex2lark.interfaces.application import create_application
 from codex2lark.runtime.context import ContextEngine
 from codex2lark.runtime.harness import AgentHarness, ModelProvider
@@ -190,11 +195,17 @@ def create_v3_gateway(
         bot_open_id=bot_open_id,
         acknowledgement_text="收到啦，我会认真帮你处理，完成后马上回来告诉你～",  # noqa: RUF001
     )
+    membership_admission = BotAddedAdmissionService(
+        runtime_store,
+        app_id=config.feishu_app_id,
+        received_at_ms=lambda: int(time.time() * 1000),
+    )
     source = OfficialChannelEventSource(
         active_channel,
         admission,
         app_id=config.feishu_app_id,
         received_at_ms=lambda: int(time.time() * 1000),
+        bot_added_handler=membership_admission,
     )
     api = im_api or OfficialIMMessageAPI(
         app_id=config.feishu_app_id, app_secret=config.feishu_app_secret
@@ -256,7 +267,13 @@ def create_v3_gateway(
     )
     task_worker = DurableTaskWorker(
         runtime_store,
-        {"im.handle_mention": handler},
+        {
+            "im.handle_mention": handler,
+            "im.ensure_owner_membership": MembershipTaskHandler(
+                authoring.membership,
+                bot_identity=Identity.BOT,
+            ),
+        },
         worker_id="v3-task-worker",
         concurrency=config.task_concurrency,
     )

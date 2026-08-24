@@ -23,6 +23,10 @@ from codex2lark.capabilities.im.context_provider import (
     IMContextRequest,
     MessagePage,
 )
+from codex2lark.capabilities.im.membership import (
+    BotAddedAdmissionService,
+    MembershipTaskHandler,
+)
 from codex2lark.capabilities.im.models import (
     AttachmentReference,
     IMAdmissionReason,
@@ -37,6 +41,7 @@ from codex2lark.capabilities.im.task_handler import (
     IMResponseTemplates,
 )
 from codex2lark.core.events import LeasedOutboxMessage, LeasedTask
+from codex2lark.core.models import Identity
 from codex2lark.runtime.outbox import OutboxDispatcher
 from codex2lark.runtime.sessions import InMemorySessionStore
 from codex2lark.runtime.types import AgentDefinition, AgentOutcome, RunStatus
@@ -294,6 +299,89 @@ async def test_official_channel_source_queues_and_normalizes_callbacks() -> None
         assert admission.messages[0].received_at_ms == 500
     finally:
         await source.stop()
+
+
+class FakeBotAddedHandler:
+    def __init__(self) -> None:
+        self.events: list[object] = []
+
+    async def handle_bot_added(self, event: object) -> None:
+        self.events.append(event)
+
+
+async def test_official_channel_source_queues_bot_added_callbacks() -> None:
+    channel = FakeChannel()
+    membership = FakeBotAddedHandler()
+    source = OfficialChannelEventSource(
+        channel,
+        FakeAdmission(),
+        app_id="app-1",
+        received_at_ms=lambda: 500,
+        bot_added_handler=membership,
+        capacity=1,
+    )
+    event = SimpleNamespace(chat_id="oc_group")
+    await source.start()
+    try:
+        await channel.handlers["botAdded"](event)
+        for _ in range(100):
+            if membership.events:
+                break
+            await asyncio.sleep(0)
+        assert membership.events == [event]
+    finally:
+        await source.stop()
+
+
+class FakeMembershipService:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Identity]] = []
+
+    async def ensure_current_user(
+        self, *, chat_id: str, chat_identity: Identity
+    ) -> dict[str, object]:
+        self.calls.append((chat_id, chat_identity))
+        return {"status": "added"}
+
+
+async def test_bot_added_event_is_durable_replay_safe_and_executes_membership(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "runtime.db")
+    await database.open()
+    runtime = RuntimeStore(database, EnvelopeCipher(MasterKey("test", b"m" * 32)))
+    admission = BotAddedAdmissionService(
+        runtime,
+        app_id="app-1",
+        received_at_ms=lambda: 1_720_000_000_000,
+    )
+    event = SimpleNamespace(
+        chat_id="oc_group",
+        raw={
+            "header": {
+                "event_id": "event-bot-added",
+                "tenant_key": "tenant-1",
+                "create_time": "1720000000",
+            }
+        },
+    )
+    try:
+        await admission.handle_bot_added(event)
+        await admission.handle_bot_added(event)
+        counts = await runtime.counts()
+        assert counts["runtime_tasks"] == 1
+        task = (
+            await runtime.lease_tasks(worker_id="worker", now_ms=1_720_000_000_000, lease_ms=100)
+        )[0]
+        service = FakeMembershipService()
+        handler = MembershipTaskHandler(service, bot_identity=Identity.BOT)
+
+        result = await handler.execute(task, now_ms=1_720_000_000_000)
+
+        assert result.state.value == "succeeded"
+        assert service.calls == [("oc_group", Identity.BOT)]
+    finally:
+        await database.close()
 
 
 async def test_im_outbox_publisher_preserves_thread_and_requires_confirmation() -> None:

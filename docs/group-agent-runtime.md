@@ -42,9 +42,19 @@ The Gateway consumes at least these independent event keys:
 - `im.chat.member.bot.added_v1` for deterministic owner-membership handling;
 - `im.message.receive_v1` for group requests.
 
-One event consumer failure must not stop the other consumer. Each source waits
-for the lark-cli ready marker, drains diagnostics, restarts with bounded backoff,
-and never exposes raw event payloads to the model.
+One event-handler failure must not stop the other event path. The official
+Channel SDK owns one outbound WebSocket connection and resolves bot identity
+before readiness. Runtime-owned bounded queues isolate its message and
+membership callbacks; raw payloads are never exposed to the model.
+
+When `botAdded` arrives, the callback enqueues a normalized reference and
+returns. The membership consumer durably admits one
+`im.ensure_owner_membership` task keyed by tenant/app/event. The task uses the
+operator-bound lark-cli identities to inspect members, add the current
+authenticated user only when absent, and verify user access to the group.
+Retries are bounded and duplicate event delivery cannot repeat the logical
+membership action. This path starts immediately after the event; it never waits
+for a user mention or a Codex/MCP process.
 
 A message starts an Agent run only when all conditions hold:
 
