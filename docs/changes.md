@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined observable complete-turn compaction before implementation. Context
+  builds report journal compaction, the Harness emits a content-free
+  `context_compacted` lifecycle event, and overflow evals reject assistant/tool
+  pair splitting. Implementation area: context build metadata, Harness event
+  stream, and compaction tests.
+
 - Defined the single-node multi-Agent restart-chaos and 64-group burst
   acceptance fixtures before implementation. The fixtures cover three expired
   child leases, encrypted checkpoints, durable mailbox redelivery, lock expiry,

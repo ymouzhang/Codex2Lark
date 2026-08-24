@@ -394,6 +394,16 @@ checkpoint exists, resume starts at its `next_turn`. A terminal run is never
 resumed. Provider response IDs are diagnostics, not permission to trust a
 partially observed model response or skip deterministic tool idempotency.
 
+`ContextEngine` reports whether it removed evidence or compacted prior journal
+turns. When journal compaction occurs, the Harness appends one content-free
+`context_compacted` event before the corresponding model request. Its payload is
+limited to compactor version, input/output message counts, and estimated token
+count. A compaction boundary moves backward across all adjacent tool results to
+the assistant message that declared their call IDs, so an assistant tool-call
+message and every result in that turn are retained or summarized as one complete
+unit. Deterministic evals force overflow with multiple tool results and reject
+orphan tool messages and orphan call IDs.
+
 For every production write/destructive tool call, the executor derives a
 stable operation key from the trusted run/node binding, tool ID and schema
 version, plus canonical validated arguments. It durably claims that key before

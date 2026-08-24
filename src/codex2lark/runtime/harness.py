@@ -153,6 +153,18 @@ class AgentHarness:
                     evidence=request.evidence,
                     journal=journal,
                 )
+                if context.journal_compacted:
+                    await self._event(
+                        request.run_id,
+                        "context_compacted",
+                        {
+                            "compactor_version": definition.compactor_version,
+                            "input_message_count": context.input_message_count,
+                            "output_message_count": len(context.messages),
+                            "estimated_tokens": context.estimated_tokens,
+                        },
+                        clock_ms,
+                    )
                 model_request = ModelRequest(
                     run_id=request.run_id,
                     node_id=request.node_id,

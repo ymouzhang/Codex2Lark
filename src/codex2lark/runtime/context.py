@@ -20,6 +20,8 @@ class ContextBuild:
     source_versions: dict[str, str]
     truncated_sources: tuple[str, ...]
     estimated_tokens: int
+    journal_compacted: bool = False
+    input_message_count: int = 0
 
 
 class ContextEngine:
@@ -56,7 +58,9 @@ class ContextEngine:
         ]
         request = ModelMessage(MessageRole.USER, user_request)
         messages = [*stable, *dynamic, request, *journal]
+        input_message_count = len(messages)
         truncated: list[str] = []
+        journal_compacted = False
 
         while self.estimate_tokens(messages) > definition.max_context_tokens:
             removable = next(
@@ -74,6 +78,7 @@ class ContextEngine:
             if journal:
                 retained_evidence = [item for item in dynamic if item in messages]
                 messages = self._compact_journal(stable, retained_evidence, request, journal)
+                journal_compacted = True
                 break
             raise ValueError("required context exceeds the AgentDefinition token budget")
 
@@ -85,6 +90,8 @@ class ContextEngine:
             source_versions={item.source_ref: item.source_version for item in evidence},
             truncated_sources=tuple(truncated),
             estimated_tokens=estimated,
+            journal_compacted=journal_compacted,
+            input_message_count=input_message_count,
         )
 
     @staticmethod

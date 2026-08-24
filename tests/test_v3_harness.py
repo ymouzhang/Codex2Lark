@@ -10,7 +10,7 @@ import pytest
 from codex2lark.core.budgets import BudgetKind, BudgetLimit
 from codex2lark.core.cancellation import CancellationToken
 from codex2lark.core.events import NormalizedEvent, OutboxDraft, TaskCommand
-from codex2lark.runtime.context import ContextEngine, ContextEvidence
+from codex2lark.runtime.context import ContextBuild, ContextEngine, ContextEvidence
 from codex2lark.runtime.controls import RunControl, RunControlKind
 from codex2lark.runtime.harness import AgentHarness, HarnessRequest
 from codex2lark.runtime.resources import ResourceLoader, ResourcePackage
@@ -232,6 +232,7 @@ def build_harness(
     approvals: FakeApprovals | None = None,
     sessions: InMemorySessionStore | None = None,
     controls: FakeControls | None = None,
+    context: ContextEngine | None = None,
 ) -> tuple[AgentHarness, InMemorySessionStore]:
     write_tool = tool or FakeWriteTool()
     registry = ToolRegistry([write_tool])
@@ -254,7 +255,7 @@ def build_harness(
                 )
             ]
         ),
-        context=ContextEngine(),
+        context=context or ContextEngine(),
         sessions=store,
         controls=controls,
     )
@@ -576,6 +577,76 @@ def test_context_engine_drops_optional_evidence_before_required_content() -> Non
 
     assert result.truncated_sources == ("optional",)
     assert any("essential" in message.content for message in result.messages)
+
+
+def test_context_compaction_keeps_complete_assistant_tool_result_turn() -> None:
+    engine = ContextEngine()
+    definition = AgentDefinition(
+        agent_id="compact",
+        version=1,
+        instructions="system",
+        model_profile="model",
+        tool_ids=(),
+        max_context_tokens=420,
+    )
+    paired_calls = (
+        ToolCall("call-a", "docs.read", {}),
+        ToolCall("call-b", "docs.read", {}),
+    )
+    journal = (
+        ModelMessage(MessageRole.USER, "old-user-" + "x" * 800),
+        ModelMessage(MessageRole.ASSISTANT, "old-answer-" + "y" * 800),
+        ModelMessage(MessageRole.USER, "older request"),
+        ModelMessage(MessageRole.ASSISTANT, "checking", tool_calls=paired_calls),
+        ModelMessage(MessageRole.TOOL, "result-a", tool_call_id="call-a"),
+        ModelMessage(MessageRole.TOOL, "result-b", tool_call_id="call-b"),
+        ModelMessage(MessageRole.USER, "continue"),
+        ModelMessage(MessageRole.ASSISTANT, "done"),
+    )
+
+    result = engine.build(
+        definition=definition,
+        resources=ResourceLoader([]).load(()),
+        user_request="request",
+        evidence=(),
+        journal=journal,
+    )
+
+    assert result.journal_compacted
+    assert result.input_message_count > len(result.messages)
+    retained = {message.tool_call_id for message in result.messages if message.tool_call_id}
+    declared = {call.call_id for message in result.messages for call in message.tool_calls}
+    assert retained == declared == {"call-a", "call-b"}
+
+
+async def test_harness_emits_content_free_context_compaction_event() -> None:
+    class CompactingContext(ContextEngine):
+        def build(self, **parameters: object) -> ContextBuild:
+            del parameters
+            return ContextBuild(
+                messages=(ModelMessage(MessageRole.USER, "bounded request"),),
+                source_versions={},
+                truncated_sources=(),
+                estimated_tokens=8,
+                journal_compacted=True,
+                input_message_count=9,
+            )
+
+    harness, sessions = build_harness(
+        FakeModel([ModelResponse("Done.")]), context=CompactingContext()
+    )
+
+    outcome = await harness.run(request(), definition(require_verified=False), now_ms=100)
+
+    assert outcome.status is RunStatus.COMPLETED
+    events = [item for item in sessions.events["run-1"] if item.event_type == "context_compacted"]
+    assert len(events) == 1
+    assert events[0].payload == {
+        "compactor_version": 1,
+        "input_message_count": 9,
+        "output_message_count": 1,
+        "estimated_tokens": 8,
+    }
 
 
 def test_bundled_resource_packages_and_im_templates_are_versioned() -> None:
