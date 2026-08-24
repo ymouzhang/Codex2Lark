@@ -99,6 +99,12 @@ resources/
 └── evals/
 ```
 
+Shipped runtime resource packages live under the importable
+`codex2lark.bundled_resources` package so wheel installation and source-checkout
+execution resolve identical bytes. Top-level design assets may remain under
+`resources/`, but production composition must use the importable package and
+must not depend on the current working directory.
+
 The root package contains only version and CLI entrypoint. Subpackages do not
 re-export broad internal surfaces. Interfaces depend on application/runtime
 ports, never concrete repositories or plugin internals.

@@ -98,7 +98,7 @@ async def test_delegate_tool_runs_separate_child_harness_and_returns_typed_artif
         model=model,
         tools=registry,
         tool_executor=ToolExecutor(registry, Allow(), NoApprovals()),
-        resources=ResourceLoader([]),
+        resources=ResourceLoader.from_package("codex2lark.bundled_resources"),
         context=ContextEngine(),
         sessions=sessions,
     )
@@ -176,7 +176,7 @@ async def test_prepare_and_finish_are_replay_safe(tmp_path: Path) -> None:
             model=ChildModel(),
             tools=registry,
             tool_executor=ToolExecutor(registry, Allow(), NoApprovals()),
-            resources=ResourceLoader([]),
+            resources=ResourceLoader.from_package("codex2lark.bundled_resources"),
             context=ContextEngine(),
             sessions=sessions,
         ),

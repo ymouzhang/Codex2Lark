@@ -324,6 +324,21 @@ The control plane binds a Feishu group, user, or workflow to one exact
 AgentDefinition version. Updating a plugin or resource package does not silently
 change an existing AgentDefinition; rollout is explicit and evaluable.
 
+Production AgentDefinitions do not assemble policy and tone from ad hoc strings
+in the composition root. Codex2Lark ships immutable JSON resource packages
+inside the Python distribution. Startup strictly validates package ID, semantic
+version, instructions, policies, and response-template strings; duplicate IDs,
+unknown fields, empty required fields, or missing selected packages fail
+readiness. The root and delegated-worker definitions select exact package IDs.
+Harness checkpoints record the resolved versions and refuse resume after an
+incompatible package change.
+
+The IM acknowledgement and terminal suffix bundle is likewise versioned package
+data. It is loaded once at composition and mapped to the typed response-template
+object; event content and model output cannot select a different locale or
+override these trusted strings. The first production profile ships
+`group-agent-core@1.0.0`, `delegated-worker-core@1.0.0`, and `im-zh-CN@1`.
+
 ## 12. Discovery and trust
 
 The first release supports:

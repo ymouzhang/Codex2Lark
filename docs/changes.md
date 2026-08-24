@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined importable, strictly validated, versioned production resource and IM
+  response-template packages, selected explicitly by root/worker
+  AgentDefinitions and checkpointed by version rather than hard-coded in the
+  Gateway composition root. Implementation area: ResourceLoader, bundled
+  package data, and V3 composition.
+
 - Declared the durable V3 Gateway as the only executable group-runtime
   semantics and removed the superseded V2 `realtime` package, volatile broker,
   composition root, and their implementation-specific tests. Historical

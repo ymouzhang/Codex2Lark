@@ -78,6 +78,7 @@ class DelegatedHarnessWorker:
                 instructions=self._instructions(node),
                 model_profile=self._model_profile,
                 tool_ids=node.spec.tool_ids,
+                resource_packages=("delegated-worker-core",),
                 budget_limits=tuple(
                     BudgetLimit(BudgetKind(key), value)
                     for key, value in node.spec.budgets.items()

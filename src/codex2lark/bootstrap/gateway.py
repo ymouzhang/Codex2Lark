@@ -198,22 +198,24 @@ def create_v3_gateway(
         app_id=config.feishu_app_id,
         app_secret=config.feishu_app_secret,
     )
+    resource_loader = ResourceLoader.from_package("codex2lark.bundled_resources")
+    im_templates = ResourceLoader.load_im_templates("codex2lark.bundled_resources", "zh-CN")
 
     def bot_open_id() -> str | None:
         value = getattr(active_channel.bot_identity, "open_id", None)
         return value if isinstance(value, str) and value else None
 
     templates = IMResponseTemplates(
-        completed_suffix="已经处理完成啦。如果哪里还不清楚，随时问我就好。",  # noqa: RUF001
-        blocked_suffix="目前还需要一点信息才能继续。你补充后告诉我，我会接着处理。",  # noqa: RUF001
-        failed_suffix="这次没有顺利完成，我已经说明原因。你愿意的话，我们可以一起换个方式继续。",  # noqa: RUF001
-        cancelled_suffix="这项处理已经取消。如果想重新开始，再告诉我就好。",  # noqa: RUF001
+        completed_suffix=im_templates.completed_suffix,
+        blocked_suffix=im_templates.blocked_suffix,
+        failed_suffix=im_templates.failed_suffix,
+        cancelled_suffix=im_templates.cancelled_suffix,
     )
     admission = IMAdmissionService(
         runtime_store,
         im_repository,
         bot_open_id=bot_open_id,
-        acknowledgement_text="收到啦，我会认真帮你处理，完成后马上回来告诉你～",  # noqa: RUF001
+        acknowledgement_text=im_templates.acknowledgement,
     )
     membership_admission = BotAddedAdmissionService(
         runtime_store,
@@ -268,7 +270,7 @@ def create_v3_gateway(
             approvals,
             runtime_store,
         ),
-        resources=ResourceLoader([]),
+        resources=resource_loader,
         context=ContextEngine(),
         sessions=sessions,
     )
@@ -292,21 +294,17 @@ def create_v3_gateway(
         model=selected_model,
         tools=registry,
         tool_executor=ToolExecutor(registry, policy, approvals, runtime_store),
-        resources=ResourceLoader([]),
+        resources=resource_loader,
         context=ContextEngine(),
         sessions=sessions,
     )
     definition = AgentDefinition(
         agent_id="feishu-group-root",
         version=1,
-        instructions=(
-            "You are Codex2Lark, a careful Feishu group assistant. Answer the user's "
-            "request using only provided evidence and enabled semantic tools. Never claim an "
-            "external action completed without verified tool evidence. Be warm, concise, and "
-            "state clearly what was or was not completed."
-        ),
+        instructions="Follow the selected trusted Codex2Lark resource packages.",
         model_profile=config.model,
         tool_ids=tuple(tool.definition.tool_id for tool in enabled_tools),
+        resource_packages=("group-agent-core",),
         budget_limits=(
             BudgetLimit(BudgetKind.MODEL_TOKENS, 32_000),
             BudgetLimit(BudgetKind.TOOL_CALLS, 16),

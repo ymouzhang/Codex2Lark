@@ -365,6 +365,20 @@ def test_context_engine_drops_optional_evidence_before_required_content() -> Non
     assert any("essential" in message.content for message in result.messages)
 
 
+def test_bundled_resource_packages_and_im_templates_are_versioned() -> None:
+    loader = ResourceLoader.from_package("codex2lark.bundled_resources")
+    group = loader.load(("group-agent-core",))
+    worker = loader.load(("delegated-worker-core",))
+    templates = ResourceLoader.load_im_templates("codex2lark.bundled_resources", "zh-CN")
+
+    assert group.versions == {"group-agent-core": "1.0.0"}
+    assert worker.versions == {"delegated-worker-core": "1.0.0"}
+    assert any("untrusted evidence" in item for item in group.policies)
+    assert templates.bundle_id == "im-zh-CN"
+    assert templates.version == 1
+    assert "完成后" in templates.acknowledgement
+
+
 async def test_sqlite_session_store_encrypts_events_and_checkpoint(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "runtime.db")
     await database.open()
