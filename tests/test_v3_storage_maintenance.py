@@ -10,7 +10,8 @@ import pytest
 from codex2lark import cli
 from codex2lark.capabilities.im.models import IncomingMessage, Mention
 from codex2lark.capabilities.im.repository import SQLiteIMRepository
-from codex2lark.core.events import NormalizedEvent, TaskCommand
+from codex2lark.core.events import LeasedTask, NormalizedEvent, TaskCommand, TaskState
+from codex2lark.runtime.tasks import DurableTaskWorker, TaskExecutionResult
 from codex2lark.storage.blobs import EncryptedBlobStore
 from codex2lark.storage.capacity import (
     StorageCapacityMonitor,
@@ -171,6 +172,82 @@ async def test_backup_verify_and_restore_round_trip(tmp_path: Path) -> None:
     assert not (restored_dir / "master.key").exists()
     with pytest.raises(FileExistsError):
         StorageMaintenance(data_dir).backup(archive)
+
+
+async def test_restore_rehearsal_completes_pending_encrypted_task(tmp_path: Path) -> None:
+    source_dir = (tmp_path / "source").resolve()
+    database = SQLiteDatabase(source_dir / "runtime.db")
+    await database.open()
+    master = MasterKey("rehearsal", b"r" * 32)
+    store = RuntimeStore(database, EnvelopeCipher(master))
+    admitted = await store.admit(
+        NormalizedEvent(
+            event_id="recovery-event",
+            plugin_id="test",
+            event_type="test.recovery",
+            tenant_key="tenant",
+            app_id="app",
+            occurred_at_ms=100,
+            received_at_ms=100,
+            resource_kind="test",
+            resource_id="resource",
+            trace_id="trace",
+            source_payload=b"encrypted recovery source",
+        ),
+        TaskCommand(
+            plugin_id="test",
+            command_type="test.recover",
+            session_key="tenant/app/chat",
+            payload={"marker": "encrypted pending task"},
+            available_at_ms=100,
+        ),
+        now_ms=100,
+    )
+    await database.close()
+
+    archive = (tmp_path / "rehearsal.zip").resolve()
+    assert StorageMaintenance(source_dir).backup(archive).ok
+    assert StorageMaintenance.verify_backup(archive).ok
+    restored_dir = (tmp_path / "restored").resolve()
+    assert StorageMaintenance.restore(archive, restored_dir).ok
+
+    class RecoveryHandler:
+        def __init__(self) -> None:
+            self.markers: list[str] = []
+
+        async def execute(self, task: LeasedTask, *, now_ms: int) -> TaskExecutionResult:
+            del now_ms
+            marker = task.payload.get("marker")
+            assert isinstance(marker, str)
+            self.markers.append(marker)
+            return TaskExecutionResult(TaskState.SUCCEEDED)
+
+        def failure(self, task: LeasedTask, error: BaseException) -> TaskExecutionResult:
+            del task, error
+            return TaskExecutionResult(TaskState.FAILED, error_code="recovery_failed")
+
+    restored_database = SQLiteDatabase(restored_dir / "runtime.db")
+    await restored_database.open()
+    try:
+        restored_store = RuntimeStore(restored_database, EnvelopeCipher(master))
+        handler = RecoveryHandler()
+        batch = await DurableTaskWorker(
+            restored_store,
+            {"test.recover": handler},
+            worker_id="restored-worker",
+            clock_ms=lambda: 200,
+        ).run_once(now_ms=200)
+        state = await restored_database.call(
+            lambda connection: connection.execute(
+                "SELECT state FROM runtime_tasks WHERE task_id = ?", (admitted.task_id,)
+            ).fetchone()[0]
+        )
+    finally:
+        await restored_database.close()
+
+    assert batch.terminal_task_ids == (admitted.task_id,)
+    assert handler.markers == ["encrypted pending task"]
+    assert state == "succeeded"
 
 
 async def test_backup_includes_only_referenced_encrypted_blobs(tmp_path: Path) -> None:

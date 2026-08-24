@@ -293,6 +293,20 @@ Restore verifies every manifest hash and the SQLite integrity check before it
 publishes the recovered files. It rejects unexpected archive paths and never
 extracts the master key.
 
+For a release or periodic recovery rehearsal, use a disposable restore target:
+
+1. stop the Gateway and create plus verify a fresh backup;
+2. restore it into a new absolute data directory;
+3. point a disposable service environment at that directory while retaining
+   the matching external master key;
+4. run `doctor --gateway`, start the Gateway, and confirm pending work drains
+   and `storage status` reports healthy lifecycle counts;
+5. stop the disposable Gateway and remove the rehearsal directory according to
+   local retention policy.
+
+Never test restore by overwriting the active directory. Record only timestamps,
+schema version, counts, and pass/fail result—not task or document content.
+
 Run one bounded retention pass only while the Gateway is stopped:
 
 ```bash

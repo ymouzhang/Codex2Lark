@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined an executable encrypted-task backup/restore recovery rehearsal before
+  implementation. A restored database opened with the same external key must
+  lease and complete previously pending work under a new Worker identity.
+  Implementation area: storage-maintenance recovery acceptance and operator
+  rehearsal runbook.
+
 - Defined the exact-title group edit vertical acceptance before implementation.
   The production Gateway path must search, inspect, edit, read back, and publish
   one verified terminal result; ambiguity never reaches mutation. Implementation

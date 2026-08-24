@@ -459,6 +459,13 @@ The supported backup flow uses SQLite's online backup mechanism, then copies the
 immutable encrypted blobs referenced by that snapshot. Restore runs compatibility
 and integrity checks before the Gateway starts event sources.
 
+The release recovery rehearsal includes a durable pending encrypted task, not
+only an empty database. The fixture admits the task, closes the source runtime,
+backs it up, verifies the archive, restores into a new directory, opens the
+restored database with the same external key, executes the recovered task with
+a new Worker identity, and proves its terminal state. The backup never contains
+the external key; using the wrong key must still fail decryption.
+
 The first supported operator workflow requires a stopped Gateway so the
 database snapshot and referenced immutable blobs form one simple consistency
 boundary. Backup never overwrites an existing archive and never includes the
