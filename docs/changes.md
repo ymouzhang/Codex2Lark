@@ -5,10 +5,23 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Established the V3 clean-redesign contract before implementation: existing
+  code and internal behavior may be replaced without compatibility shims.
+  Reframed Codex2Lark as a single-node general Feishu Agent Runtime using
+  Harness Engineering, a Codex-inspired rooted multi-Agent graph, and Pi-inspired
+  small sessions, progressive resources, lifecycle events, and compaction.
+- Defined durable multi-Agent delegation, scoped context and tools, typed
+  mailboxes/artifacts, resource locking, cancellation, recovery, root-only
+  terminal publishing, and collaboration evals in `multi-agent-runtime.md`.
+- Defined trusted capability plugins, encrypted SQLite/blob persistence,
+  retention and reconciliation, the Feishu IM plugin, explicit design choices,
+  V3 package boundaries, and phase exit gates before any runtime refactor.
+
 - Defined the `Codex2Lark` product name and lowercase `codex2lark` machine
   identifier contract before renaming code, packaging, plugin metadata, Skill
   dependencies, tests, caches, and documentation.
-- Defined the stateless product scope in `requirements.md` before project code.
+- Defined the original stateless product scope in `requirements.md` before
+  project code; the later V3 entries above supersede it for the target runtime.
 - Defined the Skill + MCP + ephemeral compiler architecture in
   `architecture.md` before project code.
 - Defined the first-release MCP surface in `mcp-tools.md` before tool

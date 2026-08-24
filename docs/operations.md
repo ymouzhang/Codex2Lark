@@ -1,21 +1,28 @@
-# Codex2Lark 安装与配置
+# Codex2Lark installation and configuration
 
-本文用于首次安装、飞书授权和 Gateway 配置。安装完成后的日常启动与停止见
-[使用与停止](usage.md)。
+This guide covers first-time installation, Feishu authorization, and Gateway
+configuration. For routine startup and shutdown after installation, see
+[Usage and shutdown](usage.md).
 
-除 lark-cli 安装命令外，本文命令都在 Codex2Lark 仓库根目录执行。
+This guide covers the currently implemented V2 executable. The approved V3
+single-node persistent multi-Agent service has separate design and delivery
+contracts in [architecture.md](architecture.md) and [roadmap.md](roadmap.md); do
+not infer that those future storage or Agent features are already available.
 
-## 1. 环境要求
+Run every command in this guide from the Codex2Lark repository root, except for
+the lark-cli installation command.
 
-- Python 3.12 或更高版本；
-- `uv`；
-- Node.js 和 `npx`；
-- Codex；
-- 可以创建企业自建应用的飞书账号。
+## 1. Requirements
 
-## 2. 安装并登录 lark-cli
+- Python 3.12 or newer;
+- `uv`;
+- Node.js and `npx`;
+- Codex;
+- a Feishu account that can create a custom enterprise application.
 
-Codex2Lark 当前固定使用 `@larksuite/cli@1.0.89`：
+## 2. Install and sign in to lark-cli
+
+Codex2Lark pins `@larksuite/cli@1.0.89`:
 
 ```bash
 npx @larksuite/cli@1.0.89 install
@@ -24,18 +31,19 @@ lark-cli auth login --recommend
 lark-cli auth status
 ```
 
-不要使用 `@latest`。飞书凭证由 lark-cli 管理，Codex2Lark 不保存凭证。
+Do not use `@latest`. lark-cli manages Feishu credentials; Codex2Lark does not
+store them.
 
-## 3. 安装 Python 依赖
+## 3. Install Python dependencies
 
-进入仓库根目录：
+From the repository root, run:
 
 ```bash
 uv sync --all-groups
 uv run codex2lark doctor
 ```
 
-正常结果应包含：
+A healthy result includes:
 
 ```json
 {
@@ -47,125 +55,143 @@ uv run codex2lark doctor
 }
 ```
 
-如果 `ok` 为 `false`，按照返回的 `next_action` 修复后重新运行。
+If `ok` is `false`, follow the returned `next_action`, fix the issue, and run the
+command again.
 
-## 4. 连接 Codex
+## 4. Connect Codex
 
-选择一种方式，不要同时使用。
+Choose one method. Do not use both at the same time.
 
-### 使用源码
+### Use the source checkout
 
-按照[使用与停止](usage.md#2-首次把源码注册到-codex)执行一次
-`codex mcp add`。之后由 Codex 自动启动 MCP，不需要手工保持
-`uv run codex2lark mcp` 运行。
+Run `codex mcp add` once as described in
+[Usage and shutdown](usage.md#2-register-the-source-checkout-with-codex-once).
+Codex then starts MCP automatically; do not keep
+`uv run codex2lark mcp` running manually.
 
-### 使用已安装插件
+### Use the installed plugin
 
-插件自带 `.mcp.json`，Codex 会自动启动 MCP。安装或更新插件后重启 Codex，并用
-`/mcp` 检查工具。不要再添加同名的手工 MCP 注册。
+The plugin includes `.mcp.json`, so Codex starts MCP automatically. Restart
+Codex after installing or updating the plugin, then inspect the tools with
+`/mcp`. Do not add a manual MCP registration with the same name.
 
-## 5. 配置并启动 Gateway
+## 5. Configure and start the Gateway
 
-如果只从 Codex 创建和修改飞书内容，跳过本节。
+Skip this section if you only create and edit Feishu content from Codex.
 
-如果需要机器人进群后立即执行自动化，在飞书开发者后台完成以下配置：
+To run automation immediately after the bot joins a group, complete the
+following configuration in the Feishu developer console:
 
-1. 为机器人授予：
+1. Grant the bot these permissions:
    - `im:chat.members:bot_access`
    - `im:chat.members:read`
    - `im:chat.members:write_only`
-2. 打开“事件与回调”，添加“机器人被添加至群聊”事件：
-   `im.chat.member.bot.added_v1`。
-3. 创建并发布新的应用版本。只保存配置不会生效。
-4. 确认当前 lark-cli 用户位于应用可用范围内。
+2. Open **Events and callbacks** and add the **Bot added to group chat** event:
+   `im.chat.member.bot.added_v1`.
+3. Create and publish a new application version. Saving the configuration alone
+   does not activate it.
+4. Confirm that the current lark-cli user is within the application's
+   availability scope.
 
-先做一次两秒连接探针：
+First run a two-second connection probe:
 
 ```bash
 lark-cli event consume im.chat.member.bot.added_v1 --as bot --timeout 2s
 ```
 
-正常结果包含：
+A healthy result includes:
 
 ```text
 [event] ready event_key=im.chat.member.bot.added_v1
 [source] feishu-websocket: connected
 ```
 
-停止探针，然后启动 Gateway：
+Stop the probe, then start the Gateway:
 
 ```bash
 uv run codex2lark gateway
 ```
 
-看到 `INFO event gateway ready` 后即可把机器人加入测试群。机器人已经在群里时不会
-产生新的进群事件，需要先移除再重新加入。
+After `INFO event gateway ready` appears, add the bot to a test group. A bot
+that is already in the group does not produce a new join event; remove it and
+add it again.
 
-Gateway 需要访问公网，但不需要公网 IP 或域名。当前默认使用内存队列，停止期间的
-事件和退出时尚未完成的任务不会重放。
+The Gateway needs outbound internet access but does not need a public IP address
+or domain. The default in-memory queue does not replay events received while the
+Gateway is stopped or unfinished tasks left when it exits.
 
-## 6. 停止和卸载
+## 6. Stop and uninstall
 
-### 停止前台进程
+### Stop foreground processes
 
-- 手工运行的 MCP：在对应终端按 `Ctrl+C`；
-- Gateway：在对应终端按 `Ctrl+C`；
-- Codex 自动启动的 MCP：由 Codex 管理；关闭或重启 Codex 即可停止或重启子进程。
+- Manually started MCP: press `Ctrl+C` in its terminal.
+- Gateway: press `Ctrl+C` in its terminal.
+- MCP started automatically by Codex: Codex manages it; close or restart Codex
+  to stop or restart the child process.
 
-### 删除源码 MCP 注册
+### Remove the source MCP registration
 
 ```bash
 codex mcp remove codex2lark
 ```
 
-### 卸载插件
+### Uninstall the plugin
 
-先查看插件来源：
+First inspect the plugin source:
 
 ```bash
 codex plugin list --json
 ```
 
-然后使用列表中显示的 marketplace 名称：
+Then use the marketplace name shown in the list:
 
 ```bash
 codex plugin remove codex2lark@MARKETPLACE
 ```
 
-删除 MCP 注册或插件不会删除飞书授权、仓库或已创建的飞书资源。
+Removing the MCP registration or plugin does not remove Feishu authorization,
+the repository, or any Feishu resources already created.
 
-### 退出飞书登录
+### Sign out of Feishu
 
-只有需要撤销本机 lark-cli 登录时才执行：
+Run this command only when you want to revoke the local lark-cli sign-in:
 
 ```bash
 lark-cli auth logout
 ```
 
-## 7. 飞书功能权限
+## 7. Feishu permissions
 
-不同操作需要对应的飞书权限。遇到权限错误时，以 lark-cli 返回的缺失 scope 为准。
+Different operations require different Feishu permissions. When a permission
+error occurs, use the missing scope returned by lark-cli as the source of truth.
 
-常用权限包括：
+Common permissions include:
 
-| 功能 | 常用权限 |
+| Capability | Common permissions |
 |---|---|
-| 创建和修改文档 | Docs、Drive、`space:folder:create`、`search:docs:read` |
-| 修改完成后发送通知 | `im:message:send_as_bot` |
-| 读取群消息并生成汇总 | `im:chat:read`、`im:message:readonly` 和用户消息历史权限 |
-| 邀请当前用户进入机器人所在群 | `im:chat.members:read`、`im:chat.members:write_only` |
+| Create and edit documents | Docs, Drive, `space:folder:create`, `search:docs:read` |
+| Send a notification after an edit | `im:message:send_as_bot` |
+| Read group messages and generate a digest | `im:chat:read`, `im:message:readonly`, and user message-history permissions |
+| Invite the current user to the bot's group | `im:chat.members:read`, `im:chat.members:write_only` |
 
-新建的文档、电子表格和多维表格进入飞书云盘根目录下的 `Codex2Lark` 文件夹。
-文件夹由系统按需创建，不在本地保存 folder token。
+New Docs, Sheets, and Base resources are placed in the `Codex2Lark` folder at
+the Feishu Drive root. The system creates the folder when needed and does not
+store its folder token locally.
 
-## 8. 故障排查
+## 8. Troubleshooting
 
-- `lark_cli: missing`：重新安装 `@larksuite/cli@1.0.89` 并检查 PATH。
-- lark-cli 版本不匹配：重新运行固定版本安装命令，不要使用 `@latest`。
-- 身份不可用：运行 `lark-cli auth login --recommend`。
-- MCP 已注册但没有工具：重启 Codex 或新建任务，再用 `/mcp` 检查。
-- 文档标题不唯一：提供文档 URL，或重命名重复文档。
-- `Codex2Lark` 文件夹重复：保留一个准确名称的文件夹后重试。
-- 机器人无法邀请用户：检查成员权限、应用可用范围和群邀请策略。
-- Gateway 无法启动：确认事件已经随新应用版本发布，并重新运行连接探针。
-- 修改成功但通知失败：检查 `im:message:send_as_bot`；不要为了补发通知重复修改文档。
+- `lark_cli: missing`: reinstall `@larksuite/cli@1.0.89` and check `PATH`.
+- lark-cli version mismatch: rerun the pinned-version installation command; do
+  not use `@latest`.
+- No usable identity: run `lark-cli auth login --recommend`.
+- MCP is registered but no tools appear: restart Codex or create a new task,
+  then inspect `/mcp` again.
+- The document title is not unique: provide the document URL or rename duplicate
+  documents.
+- Duplicate `Codex2Lark` folders: retain one folder with the exact name and retry.
+- The bot cannot invite the user: check member permissions, application
+  availability scope, and group invitation policy.
+- The Gateway cannot start: confirm that the event was published with a new
+  application version and rerun the connection probe.
+- The edit succeeded but notification failed: check
+  `im:message:send_as_bot`; do not repeat the edit merely to resend a notification.

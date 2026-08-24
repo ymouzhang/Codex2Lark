@@ -21,10 +21,15 @@ change-log entry.
 ## Project invariants
 
 - Python dependencies and commands are managed with `uv`.
-- User document content and document-derived state are never persisted locally.
-- Ephemeral files live in a per-request temporary directory and are removed on
-  success, failure, cancellation, and timeout.
-- Feishu is the only business-data source of truth.
+- Authorized Feishu business data may be persisted only by the documented
+  single-node Runtime store and its typed capability plugins. Every persisted record has source
+  provenance, an explicit retention policy, and a supported deletion path.
+- Files used only for one request live in a per-request temporary directory and
+  are removed on success, failure, cancellation, and timeout. Durable attachment
+  copies live only in the managed encrypted file store.
+- Feishu remains the upstream business-data source of truth. The local store is
+  a rebuildable, access-controlled mirror and must reconcile edits, recalls,
+  deletions, and lost access from live Feishu state.
 - OAuth credentials are secrets, not business data; they must be provided by
   `lark-cli`, an operating-system keychain, or an external secret provider.
 - The model is never exposed to an arbitrary shell or raw `lark-cli` execution

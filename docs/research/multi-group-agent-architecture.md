@@ -1,5 +1,11 @@
 # Multi-group agent architecture research
 
+> Historical research note: the approved V3 decision supersedes this document's
+> in-memory and no-local-content V2 Lite recommendation. See
+> [V3 architecture](../architecture.md),
+> [multi-Agent runtime](../multi-agent-runtime.md), and
+> [design decisions](../design-decisions.md).
+
 ## 1. Research question
 
 Codex2Lark must support one logical GPT/agent serving many Feishu groups while

@@ -1,293 +1,293 @@
-# Product requirements
+# Codex2Lark V3 product requirements
 
 ## 1. Problem
 
-A user researches and refines a solution with ChatGPT or Codex, then asks the
-agent to create a polished Feishu document or modify an existing one. The result
-may contain native document blocks, whiteboards, spreadsheets, Base tables,
-images, attachments, and links.
+People collaborate in many Feishu groups and expect an Agent to understand an
+addressed request, collect authorized conversation and file context, coordinate
+specialized work, operate Feishu resources, and report a verified result. A
+Codex or ChatGPT conversation may also invoke the same capabilities through MCP.
 
-The user does not want a separate document-management database or a long-lived
-local copy of Feishu content.
+An interactive AI client is not an always-on event service. A single large
+prompt is not a safe orchestration system. The product therefore needs a
+durable, observable Agent Harness that serves many groups and users concurrently
+while preserving identity, authorization, context, and target isolation.
 
 ## 2. Product definition
 
-`Codex2Lark` is a Harness-centered Feishu AI Agent platform made of:
+`Codex2Lark` is a single-node Feishu Agent Runtime with:
 
-- a versioned Agent Harness that owns context, model/tool execution, policy,
-  approvals, verification, compaction, recovery, and evaluation;
-- a Feishu authoring Skill that teaches the agent how to plan and verify work;
-- semantic MCP tools that expose safe Feishu capabilities to interactive
-  Codex/ChatGPT clients;
-- an always-on Feishu Event Gateway with a bounded scheduler for inbound
-  automation independent of MCP availability; a durable external queue is an
-  optional reliability adapter, not a runtime prerequisite;
-- an ephemeral compiler that converts structured authoring requests into
-  `lark-cli` operations;
-- a verifier that reads Feishu back after every write.
+- an always-on outbound long-connection event service;
+- a durable SQLite scheduler and transactional result outbox;
+- a rooted multi-Agent Harness with bounded delegation and recovery;
+- progressively loaded Skills, prompts, policies, templates, and evals;
+- trusted typed plugins for IM, Drive, Docs, Sheets, Base, Whiteboard, identity,
+  and future Feishu domains;
+- semantic MCP tools for active Codex/ChatGPT clients;
+- an authorized encrypted local mirror of selected messages and files;
+- live authorization checks and read-back verification for external effects.
 
-### Naming contract
+Feishu is the upstream source of truth. Local content is a policy-controlled
+mirror for recovery, context, parsing, and performance, not a second document
+system.
 
-- Product and human-facing name: `Codex2Lark`.
-- Python distribution, import package, CLI command, MCP server ID, plugin ID,
-  temporary-file prefix, and dependency-cache prefix: `codex2lark`.
-- The former identifier is removed rather than retained as an alias, so
-  discovery and configuration have one canonical name.
-- Feishu remains in capability descriptions where it identifies the Chinese
-  product surface; Lark is the project brand and broader platform name.
+### Naming
+
+- Human-facing name: `Codex2Lark`.
+- Distribution, package, CLI, MCP server, plugin, cache, and temporary prefix:
+  `codex2lark`.
+- The former identifier is not retained as an alias.
+
+### Compatibility
+
+V3 is a clean redesign. Existing internal modules, interfaces, runtime behavior,
+and absence of a database may be replaced. No compatibility shim is required.
+Migration work is limited to explicitly retained operator configuration and
+approved business data.
 
 ## 3. Primary use cases
 
-### Create from a conversation
+### Group Agent request
 
-The user asks the agent to turn the current conversation into a Feishu document.
-The agent determines document genre, structure, tables, diagrams, and supporting
-artifacts, then creates and verifies the result.
+In any enabled group, an authorized user mentions the bot with a non-empty
+request. The runtime durably admits it, responds promptly in a gentle and concise
+tone, gathers bounded group/thread/file context, runs the required Agent graph,
+and posts one explicit verified terminal result.
 
-### Modify an existing document
+### Conversation to professional document
 
-The user supplies a Feishu URL or a search description and asks for a scoped
-change. The agent reads the live document, identifies target blocks, produces a
-minimal edit plan, applies it, and verifies both the requested change and the
-unchanged surrounding content.
+The Agent turns a discussion into a polished Feishu document in the managed
+`Codex2Lark` folder. It may create native tables, Mermaid-derived diagrams,
+whiteboards, Sheets, Base resources, images, attachments, and links. It reads
+the created document back before reporting completion.
 
-When the user identifies a document by title, the agent must discover it from
-live Drive data rather than relying on a remembered token. An exact title match
-inside the managed folder is preferred; existing documents outside that folder
-remain discoverable through a whole-Drive fallback. Zero matches stop with a
-not-found result and multiple exact matches stop with candidate details.
+### Find and modify an existing resource
 
-### Managed Drive workspace
+When the user names a document rather than providing a token, the Agent searches
+authorized Feishu storage, resolves ambiguity explicitly, inspects the live
+resource, applies a bounded change, reads it back, and reports what changed.
 
-All Docs, Sheets workbooks, and Base applications created by Codex2Lark are
-placed in one managed root-level Drive folder named `Codex2Lark`. The service
-resolves the folder from live Drive data for each creation workstream and
-creates it when absent. The folder token is not persisted locally. Duplicate
-exact-name folders are an ambiguity and must not be guessed.
+### Group history digest
 
-### Edit completion notification
+The Agent finds an exact group, collects messages for an authorized time range,
+orders them by source time and speaker, embeds permitted images, represents
+files by name unless their content is explicitly needed, publishes a document
+named after the group, and verifies it.
 
-After a document edit passes live read-back verification, the configured
-Feishu application sends the current authenticated user a bot direct message.
-The message identifies the document, links to it when a URL is available,
-summarizes the authorized change, and reports verification success. The edit
-request supplies a bounded human-readable change summary; document bodies and
-generated markup are never copied into the message.
+### Multi-artifact collaboration
 
-The edit and notification cannot be atomic across Feishu services. If the edit
-is verified but notification delivery fails, the edit result remains successful
-and reports `notification.status = failed`. The agent must report that warning
-and must not retry the edit merely to resend the notification.
+One root Agent may delegate independent research, document, Sheets/Base, and
+verification work to scoped worker Agents. Workers return typed artifacts; the
+root integrates them and owns the final reply.
 
-### Publish a group-chat digest
+### Future Feishu workflows
 
-The user identifies a visible Feishu group by exact name or `chat_id` and gives
-an explicit start and end time. Codex2Lark resolves the group, retrieves the
-complete bounded message range as the user by default, expands returned thread
-replies, and creates a chronological Feishu document titled exactly with the
-live group name. Group discovery, message reading, and image retrieval use the
-requested chat identity; managed-folder discovery, document writes, read-back
-verification, and edit notification always use the current authenticated user
-as the authoring identity so bot-visible digests remain in that user's Drive.
+Calendar, Task, Approval, Meeting, Mail, Wiki, and other domains join as typed
+capability plugins without changing the Harness, scheduler, identity model, or
+Agent collaboration protocol.
 
-When the group is resolved with the Codex2Lark bot identity, the current
-authenticated Feishu user must also be a member of that group. Before reading
-messages or writing a document, Codex2Lark obtains that user's live `open_id`,
-reads the complete visible user-member list as the bot, and does nothing when
-the user is already present. When absence is confirmed, the bot invites exactly
-that user and verifies the user's live access to the group. A truncated member
-list, unavailable user identity, rejected or approval-pending invitation, or
-failed read-back stops the workflow before message retrieval and document
-creation. The workflow never invites a guessed user or a caller-supplied ID.
+## 4. Functional requirements
 
-The primary trigger is real-time rather than digest-time. A standalone Event
-Gateway receives `im.chat.member.bot.added_v1` over an outbound Feishu long
-connection independently of Codex and MCP, normalizes a minimal event
-reference, and dispatches a deterministic membership handler. The handler reads
-live members and invites the configured group owner only when absent. Repeated
-delivery is safe because the operation begins with a live read and is verified
-after the write. The digest-time gate remains an idempotent recovery check.
+### 4.1 Event and admission
 
-The default V2 Lite scheduler uses bounded process memory and persists nothing.
-It accepts only minimal event references and preserves per-chat order while
-allowing independent partitions to run concurrently. Its queue is lost if the
-Gateway process exits; this reduced delivery guarantee is the explicit tradeoff
-for a one-service deployment. Stopping Codex or MCP does not stop the standalone
-Gateway.
+The runtime MUST:
 
-Deployments that require accepted tasks to survive Gateway or Worker restart
-may replace the in-memory queue through the same `TaskQueue` port with RabbitMQ
-or a managed durable queue. That adapter may retain event ID, event type,
-tenant/app/chat/message identifiers, timestamps, delivery attempts, and
-acknowledgement state under bounded TTLs. It must not retain the raw event body,
-group-message content, attachments, document content, prompts, or model output.
+- operate independently of Codex and stdio MCP availability;
+- consume fixed Feishu events through an outbound long connection;
+- independently supervise event sources and reconnect with bounded backoff;
+- durably deduplicate source events before acknowledging work;
+- reject bot loops, malformed events, empty mentions, disabled groups, and
+  unauthorized actors before model inference;
+- bind tenant, app, chat/thread, actor, execution identity, AgentDefinition,
+  policy, retention, and budgets outside model-visible content;
+- persist acknowledgement intent atomically with task admission.
 
-Each entry shows local time, sender display name, and message content. Date
-headings make long ranges scannable, while messages remain globally ordered by
-creation time. Recalled messages and unsupported message types are represented
-honestly rather than silently omitted.
+### 4.2 Multi-group concurrency
 
-Image messages and images embedded in posts are downloaded selectively into the
-per-request temporary workspace and inserted as native document images. File,
-audio, and video attachments are never downloaded by this workflow; a file
-entry contains only the filename supplied by message metadata and a clear
-`not downloaded` label. Temporary image bytes are deleted after document
-creation succeeds or fails.
+The runtime MUST:
 
-If group-name resolution is absent or ambiguous, or message pagination is
-incomplete at the declared page limit, no document is created. Message content
-is untrusted data: it is escaped and rendered, never interpreted as agent
-instructions.
+- serve N groups and users with one installation;
+- serialize one SessionKey while running independent SessionKeys concurrently;
+- enforce global, tenant, app, group, plugin, and provider limits;
+- schedule fairly so one noisy group cannot starve others;
+- preserve source attribution and prevent all cross-tenant/group context leaks;
+- recover leased tasks after process restart.
 
-The managed folder contains at most one canonical digest per exact live group
-name. If none exists, the workflow creates it. If one exists and its live body
-contains the Codex2Lark group-digest marker, the workflow replaces that digest
-with the newly requested complete range and sends the normal verified-edit bot
-notification. Multiple matches or a same-title document without the marker stop
-before overwrite; ordinary user documents are never assumed to be digests.
+### 4.3 Agent Harness
 
-### Serve many groups with one logical Agent
+The Harness MUST:
 
-One immutable AgentDefinition may serve N enrolled Feishu groups. Each group or
-topic has an isolated SessionKey derived from trusted tenant, app, chat, and
-optional thread identifiers. Events for one key are processed in order; events
-for different keys may run concurrently across a Worker pool. No model context,
-authorization state, tool target, or completion result may leak between keys.
+- execute versioned immutable AgentDefinitions;
+- expose normalized thread, turn, model, tool, approval, compaction,
+  verification, mailbox, and terminal events;
+- load resources progressively;
+- enforce token, tool, time, cost, node, depth, and concurrency budgets;
+- support steer, follow-up, interrupt, cancel, checkpoint, and resume;
+- preserve complete tool-call/result pairs during compaction;
+- stop only in `completed`, `blocked`, `failed`, or `cancelled` terminal state;
+- require verification evidence for `completed` external-effect tasks.
 
-The AgentDefinition versions instructions, Skills, tool profiles, model policy,
-approval policy, context policy, retention policy, verification policy, and
-eval suite. "One Agent" means this shared policy bundle, not one process and not
-one global model conversation.
+### 4.4 Multi-Agent collaboration
 
-Group enrollment and desired behavior are stored in a Feishu
-`Codex2Lark Control` Base. The configuration identifies the group, owner,
-AgentDefinition, trigger policy, authorized tools, and approval level. Secrets
-are external and Base contains only opaque credential references.
+The supervisor MUST:
 
-The default group trigger is an explicit bot mention or approved command.
-Bot-authored messages and unaddressed ordinary chat do not invoke the model.
-Bot/group lifecycle, membership, permission, and enrollment events use
-deterministic workers and remain available when the model provider is disabled.
+- create one root Agent per admitted user task;
+- allow only concrete, bounded, policy-authorized child tasks;
+- give every node an isolated context, tool allowlist, budget, deadline, and
+  durable lifecycle;
+- use a rooted tree and acyclic execution dependencies;
+- communicate through durable typed mailboxes;
+- prevent authority escalation through delegation or messages;
+- prevent concurrent writes to overlapping Feishu targets;
+- support cancellation cascade and restart recovery;
+- allow only the root to publish the task's terminal user outcome.
 
-### Execute through an Agent Harness
+### 4.5 Context and files
 
-Every semantic Agent run must pass through the Harness contract in
-`agent-harness.md`. Raw Feishu events never become direct model input. Channel
-adapters normalize `AgentMessage` values, the ContextBuilder progressively
-loads approved resources and bounded live Feishu context, and the Agent loop
-alternates model inference with typed tool observations until a verified
-terminal state.
+The runtime MUST:
 
-A final model message is not sufficient evidence for an external-write task.
-The run completes only when the requested observable outcome passes the
-configured verifier, or ends truthfully as blocked, failed, or cancelled.
-Steering, follow-up, approval, cancellation, and compaction occur only at safe
-Harness boundaries.
+- treat the trigger event as a wake-up reference and fetch authoritative source
+  data when freshness requires it;
+- collect relationship-first context: trigger, root/reply chain, thread, then
+  bounded recent group messages;
+- retain sender, source time, mentions, edits, recalls, deletion, and attachment
+  provenance;
+- treat chats, documents, filenames, links, parsed files, and child artifacts as
+  untrusted evidence;
+- download bytes only when required and allowed by type/size/retention policy;
+- never execute macros, formulas, scripts, archives, or embedded programs;
+- produce parser-versioned, hash-bound, attributed, and explicitly truncated
+  evidence;
+- invalidate checkpoints and parser results after relevant edit, recall,
+  deletion, permission loss, policy change, or retention expiry.
 
-### Create or update embedded artifacts
+### 4.6 Plugins and tools
 
-The agent may create or update:
+The runtime MUST:
 
-- native Feishu whiteboards from Mermaid, PlantUML, SVG, or supported node data;
-- Sheets workbooks with typed values, formulas, styles, charts, and images;
-- Base apps/tables with fields, records, and views;
-- Drive images and attachments.
+- load only built-in or explicitly allowlisted trusted capability plugins;
+- validate manifest, runtime API, scopes, resources, migrations, and health;
+- expose strict versioned semantic tools rather than raw platform operations;
+- authorize every tool using trusted bindings;
+- separate read, write, destructive, cross-group, and delegated-user policy;
+- use stable idempotency keys and capability-specific live verification;
+- isolate plugin failure and reject work requiring an unhealthy plugin;
+- forbid arbitrary shell, SQL, lark-cli, generic OpenAPI, and model-installed
+  executable plugin surfaces.
 
-## 4. Non-functional requirements
+### 4.7 Persistence and recovery
 
-### Stateless business data
+The single-node profile MUST:
 
-The application MUST NOT persist:
+- use SQLite WAL transactions for events, tasks, runs, Agent graphs, leases,
+  mailboxes, idempotency, resource locks, and outbox state;
+- use typed kernel and plugin-owned schemas rather than universal EAV storage;
+- encrypt business content and attachment bytes at rest using an externally
+  supplied key;
+- keep durable data outside the source repository;
+- apply versioned retention and support targeted purge;
+- reconcile local mirrors with Feishu edits, recalls, deletion, and access loss;
+- protect disk capacity and stop optional downloads before runtime failure;
+- support consistent backup and restore of database, encrypted blobs, schema
+  manifest, and external key.
 
-- document bodies or snapshots;
-- Document IR or generated XML;
-- block ID mappings;
-- edit plans;
-- copies of Sheet or Base data;
-- generated diagram sources after the request completes;
-- unbounded application-level operation history.
+### 4.8 User communication
 
-Per-request state may exist in memory or in an isolated temporary directory and
-must be destroyed when the request ends.
+For every admitted group request, the runtime MUST:
 
-Reliable inbound processing may retain bounded operational metadata outside the
-developer workstation: minimal event references, delivery acknowledgements,
-leases, retry/dead-letter state, and short-lived idempotency keys. These records
-must exclude message/document bodies, attachments, prompts, and model output;
-must have documented TTLs; and must not become a business-data source of truth.
+- promptly reply that it has received and will handle the request;
+- use configurable, gentle, natural, concise language without demographic
+  stereotyping or sacrificing accuracy;
+- send only factual throttled progress when it materially helps;
+- send exactly one root terminal reply stating completion, blockage, failure, or
+  cancellation;
+- list created/modified resources and relevant verification warnings;
+- invite a follow-up question in the completion template;
+- never claim completion solely because a model or tool returned success text.
 
-### Live source of truth
+## 5. Non-functional requirements
 
-Feishu is the only business-data source of truth. Every edit starts by reading
-the current document or artifact. Later edits do not depend on a previous local
-run.
+### Security and privacy
 
-### Safe concurrency
+- Credentials never enter prompts, logs, SQLite, blobs, Feishu control records,
+  or model-visible tool output.
+- Local business data is encrypted, purpose-limited, and deleted by retention.
+- Authorization is checked at admission and again before sensitive reads/writes.
+- Cross-group access always names and authorizes source and destination.
+- Logs and metrics contain lifecycle, identifiers, sizes, hashes, timings, and
+  redacted errors, not content or hidden reasoning.
 
-Tools that mutate existing resources accept an expected revision when Feishu or
-the selected API supports it. A revision mismatch must stop the write, refetch
-live state, and require replanning rather than overwrite a concurrent edit.
+### Reliability
 
-Each SessionKey has at most one active Agent run. Different SessionKeys may run
-concurrently. Broker delivery is at least once, so handlers and observable
-Feishu side effects must be idempotent and verified before acknowledgement.
+- Committed tasks, Agent graphs, reply intents, and approvals survive restart.
+- Duplicate events and retries do not create duplicate logical operations.
+- One event source, plugin, group, Agent node, or model failure does not corrupt
+  unrelated work.
+- The runtime makes no exactly-once claim for external Feishu effects; it uses
+  at-least-once execution, idempotency, inspection, and verification.
 
-### Quality
+### Operability
 
-A successful API response is insufficient. Create and edit workflows must read
-the affected resource back and validate observable structure and content.
+- Production requires one supervised process, one data directory, one external
+  encryption key, Feishu credentials, and model credentials.
+- It requires no RabbitMQ, Redis, PostgreSQL, object store, public IP, or inbound
+  Webhook.
+- Startup and readiness report configuration, key, storage, migration, plugin,
+  event-source, identity, and provider health without secrets.
+- Shutdown drains, checkpoints/releases leases, preserves outbox intent, and
+  closes cleanly.
 
-### Security
+### Maintainability
 
-- The MCP surface exposes semantic operations, never arbitrary shell execution.
-- Request schemas are strict and server validated.
-- Subprocess arguments are never interpreted by a shell.
-- Credentials never appear in tool output or logs.
-- Write tools are clearly described as side-effecting.
-- Trusted routing code binds tenant, app, chat, thread, identity, credentials,
-  tools, and approval policy outside model-visible arguments.
-- Harness changes are versioned and gated by contract tests and evals covering
-  routing isolation, prompt injection, tool use, approval, redelivery,
-  compaction, and truthful completion.
+- Domain logic resides in cohesive capability plugins.
+- Kernel tests use fake plugins; plugin tests use fake runtime ports and recorded
+  Feishu envelopes.
+- Every behavior change begins with docs and ships with tests/evals.
+- V3 code follows the target package boundaries in [development.md](development.md).
 
-## 5. Explicit non-goals for the first release
+## 6. Acceptance criteria
 
-- Background synchronization between Feishu and a local repository.
-- Cross-session three-way merges using a stored base snapshot.
-- A proprietary document database.
-- Pixel-perfect arbitrary HTML/CSS rendering inside Feishu Docs.
-- Browser automation as the primary write path.
-- Exposing all 2,500+ Feishu APIs directly to the model.
-- Treating Codex desktop, a Codex task, or stdio MCP as an always-on event
-  receiver.
-- One shared model conversation across multiple Feishu groups.
+V3 is complete only when automated or explicitly opt-in live tests demonstrate:
 
-## 6. Acceptance criteria for the first release
+1. A mention in any enabled group is acknowledged without Codex/MCP running.
+2. Multiple groups execute concurrently with per-SessionKey ordering and no
+   cross-group context, identity, target, or result leakage.
+3. Restart after durable admission recovers the task, Agent graph, mailbox,
+   resource locks, and reply intent.
+4. One task safely delegates at least three independent workers, integrates
+   typed results, and publishes one root terminal reply.
+5. Depth, node, concurrency, token, time, tool, and cost budgets stop excessive
+   delegation deterministically.
+6. User steer/follow-up, approval, interrupt, and cancellation reach the correct
+   graph and survive restart.
+7. Duplicate delivery/retry produces no duplicate document, edit, invitation,
+   or terminal reply.
+8. A group request can create and verify a professional document containing a
+   correct native table and a rendered architecture diagram in the managed
+   folder.
+9. An exact-title request finds, disambiguates, modifies, reads back, and reports
+   an existing document.
+10. Group history is chronological and sender-aware; permitted images are
+    embedded and non-required files are represented by filename.
+11. Message/file context is encrypted locally, bounded by TTL, invalidated on
+    edit/recall/access loss, and removable by targeted purge.
+12. Prompt injection in a message, document, file, or child artifact cannot
+    change trusted identity, policy, tools, target, or approval.
+13. Overlapping concurrent writes are rejected or serialized; disjoint target
+    work can run concurrently.
+14. Plugin failure blocks only dependent work and produces a truthful terminal
+    result.
+15. External writes become `completed` only after capability-specific read-back
+    verification; unverifiable outcomes are explicit.
+16. Backup/restore returns a compatible encrypted runtime to a recoverable state.
+17. The default deployment passes readiness without RabbitMQ, Redis, PostgreSQL,
+    public Webhook, or a running Codex task.
 
-1. Codex can discover and invoke the Skill and local stdio MCP server.
-2. The server can inspect and create a Feishu document through `lark-cli`.
-3. The server can perform a restricted set of precise document edits.
-4. Whiteboard, Sheet, and Base tools have strict schemas and safe execution
-   adapters.
-5. Every write returns a read-back verification result.
-6. Unit tests prove temporary data cleanup, safe subprocess invocation, schema
-   validation, error normalization, and command construction.
-7. No test or runtime component requires a local business-data database.
-8. New Docs, Sheets, and Base resources are created in the live managed folder.
-9. A document can be resolved safely by exact title before a bounded edit.
-10. Every verified document edit attempts one idempotent bot notification to
-    the current authenticated user and exposes its delivery status.
-11. A bounded group-chat range can be published chronologically with sender
-    names, selectively embedded images, filename-only file entries, managed
-    folder placement, and live read-back verification.
-12. A standalone Event Gateway and deterministic worker handle bot-added events
-    while Codex and MCP are stopped, and idempotently ensure the configured
-    owner is a verified group member.
-13. N enrolled groups share one AgentDefinition while maintaining per-group
-    ordering, cross-group concurrency, and complete context/authorization
-    isolation.
-14. The Agent Harness exposes versioned run events, bounded context, typed tool
-    policy hooks, steering/follow-up, compaction, and verified terminal states.
-15. The default standalone Gateway requires no database, cache, message broker,
-    public callback endpoint, or running MCP process; its documented limitation
-    is that in-memory tasks do not survive process exit.
+## 7. Out of scope for V3
+
+- multi-host high availability and distributed worker scaling;
+- an untrusted third-party plugin marketplace or model-installed code;
+- a general shell, SQL, filesystem, lark-cli, or arbitrary OpenAPI tool;
+- permanent semantic memory unrelated to authorized Feishu sources;
+- autonomous cross-group or cross-tenant discovery and writes;
+- exactly-once guarantees for upstream Feishu side effects;
+- treating local storage as the authoritative business system.

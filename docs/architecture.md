@@ -1,397 +1,377 @@
-# Architecture
+# Codex2Lark V3 architecture
 
-## 1. Architectural style
+## 1. Status and compatibility
 
-Codex2Lark V2 is a Harness-centered, event-driven Feishu Agent platform. One
-versioned logical Agent can serve N Feishu groups without treating an
-interactive Codex task or stdio MCP process as an always-on server.
+This document is the normative target architecture for Codex2Lark V3. V3 is a
+clean redesign. Existing Python modules, internal APIs, database-free behavior,
+and Gateway scheduling contracts may be replaced. Compatibility with the V2
+implementation is not a design constraint. Migration is required only for
+operator configuration and business data explicitly selected for retention.
 
-- The **Agent Harness Core** owns the model/tool loop, context, policy,
-  approvals, verification, compaction, recovery, and run events.
-- The **interactive plane** lets Codex, ChatGPT, or another Agent actively call
-  semantic Feishu capabilities through MCP.
-- The **realtime plane** receives Feishu events through an independently
-  deployed outbound long-connection Gateway and dispatches them through a
-  bounded in-memory scheduler. Durable queues and Webhook ingress are optional
-  adapters for deployments with stronger reliability or topology requirements.
-- The **capability environment** implements Feishu Docs, Drive, IM, Whiteboard,
-  Sheets, Base, notification, and verification once for both planes.
+The current executable does not yet implement this architecture. The delivery
+sequence is defined in [roadmap.md](roadmap.md), and current commands remain
+documented in [usage.md](usage.md).
 
-The Harness contract is defined in [agent-harness.md](agent-harness.md). The
-research and rejected alternatives are recorded in
-[multi-group-agent-architecture.md](research/multi-group-agent-architecture.md).
+## 2. Architectural decision
+
+Codex2Lark is a single-node, multi-tenant **Feishu Agent Runtime**. It hosts
+versioned Agent definitions and trusted Feishu capability plugins. One running
+service supports many users, groups, threads, and concurrent tasks without
+depending on an interactive Codex process.
+
+The design combines three ideas:
+
+- Harness Engineering: make repository rules, typed interfaces, verification,
+  evaluation, and observability part of the product rather than relying on a
+  clever prompt;
+- Codex: represent work as isolated threads and turns, use a rooted Agent task
+  graph, explicit inter-Agent communication, bounded concurrency, interruption,
+  recovery, and terminal states;
+- Pi: keep the Agent loop small, inject replaceable sessions and model/tool
+  adapters, load resources progressively, emit lifecycle events, and compact
+  context without breaking tool-call pairs.
+
+Codex2Lark does not copy either product's unrestricted local-computer tool
+surface. Feishu work uses typed semantic capabilities, trusted identity
+bindings, explicit policy, idempotency, and live read-back verification.
+
+## 3. Design principles
+
+1. **Harness before prompt.** Policy, context selection, tool safety,
+   verification, recovery, and evals are executable contracts.
+2. **One task, one root Agent.** A Feishu request creates a durable task tree;
+   the root owns the user outcome and may delegate bounded work.
+3. **Isolation by trusted resource identity.** Tenant, app, chat, thread, user,
+   credentials, and policy are bound outside model-visible input.
+4. **Capabilities, not raw APIs.** Models receive semantic Feishu tools, never
+   arbitrary shell, SQL, lark-cli arguments, or unrestricted OpenAPI paths.
+5. **Durable coordination, bounded content.** SQLite persists task state,
+   outbox intent, authorized message mirrors, checkpoints, and encrypted file
+   data with retention.
+6. **Feishu remains upstream truth.** Local data accelerates and recovers work;
+   it never grants authority and is reconciled against Feishu.
+7. **Truthful completion.** A task is complete only after observable effects
+   pass verification. Sending a fluent reply is not completion evidence.
+8. **Progressive disclosure.** Load only the instructions, evidence, tools, and
+   sub-Agent context needed for the next decision.
+9. **Single-node first.** SQLite and encrypted local blobs are sufficient for
+   the selected deployment. RabbitMQ, Redis, PostgreSQL, and public Webhooks are
+   not prerequisites.
+10. **Replaceable internals.** Ports describe responsibilities; packages and
+    implementations can be rewritten when evals and contracts remain valid.
+
+## 4. System context
 
 ```mermaid
 flowchart LR
-    subgraph Clients[Interactive clients]
-        Codex[Codex / ChatGPT]
-        Admin[Admin and evaluation clients]
+    People[Users in N Feishu groups] --> Feishu[Feishu]
+    Codex[Codex / ChatGPT] --> MCP[Semantic MCP interface]
+
+    subgraph Runtime[One Codex2Lark V3 service]
+        Ingress[Event ingress]
+        Admission[Admission and policy]
+        Scheduler[Durable scheduler]
+        Supervisor[Agent supervisor]
+        Agents[Root and worker Agents]
+        Context[Context and resource loader]
+        Caps[Capability registry]
+        Verify[Verification and result routing]
+        Store[(SQLite + encrypted blobs)]
     end
 
-    subgraph Interactive[Interactive plane]
-        Skill[Authoring Skill]
-        MCP[Semantic MCP API]
-        RunAPI[Harness Run API]
-    end
-
-    subgraph Realtime[Default V2 Lite realtime plane]
-        Gateway[Long-connection Event Gateway]
-        Queue[Bounded in-memory TaskQueue]
-        Router[Partition and policy router]
-    end
-
-    subgraph Harness[Agent Harness Core]
-        Resource[Resource loader]
-        Context[Context builder]
-        Loop[Agent loop]
-        Policy[Tool and approval policy]
-        Session[Session manager]
-        Outcome[Verifier and outcome gate]
-    end
-
-    subgraph Workers[Worker pools]
-        Auto[Deterministic workers]
-        Agent[Agent workers]
-    end
-
-    subgraph Environment[Feishu capability environment]
-        Services[Docs / Drive / IM / Sheet / Base services]
-        Identity[Identity broker]
-        Adapter[Feishu adapters]
-    end
-
-    subgraph External[External systems]
-        Feishu[Feishu APIs and events]
-        Model[Model providers]
-        Secrets[External secret provider]
-    end
-
-    Codex --> Skill --> MCP --> Services
-    Admin --> RunAPI --> Loop
-    Feishu -->|outbound WebSocket established by Gateway| Gateway
-    Gateway --> Queue --> Router
-    Router --> Auto --> Services
-    Router --> Agent --> Loop
-    Resource --> Context --> Loop
-    Session --> Context
-    Loop <--> Policy
-    Loop --> Model
-    Loop --> Services --> Outcome --> Loop
-    Identity --> Adapter
-    Secrets --> Identity
-    Services --> Adapter --> Feishu
+    Feishu -->|outbound long connection| Ingress
+    Ingress --> Admission --> Scheduler --> Supervisor
+    Supervisor --> Agents
+    Context --> Agents
+    Agents --> Caps --> Verify
+    Verify --> Feishu
+    MCP --> Caps
+    Scheduler <--> Store
+    Supervisor <--> Store
+    Context <--> Store
+    Caps <--> Feishu
+    Agents <--> Model[Model provider]
 ```
 
-## 2. One Agent, many groups
+The long connection is initiated by Codex2Lark and requires outbound network
+access, not a public IP. MCP is an independent interactive interface; it is not
+the event service and its availability does not control inbound Feishu work.
 
-"One Agent" means one immutable version of instructions, resources, tools,
-guardrails, model policy, approvals, retention, and evals. It does not mean one
-process or one shared model conversation. A pool of workers executes the same
-AgentDefinition.
-
-The stable isolation key is:
+## 5. Runtime decomposition
 
 ```text
-tenant_key / app_id / chat_id / optional_thread_root_id
+RuntimeKernel
+├── PluginManager
+├── EventIngress
+├── AdmissionController
+├── DurableScheduler
+├── AgentSupervisor
+├── AgentHarness
+├── ContextEngine
+├── ResourceLoader
+├── CapabilityRegistry
+├── IdentityBroker
+├── PolicyEngine
+├── VerificationEngine
+├── ResultRouter
+├── StorageEngine
+└── Observability
 ```
 
-One key has at most one active run so messages and side effects remain ordered.
-Different keys run concurrently. `sender_id` is an authorization and
-attribution input, not the group context key.
+| Component | Single responsibility |
+|---|---|
+| PluginManager | Validate, initialize, health-check, drain, and stop trusted capability plugins |
+| EventIngress | Maintain fixed Feishu subscriptions and normalize transport envelopes |
+| AdmissionController | Bind source identity, Agent definition, policy, tools, budgets, and SessionKey |
+| DurableScheduler | Lease recoverable commands with fairness, priority, backoff, and per-key ordering |
+| AgentSupervisor | Own the rooted Agent graph, concurrency slots, cancellation, deadlines, and recovery |
+| AgentHarness | Execute one Agent turn loop and emit typed lifecycle events |
+| ContextEngine | Assemble bounded, attributed, injection-aware model input |
+| ResourceLoader | Progressively load Skills, prompts, policies, response templates, and eval metadata |
+| CapabilityRegistry | Expose versioned semantic tools contributed by plugins |
+| IdentityBroker | Resolve bot or delegated-user credentials without exposing secrets to models |
+| PolicyEngine | Authorize triggers, context, delegation, tools, writes, approvals, and data retention |
+| VerificationEngine | Read external state back and decide verified, uncertain, or failed outcomes |
+| ResultRouter | Publish acknowledgement, progress, approval, and one terminal result through an outbox |
+| StorageEngine | Provide transactions, migrations, encryption, leases, retention, and backup primitives |
+| Observability | Emit content-minimized traces, metrics, audit events, and eval evidence |
 
-The router rejects disabled groups, bot-authored loop messages, duplicate
-side-effect requests, unsupported message types, and messages outside the
-group's trigger policy. The default model trigger is an explicit `@bot` mention
-or approved command. Deterministic system events do not invoke a model.
+Domain behavior belongs to plugins. The kernel must not contain document block
+syntax, IM post parsing, calendar recurrence, approval fields, or spreadsheet
+formulas.
 
-## 3. Component responsibilities
+## 6. Execution model
 
-| Component | Lifetime | Responsibility | Business-content persistence |
-|---|---|---|---|
-| Agent Harness Core | Worker run | Build context, run model/tools, enforce policy, verify outcomes, compact, steer, and terminate truthfully | None by default |
-| Feishu authoring Skill | Interactive/run resource | Teach document structure, artifact routing, edit policy, and verification | None |
-| MCP API | Interactive host | Expose semantic Feishu tools to active Codex/ChatGPT clients | None |
-| Harness Run API | Service | Start, stream, steer, approve, cancel, and inspect Harness runs | Content-free run metadata only |
-| Event Gateway | Always on | Maintain and reconnect the Feishu long connection, validate envelopes, and publish minimal event references | None |
-| In-memory TaskQueue | Gateway lifetime | Apply a hard capacity bound and decouple source reads from dispatch | None; contents disappear on process exit |
-| Policy/session router | Always on | Resolve group policy, select workflow, assign partition, rate-limit, and prevent loops | None |
-| Deterministic workers | Always on | Membership, permissions, enrollment, notifications, and fixed automations | None |
-| Agent workers | Elastic | Execute the logical Agent Harness for independent sessions | None after run unless optional TTL checkpoint is enabled |
-| Identity broker | Always on | Resolve bot or delegated-user credentials from approved providers | Credential references only |
-| Shared capability core | Library | Implement semantic Feishu operations, compilation, and read-back verification | None |
-| `Codex2Lark Control` Base | Feishu | Group enrollment, owner, policy, Agent profile, and desired automation | Feishu-owned configuration |
-| Observability pipeline | Always on | Metrics and redacted traces keyed by event/run IDs | No prompts or business bodies |
+### 6.1 Durable request lifecycle
 
-## 4. Agent Harness Core
+```mermaid
+stateDiagram-v2
+    [*] --> Received
+    Received --> Rejected: admission denied
+    Received --> Queued: durable commit
+    Queued --> Running: lease acquired
+    Running --> Waiting: user/approval/external wait
+    Waiting --> Queued: new input or retry time
+    Running --> Verifying
+    Verifying --> Completed: effects verified
+    Verifying --> Running: repairable mismatch
+    Running --> Blocked
+    Running --> Failed
+    Running --> Cancelled
+    Rejected --> [*]
+    Completed --> [*]
+    Blocked --> [*]
+    Failed --> [*]
+    Cancelled --> [*]
+```
 
-The Harness is independent of Feishu transport and model provider. It exposes a
-typed run protocol and uses ports for Resources, Sessions, Models, Tools,
-Policies, Approvals, and Observers.
+Admission, task creation, acknowledgement intent, and source-event deduplication
+commit atomically. A worker leases the task. On process restart, expired leases
+return to the queue. External writes use stable operation keys and are inspected
+before retry. Terminal reply intent commits with the terminal state and is sent
+by the outbox worker.
 
-### Core loop
+### 6.2 Isolation and ordering
+
+The trusted SessionKey is:
 
 ```text
-normalized AgentMessage
-  -> admit and bind trusted session/identity/policy
-  -> load immutable AgentDefinition and progressive resources
-  -> assemble bounded live context
-  -> model inference
-  -> validate and authorize tool calls
-  -> execute permitted capabilities
-  -> append bounded observations and verify side effects
-  -> repeat until verified completion, blocked, failed, or cancelled
+tenant_key / app_id / chat_id / conversation_root
 ```
 
-The model does not determine its tenant, target chat, credentials, tool profile,
-or write approval. Trusted routing and policy bind those values outside the
-model-visible schema.
+`conversation_root` is a thread root when present and otherwise a policy-defined
+chat lane. One SessionKey has one active root run. Independent SessionKeys run
+concurrently under global, tenant, app, group, model, and plugin limits. Sender
+identity affects authorization and attribution, not conversation ownership.
 
-The Harness emits ordered events for run, turn, message, model delta, tool,
-approval, compaction, verification, and terminal state. Feishu cards, MCP
-clients, tests, and future UIs consume the same event stream without owning the
-loop.
+Fair scheduling prevents one busy group from consuming all slots. The first
+release uses weighted round-robin across tenant/group lanes, FIFO within a lane,
+priority only for terminal delivery, cancellation, and deterministic safety
+work.
 
-MCP remains a tool protocol. Thread creation, streaming, steering, follow-up,
-approval, cancellation, and recovery use the Harness Run API rather than being
-forced into MCP semantics. This follows Codex's separation between Core and App
-Server while keeping the Pi-like Agent core small and embeddable.
+## 7. Multi-Agent collaboration
 
-## 5. Event ingress
+Every admitted request creates one root Agent. The root may spawn worker Agents
+only for concrete, independent work that fits its delegation policy. Agent nodes
+form a rooted tree, never an unrestricted peer mesh.
 
-### Default long-connection profile
-
-V2 Lite runs `codex2lark gateway` as an independent, always-on process. It uses
-the pinned lark-cli event adapter to establish an outbound WebSocket connection
-to Feishu. The Gateway therefore needs outbound internet access but no public
-IP, public domain, TLS termination, load balancer, or inbound firewall rule.
-
-The source adapter:
-
-1. starts only fixed, configured event subscriptions;
-2. waits for the exact lark-cli ready marker before reporting healthy;
-3. enforces a line-size limit and validates the JSON envelope;
-4. extracts a minimal `EventReference`;
-5. submits it to the bounded `TaskQueue` port;
-6. reconnects with bounded backoff after an unexpected source exit;
-7. performs no model call or slow Feishu read on the receive path.
-
-The reference contains only applicable fields from:
-
-```text
-event_id, event_type, tenant_key, app_id, chat_id, message_id,
-create_time, trace_id, delivery_attempt
+```mermaid
+flowchart TD
+    Root[Root Agent: owns user outcome]
+    Root --> Research[Research worker]
+    Root --> Docs[Document worker]
+    Root --> Data[Sheet/Base worker]
+    Docs --> Verify[Independent verification worker]
 ```
 
-The raw event body is not queued. Handlers refetch current group, document, and
-member state from Feishu using trusted identifiers. One application-level long
-connection serves all subscribed groups; `chat_id` routes group isolation, so N
-groups do not require N connections.
+Each node has its own context, tool allowlist, budget, deadline, lifecycle, and
+mailbox. Children receive an explicit task brief plus the minimum selected
+parent context. They do not inherit credentials, tools, full transcripts, or
+authority implicitly. Only the root ResultRouter can publish the final user
+outcome; children return typed artifacts and evidence to their parent.
 
-### Optional ingress adapters
+The detailed graph, mailbox, merge, cancellation, and recovery contracts are in
+[multi-agent-runtime.md](multi-agent-runtime.md).
 
-An authenticated HTTPS Webhook source may be added when a deployment needs a
-public callback topology, serverless ingress, or platform constraints that do
-not support long connections. It must emit the same `EventReference` and cannot
-change handlers or queue semantics. It is not part of the default deployment.
+## 8. Plugins and Feishu capabilities
 
-## 6. Queue, routing, and ordering
+The kernel loads trusted typed capability plugins. Initial plugins are:
 
-The queue follows a port-and-adapter boundary:
+- `feishu-im`: group events, messages, replies, threads, images, and files;
+- `feishu-drive`: folders, search, metadata, permissions, and file transfer;
+- `feishu-docs`: document inspection, compilation, editing, and verification;
+- `feishu-sheets`: native sheets and structured data operations;
+- `feishu-base`: Base schemas, fields, records, views, and verification;
+- `feishu-whiteboard`: board creation, update, and rendered verification;
+- `feishu-identity`: user, bot, chat membership, and credential resolution.
 
-```text
-EventSource -> TaskQueue -> PartitionedDispatcher -> EventHandler
-```
+Cross-domain work is orchestrated by an Agent through semantic tools. Plugins do
+not import one another's repositories or private adapters. Resource packages
+contain declarative Skills, prompts, policy fragments, templates, and evals.
+The complete contract is in [runtime-plugins.md](runtime-plugins.md).
 
-`TaskQueue` exposes only bounded publish/receive/completion behavior. The
-default `InMemoryTaskQueue` uses `asyncio.Queue`; capacity is configuration with
-a conservative default. Backpressure propagates to the source instead of
-allowing unbounded memory growth.
+## 9. Context and memory
 
-The dispatcher uses a stable hash of `SessionKey` to assign references to a
-fixed number of in-memory partitions. One coroutine processes each partition,
-so events for one chat remain ordered while different partitions execute
-concurrently. The handler performs bounded retry for transient failures and
-reads live Feishu state before every side effect.
+Runtime memory has four explicit layers:
 
-V2 Lite does not claim durable acceptance, replay after process exit, or
-exactly-once delivery. The in-memory queue is deliberately lost with the
-process. Docker or systemd restarts restore availability but cannot restore
-accepted in-memory work.
-
-When a deployment requires restart-safe accepted work, sustained backlog, or
-multiple independent workers, it may supply a durable `TaskQueue` adapter such
-as RabbitMQ or a managed queue. That adapter owns confirms, acknowledgements,
-retry timing, TTL, and dead-letter policy. Event sources and handlers remain
-unchanged. Even then, exactly once is not claimed.
-
-Duplicate safety combines live read-before-write, upstream idempotency keys
-where supported, stable operation keys derived from event/workflow/target,
-short-lived deduplication metadata when necessary, and verification before ack.
-
-## 7. Group control plane
-
-Desired group behavior lives in a Feishu Base named `Codex2Lark Control`, not a
-local configuration database. Each row identifies one
-`tenant_key/app_id/chat_id` and may contain:
-
-- live group name and enabled state;
-- owner/current-user `open_id` and an opaque credential reference;
-- AgentDefinition and policy version;
-- trigger mode and allowed tool profile;
-- write-approval level and administrators;
-- managed Drive folder policy;
-- rate-limit class and maintenance state;
-- last content-free configuration verification status.
-
-When a bot joins a group, a deterministic worker verifies the event, creates or
-checks the control row, ensures the configured owner is a member, and sends an
-onboarding card. Bot removal disables enrollment. Neither event calls a model.
-
-Secrets never enter Base. They stay in lark-cli, an OS keychain, or an external
-secret provider and are resolved by the Identity Broker.
-
-## 8. Context and session model
-
-Channel adapters convert raw payloads into `AgentMessage` objects. The Harness
-then transforms application messages into model messages. System events,
-routing identifiers, secrets, and operational notices are excluded unless an
-explicit ContextBuilder rule renders safe information.
-
-Stable context layers are:
-
-1. model-specific base instructions;
-2. AgentDefinition instructions;
-3. safety, identity, approval, and retention policy;
-4. stable ordered tool definitions;
-5. progressively loaded Skills and references;
-6. trusted group/thread environment;
-7. triggering request and bounded live Feishu context;
-8. observations from the active run.
-
-The default `LiveFeishuSession` stores no copied chat history. It reconstructs a
-bounded context window from Feishu for each run. An `InMemorySession` supports
-tests. An optional encrypted short-TTL checkpoint backend may later support
-long-running recovery, but is disabled by default and is not a business source
-of truth.
-
-If a Worker fails without checkpoints, the broker redelivers and the run starts
-again from live Feishu. Stable operation keys and inspection prevent duplicate
-side effects. Repeated model inference cost is the explicit default tradeoff for
-not retaining run transcripts.
-
-Compaction preserves intent, acceptance criteria, authorized targets, completed
-and verified operations, unresolved blockers, live resource references, and
-recent observations. It never turns an unverified model claim into completion.
-
-## 9. Model provider boundary
-
-Interactive Codex remains a supported MCP client. Production inbound work uses
-a backend model provider through the Harness, initially OpenAI Responses or the
-Agents SDK. The interface supports streaming, token estimation, compaction, and
-capability discovery without coupling the Harness to one model vendor.
-
-OpenAI requests default to `store=false`. Background mode, server-managed
-conversations, sensitive tracing, and prompt-cache retention are independent
-deployment choices whose data behavior must be documented and approved before
-enablement. Model choice is an administrator policy, never arbitrary group
-message input.
-
-## 10. Shared Feishu capability environment
-
-The compiler, verifier, Drive resolver, document service, artifact service,
-notification service, digest service, and membership service sit behind typed
-ports independent of transport and credential source.
-
-Expected adapters are:
-
-- `LarkCliAdapter` for local MCP development and delegated-user workflows;
-- `FeishuOpenApiAdapter` for always-on services using bot or delegated-user
-  credentials from the Identity Broker.
-
-Neither MCP nor a Harness tool exposes an arbitrary shell, raw lark-cli argv,
-or unbounded OpenAPI path. Existing authoring invariants remain:
-
-- inspect live resources before editing;
-- compile semantic requests into bounded operations;
-- use expected revisions where available;
-- read every write back;
-- report verification separately from notification delivery;
-- destroy request-local files on every exit path.
-
-## 11. Data and retention model
-
-### Durable business data
-
-- Feishu Docs, Drive, Whiteboards, Sheets, Base, Wiki, groups, and messages;
-- group configuration in `Codex2Lark Control`;
-- credentials in approved credential providers;
-- versioned code, AgentDefinitions, prompts, policies, schemas, Skills, and
-  evals.
-
-### Bounded operational metadata
-
-- in-memory event references for the life of the Gateway process;
-- in-memory delivery attempts and scheduling state;
-- content-free metrics and redacted errors;
-- optional externally retained delivery metadata only when a durable queue
-  profile is explicitly enabled.
-
-Operational metadata never becomes a business source of truth and is never
-persisted in the developer's project or workstation.
-
-### Ephemeral run data
-
-- live Feishu snapshots and bounded model context;
-- model input/output in memory;
-- Document IR, block IDs, revisions, edit plans, XML, and diagram sources;
-- selectively downloaded images and upload payloads.
-
-Provider-side retention is a separate policy surface and must match the chosen
-deployment profile.
-
-## 12. Failure and consistency model
-
-The existing typed failures remain, with additional categories:
-
-- `routing_error`: no enabled group/Agent policy matches;
-- `delivery_error`: queue admission or handler dispatch failed;
-- `rate_limit_error`: app, tenant, group, or model budget is exhausted;
-- `retry_exhausted`: the in-process retry budget ended;
-- `policy_error`: trigger, identity, target, or tool is not authorized.
-
-Partition isolation, per-key concurrency, circuit breakers, and per-app/tenant rate
-limits keep one group from blocking another. Feishu is refetched before writes;
-queued references are never treated as current business state.
-
-While the Gateway remains alive, the system provides bounded admission,
-per-SessionKey ordering, cross-partition concurrency, idempotent observable side
-effects, truthful terminal states, and deterministic lifecycle automation when
-the model provider is disabled. It does not promise task recovery after Gateway
-exit or a model reply while the provider is unavailable.
-
-## 13. Security boundaries
-
-- Feishu callbacks are untrusted until authenticated and schema validated.
-- Group messages, documents, cards, filenames, and links may contain prompt
-  injection.
-- The router, not the model, selects tenant, chat, identity, tools, and policy.
-- Message text cannot change the SessionKey or credential reference.
-- Credentials never enter prompts, logs, queues, Base fields, or MCP results.
-- Every event and tool call carries trusted tenant/app/chat authorization.
-- Bot-authored messages do not trigger the normal Agent path.
-- Cross-group retrieval requires a separately authorized workflow that names
-  source and destination and obtains any required approval.
-
-## 14. Deployment profiles
-
-| Profile | Components | Intended use |
+| Layer | Contents | Lifetime |
 |---|---|---|
-| Local interactive | Codex + stdio MCP + lark-cli | Manual authoring; no event availability promise |
-| V2 Lite default | One standalone long-connection Gateway with bounded memory queue and partitioned handlers | N groups in one organization with minimal operations |
-| Durable single tenant | Gateway + optional durable `TaskQueue` adapter + worker replicas | Restart-safe accepted tasks or strict SLOs |
-| Multi tenant | Tenant-aware Gateway/router, isolated credentials/policies, durable queue if required, elastic workers | Multiple Feishu tenants and Agent profiles |
+| Source evidence | Feishu messages, files, documents, and resource revisions with provenance | Policy TTL; reconciled |
+| Run journal | User-visible inputs, typed tool calls/results, lifecycle, budgets, and verification | Recovery TTL |
+| Working context | Selected instructions, evidence, observations, and recent complete turns | One active Agent node |
+| Checkpoint | Structured intent, acceptance criteria, verified actions, artifacts, blockers, and next step | Recovery/continuation TTL |
 
-Runtime health excludes Codex and stdio MCP. V2 Lite monitors connection state,
-in-memory queue depth, partition lag, handler failures, and process restarts. A
-durable profile additionally monitors its queue and worker leases. All profiles
-use redacted run tracing, versioned Harness rollout, eval gates, and rollback.
+Hidden reasoning is never persisted. Context is built from references, not by
+concatenating an entire group history. Earlier messages and file content are
+untrusted evidence. Stable policy and tool definitions form a cache-friendly
+prefix; dynamic evidence follows. Compaction cuts at complete turn boundaries,
+keeps tool calls with results, preserves active requirements and verified
+effects, and records source versions so edits, recalls, deletions, or permission
+loss invalidate derived memory.
+
+Sub-Agents get task-scoped context packages. Parent summaries are evidence, not
+authority. A child result contains claims plus source and verification records;
+the root decides whether it satisfies the shared acceptance criteria.
+
+## 10. Identity, authorization, and approval
+
+Trusted admission binds:
+
+```text
+tenant + application + source resource + actor + execution identity
++ AgentDefinition version + plugin/tool profile + approval policy + retention
+```
+
+The model cannot change those bindings. Bot identity is preferred for service
+automation. Delegated-user identity is used only when the operation requires it
+and an approved credential exists. Credentials remain in lark-cli, an OS
+keychain, environment secret, or external secret provider.
+
+Read, write, destructive, cross-group, and delegated-user operations have
+separate policy classes. Approval decisions are durable typed events associated
+with the exact proposed operation; a general chat message is not approval.
+
+## 11. Data and storage
+
+The default production profile uses SQLite in WAL mode and an encrypted managed
+blob directory outside the repository. It persists recoverable scheduling,
+authorized IM mirrors, selected attachments, run journals, context checkpoints,
+idempotency, and outbox state. Retention is explicit per data class and may be
+disabled per chat.
+
+Feishu is the upstream source of truth. Sensitive reads and all writes re-check
+live authorization and freshness. Local tombstones prevent stale redelivery
+from resurrecting recalled or deleted content. Details are normative in
+[single-node-storage.md](single-node-storage.md).
+
+## 12. External effects and verification
+
+Every semantic write follows:
+
+```text
+plan -> authorize -> approve if required -> inspect -> execute
+     -> read back -> verify invariants -> record evidence -> publish result
+```
+
+Verification is capability-specific and must inspect user-observable state. A
+document worker checks title, parent folder, block structure, tables, diagrams,
+and embedded artifact references. A message publisher checks the returned
+message reference. Unverifiable success is `uncertain`, never silently
+`completed`.
+
+## 13. Failure containment
+
+- Event sources restart independently with bounded exponential backoff.
+- Plugin health gates only Agent definitions that require that plugin.
+- Agent node failure does not cancel siblings unless root policy selects
+  fail-fast or the failed node is a declared dependency.
+- Parent cancellation cascades to descendants and running tool calls.
+- Deadlines and budgets are enforced outside the model.
+- Retry classification distinguishes transport, rate-limit, authorization,
+  policy, validation, conflict, and verification failures.
+- Poison tasks become terminal with diagnostics; they do not loop forever.
+- SQLite or encryption-key failure stops admission before event acknowledgement.
+- Disk high-water policy stops downloads/backfills while preserving terminal
+  replies, cleanup, and diagnostics.
+
+The single machine remains one failure domain. This is accepted for V3; backup
+and restore protect the database, encrypted blobs, schema manifest, and external
+key.
+
+## 14. Observability and evaluation
+
+Every event, task, run, Agent node, tool call, approval, verification, outbox
+delivery, and plugin health change carries a trace ID and typed lifecycle event.
+Logs and metrics exclude message bodies, file contents, prompts, secrets, and
+hidden reasoning.
+
+Release gates include deterministic scenarios for:
+
+- many groups and users with isolation and fair scheduling;
+- duplicate events, restarts, expired leases, and outbox replay;
+- concurrent Agent trees, bounded delegation, merge conflicts, and cancellation;
+- prompt injection from chats, files, documents, and child results;
+- tool authorization, approval, idempotency, and live verification;
+- context selection, compaction, edit/recall invalidation, and retention;
+- plugin failure, model outage, Feishu rate limits, and disk pressure;
+- truthful acknowledgement, progress, completed, blocked, failed, and cancelled
+  messages.
+
+Harness, AgentDefinition, Skill, prompt, policy, tool-schema, compactor, or model
+changes require eval comparison before rollout.
+
+## 15. Deployment
+
+V3 production is one long-running service plus its data directory and external
+encryption key:
+
+```text
+systemd or container supervisor
+└── codex2lark runtime
+    ├── Feishu outbound long connections
+    ├── durable scheduler and Agent workers
+    ├── SQLite runtime.db
+    └── encrypted blob store
+```
+
+The process starts in this order: configuration, key, storage integrity,
+migrations, plugins, policies/Agent definitions, recovery, event sources, then
+readiness. Shutdown stops admission, drains within a deadline, checkpoints or
+releases leases, flushes outbox state, closes sources, checkpoints SQLite, and
+exits.
+
+RabbitMQ is reconsidered only for multiple hosts, independent worker scaling,
+or a measured queue SLO that SQLite cannot meet. Webhook ingress is reconsidered
+only when deployment topology requires inbound callbacks. Neither is hidden
+behind an abstraction merely for hypothetical flexibility.
+
+## 16. Normative document map
+
+- [requirements.md](requirements.md): product behavior and acceptance criteria;
+- [multi-agent-runtime.md](multi-agent-runtime.md): Agent graph and collaboration;
+- [agent-harness.md](agent-harness.md): one-node Agent loop and run protocol;
+- [runtime-plugins.md](runtime-plugins.md): plugin and resource contracts;
+- [group-agent-runtime.md](group-agent-runtime.md): Feishu IM plugin behavior;
+- [single-node-storage.md](single-node-storage.md): durability, encryption, and recovery;
+- [design-decisions.md](design-decisions.md): accepted alternatives and revisit triggers;
+- [roadmap.md](roadmap.md): implementation slices and exit gates.

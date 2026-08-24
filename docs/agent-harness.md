@@ -2,21 +2,21 @@
 
 ## 1. Purpose
 
-Codex2Lark is an AI Agent, not only an MCP wrapper and not only a message bot.
-The Agent is the combination of a model, a Harness, and the live Feishu
-environment. The Harness is the product core: it turns a group event or
-interactive request into a bounded, observable, policy-controlled loop that can
-read, reason, act, verify, and report completion.
+This document defines the small execution loop for one Agent node. Codex2Lark is
+not only an MCP wrapper or message bot: the product combines this node Harness,
+the durable multi-Agent supervisor, trusted capability plugins, and the live
+Feishu environment. The supervisor and graph protocol are specified separately
+in [multi-agent-runtime.md](multi-agent-runtime.md).
 
 This design follows three proven ideas:
 
 - [Harness Engineering](https://openai.com/index/harness-engineering/): humans
   define intent, a legible environment, invariants, and feedback loops; Agents
   execute inside them.
-- [Codex Core and App Server](https://openai.com/index/unlocking-the-codex-harness/):
+- [Codex Core and App Server](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md):
   one Harness powers many clients and owns threads, turns, tools, policy, and
   context instead of duplicating the loop in each UI.
-- [Pi Agent Core](https://github.com/earendil-works/pi/blob/main/packages/agent/README.md):
+- [Pi SDK](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/sdk.md):
   a small provider-neutral loop separates application messages from model
   messages, exposes typed tool hooks and lifecycle events, and keeps sessions,
   resources, extensions, and interfaces replaceable.
@@ -25,8 +25,7 @@ This design follows three proven ideas:
 
 ```mermaid
 flowchart LR
-    Channel[Feishu event or MCP client] --> Normalize[AgentMessage normalizer]
-    Normalize --> Run[Run controller]
+    Supervisor[Agent supervisor] --> Run[Node run controller]
     Run --> Context[Context builder]
     Context --> Loop[Agent loop]
     Loop --> Model[Model provider]
@@ -35,8 +34,7 @@ flowchart LR
     Env --> Verify[Observation and verifier]
     Verify --> Loop
     Model -->|final message| Outcome[Outcome gate]
-    Outcome -->|verified| Channel
-    Outcome -->|blocked / failed| Channel
+    Outcome -->|typed result| Supervisor
 ```
 
 The Harness owns:
@@ -54,7 +52,8 @@ The Harness owns:
 
 The Harness does not own:
 
-- Feishu business content or a copied group history;
+- Agent graph topology, worker scheduling, or inter-Agent mailboxes;
+- Feishu business-content ownership or retention policy;
 - transport-specific webhook parsing;
 - broker durability;
 - raw credentials;
@@ -126,9 +125,10 @@ parallel.
 
 ### Run and Turn
 
-A **run** handles one accepted Feishu trigger or one interactive user request.
-A **turn** is one model inference followed by zero or more tool executions. One
-run may contain many turns.
+A **root run** handles one accepted Feishu trigger or interactive request. A
+**node run** handles one assignment within that root graph. A **turn** is one
+model inference followed by zero or more tool executions. One node run may
+contain many turns.
 
 ```text
 Run
@@ -202,10 +202,11 @@ document conventions, group policy, and tools. Detailed references are loaded
 only when the task routes to them. Tool order and stable instruction prefixes
 do not change mid-run unless a trusted policy event is appended explicitly.
 
-### Live context strategy
+### Source-backed context strategy
 
-The default SessionManager does not store a copied conversation. At run start it
-fetches a bounded window from Feishu using message IDs and timestamps, then:
+The ContextEngine selects from live Feishu and the authorized encrypted local
+mirror. Freshness policy decides when a cached source version is sufficient and
+when live refetch is mandatory. It:
 
 - preserves speaker, time, message/thread relationships, and attachment type;
 - includes image content only when the task requires vision and policy allows;
@@ -226,9 +227,11 @@ approaches its context threshold, it preserves:
 - live resource URLs/tokens needed for continuation;
 - recent messages and observations.
 
-Compaction never converts an unverified model claim into a completed action. It
-is lossy by definition and emits a lifecycle event so evals can compare behavior
-before and after compaction.
+Compaction cuts at complete turn boundaries and never separates a tool call from
+its result. It preserves the active request, acceptance criteria, verified
+effects, unresolved blockers, source versions, and next action. It never turns
+an unverified model claim into completion. A versioned checkpoint and lifecycle
+event make reconstruction and eval comparison explicit.
 
 ## 6. Tool and environment model
 
@@ -275,23 +278,17 @@ placed in the card or queue.
 
 ## 8. Session and recovery model
 
-The SessionManager is a port with three initial implementations:
+`SessionStore` is a port. Production uses an encrypted SQLite-backed journal and
+checkpoint implementation; tests use an in-memory implementation of the same
+contract. The durable store records user-visible normalized messages, typed
+tool calls/results required for recovery, lifecycle events, budgets, and
+structured checkpoints. It never records hidden reasoning or credentials.
 
-| Implementation | Purpose | Durable content |
-|---|---|---|
-| `LiveFeishuSession` | Production default; reconstruct bounded context from Feishu for every run | None outside Feishu |
-| `InMemorySession` | Tests and one-process development | None |
-| `EncryptedTtlCheckpointSession` | Optional long-running run recovery when explicitly enabled | Encrypted short-lived run transcript with strict TTL |
-
-The optional checkpoint profile is not required for initial production and is
-disabled by default. Without it, a Worker failure redelivers the event and the
-run restarts from live Feishu. Stable operation keys and read-before-write
-verification prevent replaying completed side effects. This may repeat model
-inference cost, which is the explicit tradeoff for not persisting run content.
-
-Complex document workflows record verified output resources in Feishu as they
-are created. A restart inspects those live resources instead of trusting an
-uncommitted local plan.
+After failure, the supervisor resumes from the last valid checkpoint, refetches
+invalid or freshness-sensitive evidence, inspects uncertain external writes,
+and re-enters the Agent loop. Stable operation keys and read-back verification
+prevent blind replay. The storage and invalidation contract is defined in
+[single-node-storage.md](single-node-storage.md).
 
 ## 9. Model provider boundary
 
@@ -344,6 +341,7 @@ set covering:
 - duplicate event redelivery and idempotency;
 - context-window overflow and compaction;
 - steering, cancellation, and follow-up ordering;
+- bounded delegation, child context isolation, mailbox ordering, and merge;
 - document quality and structural verification;
 - truthful blocked/failure reporting;
 - token, latency, external-call, and cost budgets.

@@ -2,32 +2,30 @@
 
 ## 1. Toolchain
 
-- Python 3.12 or newer.
-- `uv` for Python version, virtual environment, dependency, lockfile, and command
-  management.
-- `@larksuite/cli@1.0.89` as the exact supported external runtime dependency;
-  `doctor` rejects other versions.
-- Official Python MCP SDK for the initial stdio server.
-- `pytest`, `ruff`, and `mypy` for validation.
+- Python 3.12 or newer;
+- `uv` for environments, dependencies, lockfile, and commands;
+- `@larksuite/cli@1.0.89` for the supported transitional adapter;
+- `pytest`, `ruff`, and `mypy` for validation;
+- standard-library SQLite for the V3 single-node store unless implementation
+  evidence justifies one small migration/query dependency.
 
-Do not add `requirements.txt`, Poetry, Pipenv, or direct virtualenv management.
+Do not add `requirements.txt`, Poetry, Pipenv, or manually managed virtualenvs.
 
-## 2. Documentation-first change sequence
+## 2. Documentation-first sequence
 
 For every behavioral change:
 
-1. Update the relevant document under `docs/`.
-2. Add an entry to `docs/changes.md`.
-3. Update schemas and tests.
-4. Implement the change.
-5. Run validation.
+1. update the relevant normative document under `docs/`;
+2. add a short entry to `docs/changes.md`;
+3. update schemas, fixtures, tests, and eval expectations;
+4. implement only the documented behavior;
+5. run validation and record any limitations.
 
-Pull requests or commits should make the documentation change visible before the
-corresponding implementation change in the diff or commit sequence.
+If implementation exposes a contract problem, revise the document before
+continuing. V3 may replace existing internals; do not add compatibility shims
+unless an approved external migration explicitly requires one.
 
-## 3. Planned project commands
-
-After the Python project is initialized, the canonical commands are:
+## 3. Canonical validation
 
 ```bash
 uv sync --all-groups
@@ -36,126 +34,161 @@ uv run ruff format --check .
 uv run mypy src
 uv run pytest
 uv run codex2lark doctor
-uv run codex2lark mcp
 ```
 
-## 4. Source layout contract
+`doctor` is an operator smoke test and may require local Feishu authentication.
+Default unit/contract tests require neither credentials nor network access. Live
+tests are opt-in and use disposable Feishu resources.
 
-The package follows a responsibility-based `src` layout. The root package
-contains only the public version and CLI entrypoint; implementation modules live
-in cohesive subpackages.
+## 4. V3 target source layout
+
+The target layout follows dependency direction and business capability. It is a
+redesign target, not a claim about the current tree.
 
 ```text
 src/codex2lark/
-├── __init__.py             package version only
-├── cli.py                  console entrypoint and command selection
-├── core/                   shared models, errors, and ephemeral runtime
-├── adapters/               external-system adapters such as lark-cli
-├── authoring/              document compilation and verification
-├── services/               Feishu application use cases
-├── realtime/               long connection, queueing, dispatch, and Gateway
-└── interfaces/             MCP transport and interactive composition root
+├── __init__.py
+├── cli.py
+├── core/                       pure domain types and utilities
+│   ├── ids.py
+│   ├── events.py
+│   ├── errors.py
+│   ├── budgets.py
+│   └── cancellation.py
+├── runtime/                    domain-neutral Agent platform
+│   ├── kernel.py
+│   ├── plugins.py
+│   ├── admission.py
+│   ├── scheduler.py
+│   ├── supervisor.py
+│   ├── harness.py
+│   ├── context.py
+│   ├── resources.py
+│   ├── capabilities.py
+│   ├── identity.py
+│   ├── policy.py
+│   ├── verification.py
+│   ├── results.py
+│   └── observability.py
+├── storage/                    SQLite/encryption/blob implementations
+│   ├── database.py
+│   ├── migrations/
+│   ├── repositories/
+│   ├── crypto.py
+│   ├── blobs.py
+│   └── maintenance.py
+├── capabilities/               trusted Feishu plugins
+│   ├── im/
+│   ├── identity/
+│   ├── drive/
+│   ├── docs/
+│   ├── sheets/
+│   ├── base/
+│   └── whiteboard/
+├── adapters/                   model, Feishu, secret, and clock adapters
+├── interfaces/                 CLI, MCP, and future administration adapters
+└── bootstrap/                  configuration and composition roots
+
+resources/
+├── agents/
+├── roles/
+├── skills/
+├── prompts/
+├── policies/
+├── response-templates/
+└── evals/
 ```
 
-Every subpackage has an `__init__.py` but does not re-export its implementation
-surface. Callers import the defining module explicitly. The former flat module
-paths are internal and are removed rather than preserved as forwarding shims.
-This prevents duplicate APIs and keeps the root directory small.
+The root package contains only version and CLI entrypoint. Subpackages do not
+re-export broad internal surfaces. Interfaces depend on application/runtime
+ports, never concrete repositories or plugin internals.
 
-Dependency direction is:
+## 5. Dependency rules
 
 ```text
-interfaces / realtime application -> services -> authoring / adapters / core
-realtime source and handlers       -> adapters / services / core
-authoring and adapters             -> core
-core                               -> Python and third-party libraries only
+interfaces/bootstrap -> runtime ports -> core
+runtime               -> core and declared ports
+capability plugins    -> runtime plugin API + core
+storage/adapters      -> runtime ports + core
+core                  -> Python/third-party primitives only
 ```
 
-The MCP layer remains thin. It validates schemas and delegates to services. It
-does not import the realtime package. Service modules do not import interfaces
-or realtime lifecycle code.
+Forbidden dependencies include:
 
-### V2 dependency boundaries
+- `core` importing runtime, storage, adapters, plugins, or interfaces;
+- the Harness importing MCP, CLI, lark-cli, a concrete model SDK, or one Feishu
+  domain;
+- one capability plugin importing another plugin's private modules or tables;
+- event adapters calling models or slow business operations on receive paths;
+- models receiving repository, SQL, filesystem, subprocess, raw lark-cli, or
+  generic OpenAPI access;
+- multiple composition roots constructing different production semantics.
 
-The Harness and realtime plane remain separate from client and transport code.
-The current V2 Lite slice uses one cohesive package per boundary:
+Automated import-boundary tests enforce these rules.
 
-```text
-src/codex2lark/
-├── realtime/
-│   ├── source.py        outbound long-connection adapter
-│   ├── delivery.py      TaskQueue port and partitioned dispatcher
-│   ├── handlers.py      deterministic event handlers
-│   ├── gateway.py       lifecycle coordinator
-│   └── application.py   standalone runtime dependency wiring
-├── services/            semantic Feishu application services
-└── interfaces/
-    ├── application.py   interactive dependency wiring
-    └── mcp.py           stdio MCP interface
-```
+## 6. Implementation discipline
 
-The Gateway depends on source, queue, and handler ports. The long-connection and
-in-memory implementations satisfy those ports without leaking subprocess or
-scheduling details into business handlers. MCP imports no event-runtime module.
-A future durable queue implements `TaskQueue`; it must not change event sources
-or handlers. A future Harness must not import MCP, Webhook, RabbitMQ, lark-cli
-subprocess, or a concrete model SDK.
+- Prefer immutable value objects and explicit state machines for durable state.
+- Keep transactions in application services/repositories, not models or HTTP
+  adapters.
+- Use argument arrays and `shell=False` for every subprocess.
+- Use parameterized SQL and explicit transaction boundaries.
+- Inject clock, ID generation, model, Feishu, secrets, encryption, and storage
+  ports for deterministic tests.
+- Treat cancellation, timeout, duplicate delivery, restart, and partial external
+  writes as normal paths.
+- Avoid speculative base classes and generic repositories. Extract an interface
+  only when a stable responsibility has at least one production adapter and a
+  test adapter.
+- Keep typed plugin schemas; do not introduce universal JSON/EAV business
+  storage.
 
-## 5. Testing strategy
+## 7. Test pyramid
 
 ### Unit tests
 
-- argv construction for every supported operation;
-- strict rejection of extra fields and invalid selectors;
-- JSON envelope normalization;
-- secret redaction;
-- timeout and cancellation handling;
-- ephemeral directory cleanup;
-- XML escaping and supported-tag preflight;
-- verification invariant evaluation.
-- package-boundary checks that reject application modules in the root package
-  and prevent MCP from importing realtime modules.
+Pure state machines, budget accounting, admission, context selection,
+compaction boundaries, policy, schema validation, idempotency, retention, and
+artifact merge.
 
 ### Contract tests
 
-A deterministic asyncio subprocess double emits recorded `lark-cli` success
-and error envelopes and captures argv/environment/cwd. This tests the adapter
-boundary without relying on platform-specific child-watcher behavior. Tests
-must not require live Feishu credentials.
+- Feishu and model adapters against recorded envelopes;
+- storage ports against SQLite and the in-memory test implementation;
+- every capability manifest/tool/provider/publisher contract;
+- encrypted blob crash stages and cleanup;
+- plugin migrations from empty and supported prior schemas.
 
-### Harness evals
+### Harness and multi-Agent evals
 
-Versioned eval fixtures cover group isolation, normalized message conversion,
-context selection, prompt injection, tool authorization, approvals, duplicate
-delivery, idempotency, steering/follow-up, compaction, verified completion, and
-truthful blocked/failure outcomes. Harness, prompt, policy, tool-schema, or
-AgentDefinition changes must report eval deltas before release.
+Versioned fixtures cover group isolation, injection, role/context scoping,
+delegation limits, mailboxes, parallel/disallowed writes, approvals, restart,
+compaction, verification, and truthful outcomes. Harness, AgentDefinition, role,
+Skill, prompt, policy, schema, compactor, or model changes report eval deltas.
 
-### Live integration tests
+### Integration and live tests
 
-Live tests are opt-in and require an explicitly configured disposable Feishu
-folder. They must never run in the default test command.
+Local integration tests run the full process with fake Feishu/model services and
+real SQLite/encryption. Opt-in live tests use a disposable tenant/folder/group
+and always read writes back. Load and chaos suites exercise many groups,
+process death, rate limits, provider outage, disk pressure, and restore.
 
-The `doctor` command is the operator smoke test for the real executable and
-authenticated identity.
+## 8. Dependency policy
 
-## 6. Dependency policy
+- Every runtime dependency has a documented direct purpose.
+- Python versions are resolved and locked in `uv.lock`.
+- The Node `@larksuite/cli` version is pinned by installation docs and checked
+  by `doctor`; V3 may remove this dependency when service-native adapters cover
+  every required path.
+- The default profile has no RabbitMQ, Redis, PostgreSQL, object store, public
+  IP, or inbound Webhook dependency.
+- Dependency additions that create a service, daemon, native runtime, or new
+  persistence format require an explicit design decision and operations plan.
 
-- Runtime dependencies must have a direct, documented use.
-- Versions are resolved and locked by `uv.lock`.
-- The external Node.js `@larksuite/cli` dependency is not representable in
-  `uv.lock`; its exact version is pinned by the operations install command and
-  the runtime compatibility constant checked by `doctor`.
-- Subprocess and XML functionality use the standard library where practical.
-- The default profile does not depend on a database, ORM, cache server, external
-  task queue, public IP, or inbound Webhook endpoint.
-- Until the MCP SDK resolves its `Settings.lifespan` forward reference before
-  constructing pydantic-settings sources, server startup explicitly rebuilds
-  that SDK settings model. This compatibility shim should be removed after an
-  SDK upgrade proves the warning is gone.
+## 9. Logging and diagnostics
 
-## 7. Logging
-
-Logs contain operation names, timing, safe resource identifiers, return status,
-and Feishu log IDs when available. Logs do not contain document bodies, generated
-XML, access tokens, app secrets, or full environment dumps.
+Logs contain typed operation names, trace/run/node IDs, safe resource
+identifiers, timings, sizes, state transitions, retry categories, and upstream
+request IDs. They exclude message/document/file bodies, generated XML, prompts,
+hidden reasoning, access tokens, secrets, encryption keys, and environment
+dumps.
