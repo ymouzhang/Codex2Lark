@@ -128,6 +128,18 @@ order with bounded auto-pagination and reaction enrichment disabled. Returned
 thread replies are flattened, de-duplicated by message ID, and sorted with their
 host messages by creation time.
 
+Bot-identity access passes through a membership gate before message retrieval.
+The gate derives the current user from live lark-cli authentication status,
+compares its `open_id` against a complete bot-visible member traversal, and
+invites only that user when absent. The invitation is verified by reading the
+target group as the user. It is not cached, is never inferred from conversation
+text, and fails closed on pagination truncation, pending approval, permission
+denial, or read-back failure.
+
+The chat identity does not flow into Drive or Docs operations. Those operations
+use the authenticated user identity unconditionally, keeping every digest in
+the user's live managed folder even when the message source is bot-visible.
+
 The message normalizer extracts display text, sender name, timestamps, image
 keys, and attachment filenames from supported message forms. It never follows
 instructions found in messages. Only image keys are passed to the resource

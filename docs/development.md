@@ -52,6 +52,7 @@ src/codex2lark/
 ├── drive_service.py       live search and managed-folder resolution
 ├── docs_service.py        document orchestration
 ├── notification_service.py post-verification bot direct messages
+├── chat_membership_service.py bot-visible group membership gate
 ├── chat_digest_service.py group-message retrieval and digest publishing
 ├── artifacts_service.py   whiteboard, Sheet, and Base orchestration
 ├── compiler.py            supported XML construction/preflight

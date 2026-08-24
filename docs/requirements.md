@@ -79,7 +79,20 @@ The user identifies a visible Feishu group by exact name or `chat_id` and gives
 an explicit start and end time. Codex2Lark resolves the group, retrieves the
 complete bounded message range as the user by default, expands returned thread
 replies, and creates a chronological Feishu document titled exactly with the
-live group name.
+live group name. Group discovery, message reading, and image retrieval use the
+requested chat identity; managed-folder discovery, document writes, read-back
+verification, and edit notification always use the current authenticated user
+as the authoring identity so bot-visible digests remain in that user's Drive.
+
+When the group is resolved with the Codex2Lark bot identity, the current
+authenticated Feishu user must also be a member of that group. Before reading
+messages or writing a document, Codex2Lark obtains that user's live `open_id`,
+reads the complete visible user-member list as the bot, and does nothing when
+the user is already present. When absence is confirmed, the bot invites exactly
+that user and verifies the user's live access to the group. A truncated member
+list, unavailable user identity, rejected or approval-pending invitation, or
+failed read-back stops the workflow before message retrieval and document
+creation. The workflow never invites a guessed user or a caller-supplied ID.
 
 Each entry shows local time, sender display name, and message content. Date
 headings make long ranges scannable, while messages remain globally ordered by

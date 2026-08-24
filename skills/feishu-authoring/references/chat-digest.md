@@ -7,6 +7,12 @@ Require an explicit start and end time. Accept exactly one exact group name or
 `feishu_chat_digest_publish`; the server resolves candidates and refuses absent
 or duplicate exact matches.
 
+Use bot identity when the user says the Codex2Lark bot is in the group or when
+the same exact group is not visible as the user. Bot mode may invite the current
+authenticated user into that group before reading messages. Report whether the
+user was already present or was added; if invitation is forbidden, incomplete,
+or awaiting approval, stop and explain the required group-owner action.
+
 Do not broaden the time range or silently accept incomplete pagination. Ask the
 user to narrow the range when the bounded tool reports incomplete history or a
 message-count limit.

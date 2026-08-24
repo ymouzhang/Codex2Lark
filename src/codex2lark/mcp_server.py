@@ -57,7 +57,9 @@ def build_mcp(application: Application | None = None) -> FastMCP:
         description=(
             "Resolve one Feishu group, fetch a complete bounded time range, and publish a "
             "chronological sender-aware document. Images are inserted from ephemeral downloads; "
-            "file attachments are never downloaded. This creates an external document."
+            "file attachments are never downloaded. With bot identity, the current authenticated "
+            "user is added to the group when absent and membership is verified before reading. "
+            "This may add a group member and creates an external document."
         ),
         annotations=CREATE_WRITE,
     )

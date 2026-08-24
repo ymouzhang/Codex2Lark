@@ -170,7 +170,8 @@ Inputs:
 - required `start` and `end` values accepted by lark-cli (ISO 8601 or date);
 - bounded `page_limit` and `max_messages` safeguards;
 - IANA timezone used for rendered timestamps, default `Asia/Shanghai`;
-- identity, default `user`;
+- chat identity used for group discovery, message reading, and image retrieval,
+  default `user`; document authoring always uses the current user identity;
 - verification policy.
 
 The tool resolves the live group name and uses it as the exact document title.
@@ -178,6 +179,20 @@ Group-name lookup continues only for one normalized exact match. Messages and
 expanded thread replies are de-duplicated and sorted by creation time. If
 auto-pagination reports incomplete traversal or the normalized message count
 exceeds `max_messages`, the tool fails before creating a folder or document.
+
+With `identity = bot`, the exact group must contain both the configured bot and
+the current lark-cli user. The tool resolves the authenticated user's `open_id`
+from live auth status, checks the complete user-member list as the bot, invites
+only that user when confirmed absent, and verifies access as the user before
+continuing. This membership write requires `im:chat.members:read` and
+`im:chat.members:write_only`, may be rejected by group invitation policy, and
+is part of the declared external-write behavior of this tool. Pending approval,
+incomplete membership inspection, and failed verification are hard failures;
+no message history or document is produced.
+
+Bot chat access never changes document ownership. Managed-folder search/create,
+digest create/update, and document verification run as `user`, and the result
+reports both `chat.identity` and `author_identity` explicitly.
 
 The managed folder holds one canonical digest for the exact group name. The tool
 creates it when absent. It refreshes an existing match only after live
@@ -193,8 +208,8 @@ download operation. Image failures become explicit transcript placeholders and
 warnings rather than causing file downloads or silent omission.
 
 The result reports `action` (`created` or `updated`), the live document, managed
-folder, chat identity, requested range, normalized message/image/file counts,
-verification and notification results, and warnings.
+folder, chat identity, user-membership outcome, requested range, normalized
+message/image/file counts, verification and notification results, and warnings.
 
 ### `feishu_whiteboard_render`
 

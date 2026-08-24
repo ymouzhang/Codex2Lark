@@ -10,15 +10,17 @@ import pytest
 from codex2lark.chat_digest_service import ChatDigestService, _normalize_message
 from codex2lark.errors import AmbiguityError, Codex2LarkError
 from codex2lark.lark_cli import LarkCliResult
-from codex2lark.models import ChatDigestRequest
+from codex2lark.models import ChatDigestRequest, Identity
 
 
 class DigestDrive:
     def __init__(self, *, existing: bool = False) -> None:
         self.calls = 0
         self.existing = existing
+        self.identities: list[object] = []
 
     async def search_documents(self, title: str, identity: object) -> dict[str, object]:
+        self.identities.append(identity)
         folder = {"title": "Codex2Lark", "token": "fld_managed"}
         if self.existing:
             return {
@@ -42,6 +44,7 @@ class DigestDrive:
 
     async def ensure_managed_folder(self, identity: object) -> dict[str, object]:
         self.calls += 1
+        self.identities.append(identity)
         return {"title": "Codex2Lark", "token": "fld_managed"}
 
 
@@ -82,14 +85,32 @@ class DigestLark:
         chats: list[dict[str, Any]] | None = None,
         incomplete: bool = False,
         image_failure: bool = False,
+        members: list[dict[str, Any]] | None = None,
+        member_list_incomplete: bool = False,
+        invitation_result: dict[str, Any] | None = None,
     ) -> None:
         self.messages = messages
         self.chats = chats or [{"chat_id": "oc_project", "name": "项目群"}]
         self.incomplete = incomplete
         self.image_failure = image_failure
+        self.members = members or []
+        self.member_list_incomplete = member_list_incomplete
+        self.invitation_result = invitation_result or {}
         self.calls: list[tuple[tuple[str, ...], Path | None]] = []
         self.uploaded_xml = ""
         self.workspace: Path | None = None
+
+    async def auth_status(self, *, verify: bool = True) -> LarkCliResult:
+        return LarkCliResult(
+            data={
+                "identity": "user",
+                "identities": {
+                    "user": {"available": True, "openId": "ou_current"},
+                    "bot": {"available": True},
+                },
+            },
+            identity="user",
+        )
 
     async def execute(self, args: Sequence[str], *, cwd: Path | None = None) -> LarkCliResult:
         call = tuple(args)
@@ -98,6 +119,17 @@ class DigestLark:
             return LarkCliResult(data={"chats": self.chats})
         if call[:3] == ("im", "chats", "get"):
             return LarkCliResult(data={"chat": {"chat_id": "oc_project", "name": "项目群"}})
+        if call[:2] == ("im", "+chat-members-list"):
+            return LarkCliResult(
+                data={
+                    "users": self.members,
+                    "has_more": self.member_list_incomplete,
+                    "truncations": [],
+                },
+                meta={"pagination": {"complete": not self.member_list_incomplete}},
+            )
+        if call[:2] == ("im", "chat.members"):
+            return LarkCliResult(data=self.invitation_result)
         if call[:2] == ("im", "+chat-messages-list"):
             return LarkCliResult(
                 data={"messages": self.messages, "has_more": self.incomplete},
@@ -256,6 +288,100 @@ async def test_incomplete_history_stops_before_any_write() -> None:
 
     assert drive.calls == 0
     assert all(call[:2] != ("docs", "+create") for call, _ in lark.calls)
+
+
+@pytest.mark.asyncio
+async def test_bot_visible_group_adds_current_user_and_verifies_membership() -> None:
+    lark = DigestLark(messages=[])
+    drive = DigestDrive()
+    service = ChatDigestService(lark, DigestDocs(), drive)  # type: ignore[arg-type]
+
+    result = await service.publish(
+        ChatDigestRequest(
+            chat_name="项目群",
+            start="2026-08-24",
+            end="2026-08-25",
+            identity=Identity.BOT,
+        )
+    )
+
+    assert result["membership"] == {
+        "status": "added",
+        "member": "current_authenticated_user",
+        "changed": True,
+        "verified_as": "user",
+    }
+    invitation = next(call for call, _ in lark.calls if call[:2] == ("im", "chat.members"))
+    assert json.loads(invitation[invitation.index("--data") + 1]) == {"id_list": ["ou_current"]}
+    verification = [
+        call
+        for call, _ in lark.calls
+        if call[:3] == ("im", "chats", "get") and call[call.index("--as") + 1] == "user"
+    ]
+    assert len(verification) == 1
+    pull = next(call for call, _ in lark.calls if call[:2] == ("im", "+chat-messages-list"))
+    assert pull[pull.index("--as") + 1] == "bot"
+    create = next(call for call, _ in lark.calls if call[:2] == ("docs", "+create"))
+    assert create[create.index("--as") + 1] == "user"
+    assert result["chat"]["identity"] == "bot"
+    assert result["author_identity"] == "user"
+    assert drive.identities == [Identity.USER, Identity.USER]
+
+
+@pytest.mark.asyncio
+async def test_bot_visible_group_does_not_reinvite_existing_user() -> None:
+    lark = DigestLark(messages=[], members=[{"member_id": "ou_current", "name": "Aaron"}])
+    service = ChatDigestService(lark, DigestDocs(), DigestDrive())  # type: ignore[arg-type]
+
+    result = await service.publish(
+        ChatDigestRequest(
+            chat_id="oc_project",
+            start="2026-08-24",
+            end="2026-08-25",
+            identity=Identity.BOT,
+        )
+    )
+
+    assert result["membership"]["status"] == "already_member"
+    assert all(call[:2] != ("im", "chat.members") for call, _ in lark.calls)
+
+
+@pytest.mark.asyncio
+async def test_pending_bot_invitation_stops_before_message_or_document_read() -> None:
+    lark = DigestLark(messages=[], invitation_result={"pending_approval_id_list": ["ou_current"]})
+    service = ChatDigestService(lark, DigestDocs(), DigestDrive())  # type: ignore[arg-type]
+
+    with pytest.raises(Codex2LarkError, match="could not add"):
+        await service.publish(
+            ChatDigestRequest(
+                chat_id="oc_project",
+                start="2026-08-24",
+                end="2026-08-25",
+                identity=Identity.BOT,
+            )
+        )
+
+    assert all(call[:2] != ("im", "+chat-messages-list") for call, _ in lark.calls)
+    assert all(call[:2] != ("docs", "+create") for call, _ in lark.calls)
+
+
+@pytest.mark.asyncio
+async def test_incomplete_member_inspection_never_invites_or_reads_messages() -> None:
+    lark = DigestLark(messages=[], member_list_incomplete=True)
+    service = ChatDigestService(lark, DigestDocs(), DigestDrive())  # type: ignore[arg-type]
+
+    with pytest.raises(Codex2LarkError, match="member inspection was incomplete"):
+        await service.publish(
+            ChatDigestRequest(
+                chat_id="oc_project",
+                start="2026-08-24",
+                end="2026-08-25",
+                identity=Identity.BOT,
+            )
+        )
+
+    assert all(call[:2] != ("im", "chat.members") for call, _ in lark.calls)
+    assert all(call[:2] != ("im", "+chat-messages-list") for call, _ in lark.calls)
 
 
 @pytest.mark.asyncio

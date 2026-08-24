@@ -43,3 +43,7 @@ it. It is not a release changelog.
   discovery, chronological sender-aware normalization, selective ephemeral image
   handling, filename-only file entries, managed-folder creation, and read-back
   verification.
+- Required bot-visible digest groups to contain the current authenticated user
+  before implementing live member inspection, bot invitation, and user-side
+  read-back verification in the group-chat membership gate; separated chat
+  access identity from user-owned Drive and Docs authoring identity.

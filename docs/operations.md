@@ -142,6 +142,14 @@ scope reported by lark-cli for the target chat. Selective image retrieval uses
 the same readable message resource boundary. The workflow never downloads file
 attachments.
 
+When publishing with bot identity, also grant the bot
+`im:chat.members:read` and `im:chat.members:write_only`. The bot must already be
+in the group and must be allowed by the group's invitation policy to add the
+current authenticated user. Groups restricted to owner/admin invitations may
+require the bot to be an owner, administrator, or eligible creator bot. An
+invitation awaiting approval is not treated as membership, so digest publishing
+stops until approval is complete.
+
 Notification delivery is a post-write side effect. If it fails, the MCP result
 reports `notification.status = failed`; inspect the warning and fix bot access,
 but do not rerun the document edit solely to obtain the message.
@@ -170,6 +178,10 @@ but do not rerun the document edit solely to obtain the message.
   edit. Do not replay the completed edit.
 - group not found or ambiguous: provide the exact group name or its `chat_id`;
   the digest workflow never chooses a fuzzy group-name result.
+- bot can see the group but cannot add the current user: grant the member read
+  and write scopes, confirm the user is inside the application's availability
+  range, and allow the bot to invite members (or have a group owner add the user
+  manually). A pending invitation must be approved before retrying.
 - incomplete group history: narrow the start/end range or intentionally raise
   the bounded page/message limits, then retry. No partial digest was created.
 - startup timeout: run `uv sync` once in the installed plugin directory or

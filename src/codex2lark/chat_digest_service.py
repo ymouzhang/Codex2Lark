@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .chat_membership_service import ChatMembershipService
 from .compiler import preflight_content
 from .docs_service import DocsService
 from .drive_service import DriveService
@@ -326,11 +327,13 @@ class ChatDigestService:
         docs: DocsService,
         drive: DriveService,
         notifier: NotificationService | None = None,
+        membership: ChatMembershipService | None = None,
     ) -> None:
         self.lark = lark
         self.docs = docs
         self.drive = drive
         self.notifier = notifier or NotificationService(lark)
+        self.membership = membership or ChatMembershipService(lark)
 
     async def publish(self, request: ChatDigestRequest) -> dict[str, Any]:
         try:
@@ -338,7 +341,14 @@ class ChatDigestService:
         except ZoneInfoNotFoundError as exc:
             raise _validation("unknown IANA timezone", timezone=request.timezone) from exc
 
-        chat = await self._resolve_chat(request)
+        author_identity = Identity.USER
+        chat = {
+            **(await self._resolve_chat(request)),
+            "identity": request.identity.value,
+        }
+        membership = await self.membership.ensure_current_user(
+            chat_id=chat["chat_id"], chat_identity=request.identity
+        )
         pulled = await self.lark.execute(
             [
                 "im",
@@ -390,7 +400,7 @@ class ChatDigestService:
 
         existing, managed_folder, expected_revision = await self._existing_digest(
             chat_name=chat["name"],
-            identity=request.identity,
+            identity=author_identity,
         )
 
         warnings = list(pulled.warnings)
@@ -439,7 +449,7 @@ class ChatDigestService:
             content_path = workspace.write_text("chat-digest.xml", xml)
             if existing is None:
                 if managed_folder is None:
-                    managed_folder = await self.drive.ensure_managed_folder(request.identity)
+                    managed_folder = await self.drive.ensure_managed_folder(author_identity)
                 written = await self.lark.execute(
                     [
                         "docs",
@@ -453,7 +463,7 @@ class ChatDigestService:
                         "--parent-token",
                         managed_folder["token"],
                         "--as",
-                        request.identity.value,
+                        author_identity.value,
                         "--format",
                         "json",
                     ],
@@ -471,7 +481,7 @@ class ChatDigestService:
                         resource=target,
                         format=DocumentFormat.XML,
                         detail=DetailLevel.FULL,
-                        identity=request.identity,
+                        identity=author_identity,
                     )
                 )
                 if (
@@ -502,7 +512,7 @@ class ChatDigestService:
                         "--content",
                         workspace.relative_reference(content_path),
                         "--as",
-                        request.identity.value,
+                        author_identity.value,
                         "--format",
                         "json",
                     ],
@@ -523,7 +533,7 @@ class ChatDigestService:
                 ),
                 format=DocumentFormat.XML,
                 detail=DetailLevel.FULL,
-                identity=request.identity,
+                identity=author_identity,
             )
         )
         policy = request.verification.model_copy(
@@ -583,6 +593,8 @@ class ChatDigestService:
             "resource": live_resource,
             "managed_folder": managed_folder,
             "chat": chat,
+            "author_identity": author_identity.value,
+            "membership": membership,
             "range": {"start": request.start, "end": request.end, "timezone": request.timezone},
             "stats": {
                 "messages": len(entries),
