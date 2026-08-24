@@ -37,8 +37,12 @@ tenant, chat, sender, or document title.
 The storage adapter uses the Python standard-library SQLite driver, parameterized
 SQL, explicit transactions, foreign keys, WAL mode, and a busy timeout. One
 process owns migrations and periodic maintenance. A bounded connection pool is
-unnecessary in the first release; async callers use a serialized repository
-executor so blocking database work does not block the event loop.
+unnecessary in the first release. One dedicated database Actor thread owns the
+connection for its complete lifetime. Async callers submit typed repository
+operations through a bounded request queue and await a result queue, so SQLite
+work is serialized without blocking the event loop or moving a live connection
+between threads. Shutdown drains accepted operations before the Actor
+checkpoints and closes the connection.
 
 Required startup checks are:
 
@@ -240,6 +244,19 @@ Plaintext keys never enter SQLite, logs, model context, or error output. Key
 rotation rewrites wrapped data keys without requiring immediate re-encryption of
 every large blob. Removing the external master key renders backups unreadable,
 so key backup is an explicit operator responsibility.
+
+The first implementation uses AES-256-GCM from `cryptography`. The operator
+provides a base64-encoded 32-byte master key and a non-secret key identifier.
+Production configuration reads them from an external secret binding; the
+initial local binding uses `CODEX2LARK_MASTER_KEY` and
+`CODEX2LARK_MASTER_KEY_ID`. Each encrypted value has its own random 256-bit data
+key and 96-bit nonce. The data key is wrapped with the master key using a
+separate random nonce. The serialized envelope is versioned and contains only
+algorithm, key ID, nonces, wrapped data key, and ciphertext.
+
+The data directory and blob directory use owner-only permissions. New database,
+temporary, and encrypted blob files use mode `0600`; directories use `0700`
+subject to stricter operating-system policy.
 
 Development may use an ephemeral generated key only with an ephemeral data
 directory. Durable business-data persistence refuses to start without an

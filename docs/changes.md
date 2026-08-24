@@ -5,6 +5,15 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Selected the Phase 1 storage primitives before implementation: serialized
+  SQLite access, WAL transactions, durable leases/idempotency/outbox, owner-only
+  data paths, and versioned AES-256-GCM envelope encryption with an externally
+  provided base64 32-byte master key.
+- Refined serialized SQLite ownership after implementation validation: one
+  dedicated database Actor thread owns the live connection and communicates
+  through bounded request/result queues, avoiding both event-loop blocking and
+  cross-thread connection movement.
+
 - Established the V3 clean-redesign contract before implementation: existing
   code and internal behavior may be replaced without compatibility shims.
   Reframed Codex2Lark as a single-node general Feishu Agent Runtime using

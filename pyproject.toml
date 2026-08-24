@@ -1,11 +1,12 @@
 [project]
 name = "codex2lark"
 version = "0.1.0"
-description = "Stateless Feishu authoring MCP tools for ChatGPT and Codex"
+description = "Harness-centered Feishu multi-agent runtime for ChatGPT and Codex"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 dependencies = [
+    "cryptography>=45,<47",
     "mcp>=1.0,<2",
     "pydantic>=2.10,<3",
 ]
