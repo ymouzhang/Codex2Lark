@@ -98,10 +98,26 @@ class AuthoringServices(Protocol):
 
 
 class AllowConfiguredTools(ToolPolicy):
+    def __init__(
+        self,
+        plugins: PluginManager | None = None,
+        tool_plugin_ids: dict[str, str] | None = None,
+    ) -> None:
+        self._plugins = plugins
+        self._tool_plugin_ids = dict(tool_plugin_ids or {})
+
     async def authorize(
         self, definition: ToolDefinition, call: ToolCall, context: ToolContext
     ) -> PolicyDecision:
         del call
+        plugin_id = self._tool_plugin_ids.get(definition.tool_id)
+        if plugin_id is not None and self._plugins is not None:
+            health = await self._plugins.current_health(plugin_id)
+            if not health.healthy:
+                return PolicyDecision(
+                    False,
+                    f"capability plugin is unhealthy: {plugin_id}",
+                )
         if not all(
             (
                 context.tenant_key,
@@ -316,6 +332,7 @@ def create_v3_gateway(
             "feishu-artifacts",
             "feishu-chat-digest",
         },
+        mandatory_plugin_ids={"feishu-im"},
     )
     plugins.register(create_im_plugin())
     plugins.register(docs_plugin)
@@ -333,7 +350,12 @@ def create_v3_gateway(
         output_cost_micros_per_million_tokens=(config.model_output_cost_micros_per_million_tokens),
         base_url=config.openai_base_url,
     )
-    policy = AllowConfiguredTools()
+    tool_plugin_ids = {
+        tool.definition.tool_id: plugin.manifest.plugin_id
+        for plugin in (docs_plugin, artifacts_plugin, chat_digest_plugin)
+        for tool in plugin.tools
+    }
+    policy = AllowConfiguredTools(plugins, tool_plugin_ids)
     approvals = DurableApprovalBroker(runtime_store)
     graph_store = SQLiteAgentGraphStore(database, cipher)
     child_harness = AgentHarness(

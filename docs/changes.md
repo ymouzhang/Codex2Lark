@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined plugin failure isolation before implementation. Production marks IM
+  ingress mandatory and business capabilities optional; optional startup/health
+  failure keeps the Gateway available, while policy rechecks trusted owning-
+  plugin health before every tool call and denies only that capability.
+  Implementation area: PluginManager lifecycle, Gateway tool ownership/policy,
+  and isolation/recovery tests.
+
 - Defined complete checkpoint invalidation before implementation. Checkpoints
   bind policy version and the canonical allowed-tool schema fingerprint in
   addition to existing Agent/resource/source/compactor versions; retention GC

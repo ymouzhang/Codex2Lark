@@ -12,10 +12,19 @@ from typing import Any
 import pytest
 
 from codex2lark.bootstrap.config import GatewayConfig
-from codex2lark.bootstrap.gateway import V3Gateway, create_v3_gateway
+from codex2lark.bootstrap.gateway import AllowConfiguredTools, V3Gateway, create_v3_gateway
 from codex2lark.capabilities.im.live_reader import WireMessagePage
 from codex2lark.core.models import CreateDocumentRequest, EditDocumentRequest, Identity
-from codex2lark.runtime.types import ModelRequest, ModelResponse, ModelUsage, ToolCall
+from codex2lark.runtime.plugins import PluginHealth, PluginManager, PluginManifest
+from codex2lark.runtime.tools import ToolContext
+from codex2lark.runtime.types import (
+    ModelRequest,
+    ModelResponse,
+    ModelUsage,
+    ToolCall,
+    ToolDefinition,
+    ToolEffect,
+)
 from codex2lark.storage.crypto import MasterKey
 
 
@@ -50,6 +59,22 @@ class WorkerDouble:
         del parameters
         self.calls += 1
         return object()
+
+
+class ToggleCapabilityPlugin:
+    manifest = PluginManifest("feishu-docs", "1.0.0", 1, ("docs.create",))
+
+    def __init__(self, healthy: bool) -> None:
+        self.healthy = healthy
+
+    async def initialize(self) -> None:
+        pass
+
+    async def health(self) -> PluginHealth:
+        return PluginHealth(self.healthy, None if self.healthy else "upstream unavailable")
+
+    async def stop(self) -> None:
+        pass
 
 
 def gateway(database: LifecycleDouble, source: LifecycleDouble) -> tuple[V3Gateway, WorkerDouble]:
@@ -155,6 +180,31 @@ async def test_v3_gateway_closes_database_when_source_start_fails() -> None:
         await service.start()
 
     assert database.closed is True
+
+
+async def test_tool_policy_isolates_unhealthy_plugin_and_allows_live_recovery() -> None:
+    plugin = ToggleCapabilityPlugin(False)
+    manager = PluginManager(
+        runtime_api=1,
+        allowlist={"feishu-docs"},
+        mandatory_plugin_ids=set(),
+    )
+    manager.register(plugin)
+    await manager.start()
+    policy = AllowConfiguredTools(manager, {"feishu.docs.create": "feishu-docs"})
+    definition = ToolDefinition(
+        "feishu.docs.create", 1, "create", {"type": "object"}, ToolEffect.WRITE
+    )
+    context = ToolContext("run", "/root", "tenant", "app", "user", "session", "bot", 1)
+
+    denied = await policy.authorize(definition, ToolCall("call-1", definition.tool_id, {}), context)
+    plugin.healthy = True
+    allowed = await policy.authorize(
+        definition, ToolCall("call-2", definition.tool_id, {}), context
+    )
+
+    assert not denied.allowed and "unhealthy" in denied.reason
+    assert allowed.allowed
 
 
 class FakeChannel:

@@ -94,6 +94,30 @@ async def test_plugin_manager_rolls_back_started_plugins_on_readiness_failure() 
     assert manager.snapshot()["b-plugin"] == (PluginState.UNHEALTHY, "test failure")
 
 
+async def test_optional_plugin_failure_is_isolated_and_recovers_live() -> None:
+    ingress = FakePlugin("a-plugin", "a.read")
+    optional = FakePlugin("b-plugin", "b.read", healthy=False)
+    manager = PluginManager(
+        runtime_api=1,
+        allowlist={"a-plugin", "b-plugin"},
+        mandatory_plugin_ids={"a-plugin"},
+    )
+    manager.register(ingress)
+    manager.register(optional)
+
+    await manager.start()
+
+    manager.require_capabilities(["a.read"])
+    with pytest.raises(RuntimeError, match="not ready"):
+        manager.require_capabilities(["b.read"])
+    optional.healthy = True
+    assert (await manager.current_health("b-plugin")).healthy
+    manager.require_capabilities(["b.read"])
+    await manager.stop()
+
+    assert ingress.stopped and optional.stopped
+
+
 def test_plugin_manager_rejects_untrusted_or_conflicting_plugins() -> None:
     manager = PluginManager(runtime_api=1, allowlist={"feishu-docs", "feishu-im"})
     manager.register(FakePlugin("feishu-docs", "docs.create"))

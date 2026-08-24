@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -59,9 +60,20 @@ class ManagedPlugin:
 
 
 class PluginManager:
-    def __init__(self, *, runtime_api: int, allowlist: set[str]) -> None:
+    def __init__(
+        self,
+        *,
+        runtime_api: int,
+        allowlist: set[str],
+        mandatory_plugin_ids: set[str] | None = None,
+    ) -> None:
         self._runtime_api = runtime_api
         self._allowlist = frozenset(allowlist)
+        self._mandatory = frozenset(
+            allowlist if mandatory_plugin_ids is None else mandatory_plugin_ids
+        )
+        if not self._mandatory.issubset(self._allowlist):
+            raise ValueError("mandatory plugins must be allowlisted")
         self._plugins: dict[str, ManagedPlugin] = {}
 
     def register(self, plugin: CapabilityPlugin) -> None:
@@ -86,14 +98,30 @@ class PluginManager:
         try:
             for plugin_id in sorted(self._plugins):
                 managed = self._plugins[plugin_id]
-                await managed.plugin.initialize()
-                health = await managed.plugin.health()
+                try:
+                    await managed.plugin.initialize()
+                except Exception as exc:
+                    managed.state = PluginState.UNHEALTHY
+                    managed.reason = f"initialization failed: {type(exc).__name__}"
+                    with suppress(BaseException):
+                        await managed.plugin.stop()
+                    if plugin_id in self._mandatory:
+                        raise RuntimeError(
+                            f"mandatory plugin failed initialization: {plugin_id}"
+                        ) from exc
+                    continue
+                health = await self._observe_health(managed)
                 if not health.healthy:
                     managed.state = PluginState.UNHEALTHY
                     managed.reason = health.reason
-                    raise RuntimeError(
-                        f"plugin failed readiness: {plugin_id}: {health.reason or 'unknown'}"
-                    )
+                    if plugin_id in self._mandatory:
+                        with suppress(BaseException):
+                            await managed.plugin.stop()
+                        raise RuntimeError(
+                            f"plugin failed readiness: {plugin_id}: {health.reason or 'unknown'}"
+                        )
+                    initialized.append(managed)
+                    continue
                 managed.state = PluginState.READY
                 initialized.append(managed)
         except BaseException:
@@ -105,11 +133,29 @@ class PluginManager:
     async def refresh_health(self) -> dict[str, PluginHealth]:
         result: dict[str, PluginHealth] = {}
         for plugin_id, managed in self._plugins.items():
-            health = await managed.plugin.health()
+            health = await self._observe_health(managed)
             managed.state = PluginState.READY if health.healthy else PluginState.UNHEALTHY
             managed.reason = health.reason
             result[plugin_id] = health
         return result
+
+    async def current_health(self, plugin_id: str) -> PluginHealth:
+        managed = self._plugins.get(plugin_id)
+        if managed is None:
+            raise LookupError(f"plugin is unavailable: {plugin_id}")
+        if managed.state not in (PluginState.READY, PluginState.UNHEALTHY):
+            return PluginHealth(False, f"plugin is {managed.state.value}")
+        health = await self._observe_health(managed)
+        managed.state = PluginState.READY if health.healthy else PluginState.UNHEALTHY
+        managed.reason = health.reason
+        return health
+
+    @staticmethod
+    async def _observe_health(managed: ManagedPlugin) -> PluginHealth:
+        try:
+            return await managed.plugin.health()
+        except Exception as exc:
+            return PluginHealth(False, f"health check failed: {type(exc).__name__}")
 
     async def stop(self) -> None:
         for plugin_id in reversed(sorted(self._plugins)):

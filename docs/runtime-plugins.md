@@ -118,6 +118,20 @@ Required manifest fields are:
 The manifest is configuration and discovery metadata, not authority. Runtime
 policy may disable any declared event, tool, identity, or resource.
 
+### Failure isolation and readiness
+
+The composition root explicitly classifies ingress plugins as mandatory and
+business capability plugins as optional. Failure to initialize or health-check
+mandatory `feishu-im` prevents Gateway readiness. An unhealthy optional plugin
+is retained as `unhealthy`, its semantic tools are denied by the policy boundary
+with a typed failure, and unrelated ingress/Harness/plugins continue running.
+
+Tool authorization rechecks the owning plugin's current health immediately
+before execution. Recovery therefore needs no Gateway restart: a later healthy
+check re-enables that plugin. Plugin ownership is trusted composition metadata,
+never inferred from model text or a tool-name prefix. Shutdown stops both ready
+and unhealthy initialized plugins.
+
 ## 5. Stable plugin API
 
 The first Runtime API exposes these ports:
