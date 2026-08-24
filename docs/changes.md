@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the service-native IM transport and publisher boundary before
+  implementation: pinned official Channel SDK, bounded fast callbacks, explicit
+  canonical conversion, source-message/thread replies, and durable outbox
+  idempotency with ambiguous-send retry.
+
 - Specified the first V3 Feishu IM implementation boundary before code: official
   Channel SDK transport, Codex2Lark-owned normalized values, explicit bot
   mention matching, encrypted typed mirror storage, and replay-safe admission

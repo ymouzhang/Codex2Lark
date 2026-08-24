@@ -87,6 +87,19 @@ acknowledge forgotten work. Redelivery completes admission. The runtime event's
 Ignored events return a typed reason and create neither a task nor an outbox
 intent.
 
+The Channel adapter registers only message and bot-membership callbacks. A
+callback converts the SDK value into the canonical inbound value and submits it
+to a bounded Runtime-owned queue; it never calls the model or performs document
+work. Queue saturation rejects the callback with a content-free diagnostic so
+the source can redeliver instead of silently dropping accepted work.
+
+The IM outbox publisher accepts only typed acknowledgement, progress, approval,
+and terminal payloads. It replies to the source `message_id`, preserves thread
+placement, passes the durable outbox idempotency key as the SDK request UUID,
+and treats an SDK result as sent only when success and an upstream message
+reference are both present. Failed or ambiguous sends remain retryable and are
+never converted into task completion.
+
 ## 4. Acknowledgement and terminal replies
 
 After admission and durable task creation, the bot replies to the source message

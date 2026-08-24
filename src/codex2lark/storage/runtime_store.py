@@ -356,6 +356,34 @@ class RuntimeStore:
 
         await self._database.transaction(operation)
 
+    async def retry_outbox(
+        self,
+        outbox_id: str,
+        *,
+        worker_id: str,
+        error_code: str,
+        available_at_ms: int,
+        now_ms: int,
+    ) -> None:
+        def operation(connection: sqlite3.Connection) -> None:
+            cursor = connection.execute(
+                """
+                UPDATE runtime_outbox
+                SET state = CASE
+                        WHEN attempt_count >= max_attempts THEN 'failed'
+                        ELSE 'pending'
+                    END,
+                    available_at_ms = ?, lease_owner = NULL,
+                    lease_expires_at_ms = NULL, last_error_code = ?, updated_at_ms = ?
+                WHERE outbox_id = ? AND state = 'leased' AND lease_owner = ?
+                """,
+                (available_at_ms, error_code, now_ms, outbox_id, worker_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("outbox lease is not owned by worker")
+
+        await self._database.transaction(operation)
+
     async def claim_idempotency(
         self,
         *,
