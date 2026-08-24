@@ -2,11 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from .compiler import block_exists, compile_document, count_exact_pattern, preflight_content
-from .drive_service import DriveService
-from .errors import AmbiguityError, ConflictError, VerificationError
-from .lark_cli import LarkCli, LarkCliResult, safe_tool_call_error
-from .models import (
+from ..adapters.lark_cli import LarkCli, LarkCliResult, safe_tool_call_error
+from ..authoring.compiler import (
+    block_exists,
+    compile_document,
+    count_exact_pattern,
+    preflight_content,
+)
+from ..authoring.verifier import (
+    extract_content,
+    extract_resource,
+    extract_revision,
+    verify_document,
+)
+from ..core.errors import AmbiguityError, ConflictError, VerificationError
+from ..core.models import (
     CreateDocumentRequest,
     DetailLevel,
     DocumentFormat,
@@ -18,9 +28,9 @@ from .models import (
     SearchDocumentsRequest,
     VerifyDocumentRequest,
 )
-from .notification_service import NotificationService
-from .runtime import EphemeralWorkspace
-from .verifier import extract_content, extract_resource, extract_revision, verify_document
+from ..core.runtime import EphemeralWorkspace
+from .drive import DriveService
+from .notification import NotificationService
 
 
 class DocsService:

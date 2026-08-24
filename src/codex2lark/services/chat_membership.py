@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .errors import Codex2LarkError, ErrorCategory
-from .lark_cli import LarkCli, LarkCliResult
-from .models import Identity
-from .verifier import find_first_value
+from ..adapters.lark_cli import LarkCli, LarkCliResult
+from ..authoring.verifier import find_first_value
+from ..core.errors import Codex2LarkError, ErrorCategory
+from ..core.models import Identity
 
 
 class ChatMembershipService:

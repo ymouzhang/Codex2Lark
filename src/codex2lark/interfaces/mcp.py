@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from mcp.types import ToolAnnotations
 
-from .application import Application, create_application
-from .lark_cli import safe_tool_call_error
-from .models import (
+from ..adapters.lark_cli import safe_tool_call_error
+from ..core.models import (
     ChatDigestRequest,
     CreateBaseRequest,
     CreateDocumentRequest,
@@ -24,6 +21,7 @@ from .models import (
     WhiteboardRenderRequest,
     WriteSheetRequest,
 )
+from .application import Application, create_application
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True)
 CREATE_WRITE = ToolAnnotations(
@@ -47,21 +45,12 @@ FastMCPSettings.model_rebuild()
 def build_mcp(application: Application | None = None) -> FastMCP:
     app = application or create_application()
 
-    @asynccontextmanager
-    async def lifespan(_: FastMCP[Any]) -> AsyncIterator[dict[str, Any]]:
-        await app.events.start()
-        try:
-            yield {"application": app}
-        finally:
-            await app.events.stop()
-
     mcp = FastMCP(
         "Codex2Lark",
         instructions=(
             "Stateless Feishu authoring tools. Inspect live resources before editing and verify "
             "all writes. Feishu is the only business-data source of truth."
         ),
-        lifespan=lifespan,
     )
 
     @mcp.tool(

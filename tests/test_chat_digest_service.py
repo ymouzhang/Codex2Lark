@@ -7,10 +7,10 @@ from typing import Any
 
 import pytest
 
-from codex2lark.chat_digest_service import ChatDigestService, _normalize_message
-from codex2lark.errors import AmbiguityError, Codex2LarkError
-from codex2lark.lark_cli import LarkCliResult
-from codex2lark.models import ChatDigestRequest, Identity
+from codex2lark.adapters.lark_cli import LarkCliResult
+from codex2lark.core.errors import AmbiguityError, Codex2LarkError
+from codex2lark.core.models import ChatDigestRequest, Identity
+from codex2lark.services.chat_digest import ChatDigestService, _normalize_message
 
 
 class DigestDrive:

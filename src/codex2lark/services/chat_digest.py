@@ -10,19 +10,22 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .chat_membership_service import ChatMembershipService
-from .compiler import preflight_content
-from .docs_service import DocsService
-from .drive_service import DriveService
-from .errors import (
+from ..adapters.lark_cli import LarkCli, safe_tool_call_error
+from ..authoring.compiler import preflight_content
+from ..authoring.verifier import (
+    extract_content,
+    extract_resource,
+    find_first_value,
+    verify_document,
+)
+from ..core.errors import (
     AmbiguityError,
     Codex2LarkError,
     ConflictError,
     ErrorCategory,
     NotFoundError,
 )
-from .lark_cli import LarkCli, safe_tool_call_error
-from .models import (
+from ..core.models import (
     ChatDigestRequest,
     DetailLevel,
     DocumentFormat,
@@ -30,14 +33,11 @@ from .models import (
     InspectDocumentRequest,
     ResourceRef,
 )
-from .notification_service import NotificationService
-from .runtime import EphemeralWorkspace
-from .verifier import (
-    extract_content,
-    extract_resource,
-    find_first_value,
-    verify_document,
-)
+from ..core.runtime import EphemeralWorkspace
+from .chat_membership import ChatMembershipService
+from .docs import DocsService
+from .drive import DriveService
+from .notification import NotificationService
 
 _IMAGE_KEY = re.compile(r"img_[A-Za-z0-9_-]+")
 _IMAGE_MARKER = re.compile(r"!\[[^\]]*\]\(img_[^)]+\)")

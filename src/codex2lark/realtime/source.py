@@ -4,35 +4,34 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 
-from .chat_membership_service import ChatMembershipService
-from .errors import Codex2LarkError, ErrorCategory
-from .lark_cli import LarkCli, redact_secrets, safe_tool_call_error
-from .models import Identity
+from ..adapters.lark_cli import LarkCli, redact_secrets, safe_tool_call_error
+from ..core.errors import Codex2LarkError, ErrorCategory
+from .delivery import EventReference
+from .handlers import BOT_ADDED_EVENT_KEY
 
-BOT_ADDED_EVENT_KEY = "im.chat.member.bot.added_v1"
 _READY_MARKER = f"[event] ready event_key={BOT_ADDED_EVENT_KEY}"
 _MAX_EVENT_BYTES = 256_000
 _RESTART_DELAYS = (1.0, 2.0, 5.0, 10.0, 30.0)
-_EVENT_RETRY_DELAYS = (0.0, 0.5, 2.0)
 
 logger = logging.getLogger(__name__)
 
 
-class BotAddedEventSupervisor:
-    """Owns the fixed bot-added event consumer for the MCP process lifetime."""
+class LarkLongConnectionEventSource:
+    """Owns one fixed lark-cli long-connection subscription."""
 
     def __init__(
         self,
         lark: LarkCli,
-        membership: ChatMembershipService,
+        publish: Callable[[EventReference], Awaitable[None]],
         *,
         startup_timeout_seconds: float = 20.0,
         shutdown_timeout_seconds: float = 10.0,
     ) -> None:
         self.lark = lark
-        self.membership = membership
+        self.publish = publish
         self.startup_timeout_seconds = startup_timeout_seconds
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self._stop = asyncio.Event()
@@ -219,32 +218,17 @@ class BotAddedEventSupervisor:
             logger.error("bot-added event did not contain a valid chat_id and was skipped")
             return
         safe_event_id = event_id if isinstance(event_id, str) else "unknown"
-        for attempt, delay in enumerate(_EVENT_RETRY_DELAYS, start=1):
-            if delay:
-                await asyncio.sleep(delay)
-            try:
-                result = await self.membership.ensure_current_user(
-                    chat_id=chat_id,
-                    chat_identity=Identity.BOT,
-                )
-                logger.info(
-                    "bot-added event handled; event_id=%s chat_id=%s status=%s",
-                    safe_event_id,
-                    chat_id,
-                    result.get("status", "unknown"),
-                )
-                return
-            except Exception as exc:
-                if attempt < len(_EVENT_RETRY_DELAYS):
-                    continue
-                error = safe_tool_call_error(exc)["error"]
-                logger.error(
-                    "bot-added event failed; event_id=%s chat_id=%s category=%s message=%s",
-                    safe_event_id,
-                    chat_id,
-                    error["category"],
-                    error["message"],
-                )
+        event_type = header.get("event_type") if isinstance(header, dict) else None
+        if event_type != BOT_ADDED_EVENT_KEY:
+            logger.error("event type did not match the fixed subscription and was skipped")
+            return
+        await self.publish(
+            EventReference(
+                event_id=safe_event_id,
+                event_type=event_type,
+                chat_id=chat_id,
+            )
+        )
 
     async def _drain_stderr(self, stream: asyncio.StreamReader) -> None:
         while line := await stream.readline():
@@ -253,6 +237,9 @@ class BotAddedEventSupervisor:
     @staticmethod
     def _log_diagnostic(value: str, *, startup: bool) -> None:
         if not value or value.startswith("[event]"):
+            return
+        if value.startswith("[source]"):
+            logger.info("%s", redact_secrets(value)[:500])
             return
         try:
             payload = json.loads(value)

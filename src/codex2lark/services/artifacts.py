@@ -3,12 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .compiler import whiteboard_xml
-from .docs_service import DocsService
-from .drive_service import DriveService
-from .errors import VerificationError
-from .lark_cli import LarkCli
-from .models import (
+from ..adapters.lark_cli import LarkCli
+from ..authoring.compiler import whiteboard_xml
+from ..authoring.verifier import extract_resource, find_first_value
+from ..core.errors import VerificationError
+from ..core.models import (
     CreateBaseRequest,
     CreateWorkbookRequest,
     EditDocumentRequest,
@@ -18,8 +17,9 @@ from .models import (
     WhiteboardRenderRequest,
     WriteSheetRequest,
 )
-from .runtime import EphemeralWorkspace
-from .verifier import extract_resource, find_first_value
+from ..core.runtime import EphemeralWorkspace
+from .docs import DocsService
+from .drive import DriveService
 
 
 class ArtifactsService:

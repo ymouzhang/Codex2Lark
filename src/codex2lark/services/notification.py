@@ -4,9 +4,9 @@ import hashlib
 import re
 from typing import Any
 
-from .errors import Codex2LarkError, ErrorCategory
-from .lark_cli import LarkCli
-from .verifier import find_first_value
+from ..adapters.lark_cli import LarkCli
+from ..authoring.verifier import find_first_value
+from ..core.errors import Codex2LarkError, ErrorCategory
 
 _WHITESPACE = re.compile(r"\s+")
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+.!|])")

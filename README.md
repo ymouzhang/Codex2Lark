@@ -1,8 +1,10 @@
 # Codex2Lark
 
-`Codex2Lark` is a stateless, AI-native Feishu authoring plugin for ChatGPT and
-Codex. It combines a focused authoring Skill with semantic MCP tools and uses
-`lark-cli` as the Feishu execution backend.
+`Codex2Lark` is a Harness-centered Feishu AI Agent platform. Its current local
+plugin combines a focused authoring Skill with semantic MCP tools and uses
+`lark-cli` as the Feishu execution backend. Its V2 architecture adds an
+always-on event plane and a reusable Agent Harness so one logical Agent can
+serve N Feishu groups without depending on Codex or MCP uptime.
 
 The project does not persist document content, block mappings, editing plans, or
 artifact copies. Feishu is the source of truth. Each request reads live state,
@@ -16,11 +18,13 @@ defined by:
 
 - [Product requirements](docs/requirements.md)
 - [Architecture](docs/architecture.md)
+- [Agent Harness](docs/agent-harness.md)
+- [Multi-group architecture research](docs/research/multi-group-agent-architecture.md)
 - [MCP tool contracts](docs/mcp-tools.md)
 - [Authoring and editing policy](docs/document-authoring.md)
 - [Development workflow](docs/development.md)
-- [Installation and operation](docs/operations.md)
-- [Using Codex2Lark from Codex](docs/usage.md)
+- [安装与配置](docs/operations.md)
+- [使用与停止](docs/usage.md)
 - [Delivery roadmap](docs/roadmap.md)
 
 No implementation change may precede the documentation change that specifies
@@ -43,13 +47,31 @@ contracts.
 
 ## Quick start
 
-After installing dependencies and completing `lark-cli` authentication, run:
+After completing `lark-cli` authentication, prepare and verify the checkout:
 
 ```bash
+uv sync --all-groups
 uv run codex2lark doctor
 ```
 
-Then register the local stdio server with Codex and use natural-language
-authoring requests. See [Using Codex2Lark from Codex](docs/usage.md) for the
-registration command, verification steps, prompt examples, tool inventory, and
-troubleshooting guidance.
+Register the source checkout once from the repository root:
+
+```bash
+codex mcp add codex2lark \
+  --env UV_CACHE_DIR=/tmp/codex2lark-uv-cache \
+  -- uv run --project "$PWD" codex2lark mcp
+```
+
+Restart Codex, open a new task, and use `/mcp` to confirm `codex2lark`. Codex
+starts and stops the MCP child process automatically; do not manually keep
+`uv run codex2lark mcp` running.
+
+Only for real-time Feishu events, run the independent Gateway:
+
+```bash
+uv run codex2lark gateway
+```
+
+The Gateway uses an outbound long connection and requires neither a public IP
+nor RabbitMQ. See [Usage and shutdown](docs/usage.md) for daily operation and
+[Installation and configuration](docs/operations.md) for first-time setup.

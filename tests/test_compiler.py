@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import pytest
 
-from codex2lark.compiler import (
+from codex2lark.authoring.compiler import (
     block_exists,
     compile_document,
     count_exact_pattern,
     preflight_content,
     whiteboard_xml,
 )
-from codex2lark.errors import Codex2LarkError
-from codex2lark.models import (
+from codex2lark.core.errors import Codex2LarkError
+from codex2lark.core.models import (
     CalloutBlock,
     CodeBlock,
     DiagramFormat,

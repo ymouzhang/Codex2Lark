@@ -1,58 +1,133 @@
 # Delivery roadmap
 
-## Phase 0: capability foundation
+## Completed foundation
 
-- Initialize the repository as a Codex plugin and `uv` Python project.
-- Add the Feishu authoring Skill and progressive references.
-- Add a local stdio MCP server.
-- Implement safe `lark-cli` execution, doctor checks, and normalized errors.
+The repository already provides a local stdio MCP plugin, strict Feishu
+authoring tools, safe lark-cli execution, Docs create/inspect/edit, managed Drive
+folder resolution, verified notifications, Whiteboard/Sheets/Base operations,
+and bounded group-chat digest publishing.
 
-Exit: Codex can discover the plugin and list its tools without Feishu writes.
+The bot-added event contract and membership behavior are implemented. The V2
+Lite refactor extracts their lifecycle from MCP into an independently operated
+long-connection Gateway with bounded in-memory dispatch.
 
-## Phase 1: document create and inspect
+## V2 Phase 0: Harness specification and eval baseline
 
-- Implement strict models for resource references and identities.
-- Implement document inspect and create.
-- Add ephemeral `@file` rendering.
-- Add live read-back verification.
+- Add versioned `AgentMessage`, `AgentDefinition`, `RunEvent`, `SessionKey`,
+  `Outcome`, policy, approval, and model-provider schemas.
+- Add the provider-neutral Agent loop with an in-memory SessionManager.
+- Add progressive ResourceLoader behavior for Skills, prompts, policies, and
+  context references.
+- Wrap the existing semantic Feishu services as typed Harness tools.
+- Add `before_tool_call`, `after_tool_call`, outcome verification, cancellation,
+  steering, follow-up, and hard run budgets.
+- Establish deterministic evals for routing isolation, prompt injection, tool
+  use, approval, compaction, and truthful completion before model integration.
 
-Exit: an authorized user can create a structured document and receive a verified
-URL.
+Exit: a recorded normalized request can run through the Harness with a fake
+model and fake Feishu environment, producing a verified terminal outcome and a
+complete ordered event stream.
 
-## Phase 2: precise document editing
+## V2 Phase 1: Standalone lightweight event plane
 
-- Implement the bounded edit operation set.
-- Add live block/revision inspection and target resolution.
-- Add conflict and ambiguity results.
-- Add protected-text verification.
+- Extract the lark-cli event consumer from MCP lifespan into a standalone
+  long-connection Gateway.
+- Define the minimal `EventReference` schema.
+- Add a bounded in-memory `TaskQueue` adapter and fixed partition dispatcher for
+  per-chat ordering and cross-chat concurrency.
+- Implement deterministic bot-added membership handling without a model.
+- Keep the existing digest-time membership check as recovery defense.
+- Remove the production startup dependency between MCP and the event consumer.
 
-Exit: an agent can modify a requested scope without whole-document replacement.
+Exit: with Codex and MCP stopped, a running Gateway receives bot-added events
+and invites the configured owner idempotently. No public callback endpoint,
+database, or message broker is required; queued work does not survive Gateway
+exit.
 
-## Phase 3: rich artifacts
+## V2 Phase 2: N-group control and routing
 
-- Implement whiteboard render/update.
-- Implement Sheet create/write and formula verification.
-- Implement Base create and bounded record upsert.
-- Compose artifacts into a final document.
+- Create the `Codex2Lark Control` Feishu Base schema and resolver.
+- Implement group enrollment, disablement, onboarding card, owner membership,
+  AgentDefinition selection, trigger policy, tool profile, and approval policy.
+- Implement the trusted SessionKey and per-key single-active-run scheduler.
+- Allow cross-group parallelism with per-app, tenant, group, and provider rate
+  limits.
+- Add anti-loop, bot-message filtering, exact mention/command admission, and
+  group removal handling.
+- Add tests with concurrent events from multiple chats and tenants.
 
-Exit: an agent can create a document containing live Feishu-native artifacts.
+Exit: N groups share one AgentDefinition while preserving ordering and complete
+context, authorization, target, and failure isolation.
 
-## Phase 4: remote plugin transport
+## V2 Phase 3: Production Agent Runtime
 
-- Add Streamable HTTP transport.
-- Add production OAuth/secret-provider integration.
-- Add optional operation preview/confirmation UI.
-- Add deployment and threat-model documentation before code.
+- Add the OpenAI Responses provider behind the Harness model port.
+- Default to `store=false` and fresh bounded context from live Feishu.
+- Add message/thread context assembly, sender attribution, image policy, and
+  attachment metadata handling.
+- Add Feishu progress cards and final verified replies.
+- Add model/tool/cost/time budgets, compaction, retry classification, and
+  provider circuit breakers.
+- Keep lifecycle and permission workflows deterministic when the model provider
+  is unavailable.
+- Add evaluation gates comparing AgentDefinition and Harness versions.
 
-Exit: ChatGPT and remote Codex environments can use the same semantic tools.
+Exit: an addressed message in any enrolled group starts an isolated Harness run,
+uses authorized semantic tools, and replies with a verified outcome without a
+running Codex task.
 
-## Current implementation boundary
+## V2 Phase 4: Service-native Feishu adapter and identity
 
-The initial implementation in this repository delivers the local stdio scope of
-Phases 0–3 with testable adapters. It includes typed document compilation,
-bounded exact/block editing, whiteboard rendering, Sheet operations, and Base
-operations. Live Feishu execution requires the user to install and authenticate
-`lark-cli`; default tests use deterministic subprocess and service doubles.
+- Add `FeishuOpenApiAdapter` for long-running services; retain `LarkCliAdapter`
+  for local MCP and development.
+- Add an Identity Broker for bot and delegated-user credentials held in an
+  external secret provider.
+- Define OAuth refresh, credential rotation, tenant isolation, and revocation.
+- Move high-frequency worker paths away from per-operation CLI subprocesses.
+- Preserve identical semantic tool and verification contracts across adapters.
 
-Semantic heading-path selectors and cross-session three-way merge remain
-deferred; exact text and live block IDs are the supported precise selectors.
+Exit: Gateway and workers scale horizontally without sharing a workstation,
+lark-cli credential store, or process-local token state.
+
+## V2 Phase 5: Harness Run API and rich interaction
+
+- Add a bidirectional typed Run API for start, stream, steer, follow-up,
+  approval, cancel, resume, and inspect.
+- Keep MCP as the semantic tool surface for interactive Agent clients.
+- Add interactive Feishu approval cards and authorized decision routing.
+- Add optional encrypted short-TTL checkpoints for explicitly approved
+  long-running workflows.
+- Add run forking and replay only in redacted evaluation environments, not as a
+  business-content store.
+
+Exit: Feishu, web administration, tests, and future clients observe and control
+the same Harness without reimplementing the Agent loop.
+
+## V2 Phase 6: Production hardening
+
+- Define reliability thresholds that justify a durable queue: restart-safe
+  accepted work, sustained backlog, multiple worker replicas, or a strict SLO.
+- Add RabbitMQ or a managed queue as an optional `TaskQueue` adapter only when a
+  deployment crosses those thresholds.
+- Optionally add an authenticated HTTPS Webhook source for deployments that
+  prefer a public callback endpoint over the default outbound long connection.
+- Deploy redundant Gateway and Agent workers across failure domains where the
+  chosen reliability profile requires them.
+- Add queue depth/age, oldest event, provider latency, tool failure,
+  verification, dead-letter, token/cost, and policy-version metrics.
+- Add canary AgentDefinition and Harness rollout with automatic eval regression
+  gates and rollback.
+- Add chaos tests for Gateway loss, Worker death, broker failover, Feishu rate
+  limits, provider outage, duplicate delivery, and partial external writes.
+- Add operational garbage collection for expired metadata and stale policies.
+
+Exit: production SLOs exclude Codex/MCP availability, content-free observability
+detects failure, and a bad Harness or policy version can be rolled back safely.
+
+## Deferred
+
+- Multi-day durable approval/workflow orchestration with Temporal.
+- Cross-session semantic memory outside live Feishu content.
+- Cross-group workflows without explicit source/destination authorization.
+- A general-purpose arbitrary OpenAPI or shell tool.
+- A proprietary copy of Feishu business content.

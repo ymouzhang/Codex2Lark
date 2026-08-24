@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from codex2lark.models import VerificationPolicy
-from codex2lark.verifier import extract_revision, verify_document
+from codex2lark.authoring.verifier import extract_revision, verify_document
+from codex2lark.core.models import VerificationPolicy
 
 DATA = {
     "document": {

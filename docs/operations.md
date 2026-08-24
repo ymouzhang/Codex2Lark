@@ -1,15 +1,21 @@
-# Installation and operation
+# Codex2Lark 安装与配置
 
-## 1. Prerequisites
+本文用于首次安装、飞书授权和 Gateway 配置。安装完成后的日常启动与停止见
+[使用与停止](usage.md)。
 
-- Python 3.12+ and `uv`;
-- Node.js with `npx` for the recommended lark-cli installer;
-- a Feishu/Lark account allowed to create an Open Platform application;
-- a local Codex host for the bundled stdio MCP server.
+除 lark-cli 安装命令外，本文命令都在 Codex2Lark 仓库根目录执行。
 
-## 2. Install and authenticate lark-cli
+## 1. 环境要求
 
-Follow the official lark-cli flow:
+- Python 3.12 或更高版本；
+- `uv`；
+- Node.js 和 `npx`；
+- Codex；
+- 可以创建企业自建应用的飞书账号。
+
+## 2. 安装并登录 lark-cli
+
+Codex2Lark 当前固定使用 `@larksuite/cli@1.0.89`：
 
 ```bash
 npx @larksuite/cli@1.0.89 install
@@ -18,184 +24,148 @@ lark-cli auth login --recommend
 lark-cli auth status
 ```
 
-`@larksuite/cli` is an external Node.js runtime and is therefore not part of
-Python's `uv.lock`. Codex2Lark pins version `1.0.89` in both this installation
-command and its runtime compatibility check. Do not use `@latest`; after any
-intentional upgrade, update the documented version, runtime constant, and tests
-in the same change.
+不要使用 `@latest`。飞书凭证由 lark-cli 管理，Codex2Lark 不保存凭证。
 
-Authentication may open or return a browser URL. Credentials are owned by
-lark-cli and its credential store; this project neither receives nor persists
-them itself.
+## 3. 安装 Python 依赖
 
-## 3. Prepare the Python runtime
-
-From the plugin root:
+进入仓库根目录：
 
 ```bash
 uv sync --all-groups
 uv run codex2lark doctor
 ```
 
-`doctor` must report the MCP runtime available, the exact supported lark-cli
-version (`1.0.89`), authentication valid, and business-data persistence
-disabled. It invokes
-`lark-cli auth status --json --verify` through the adapter's dedicated
-authentication-status operation because this command returns a bare status
-object rather than the normal `{ok, data}` command envelope. The check succeeds
-only when the returned `identity` names an identity whose status is available;
-an absent, `none`, unavailable, or malformed identity produces a failed doctor
-result with the returned safe status details and a login/configuration action.
+正常结果应包含：
 
-## 4. Run directly
-
-```bash
-uv run codex2lark mcp
+```json
+{
+  "ok": true,
+  "checks": {
+    "lark_cli_version": "1.0.89",
+    "business_data_persistence": "disabled"
+  }
+}
 ```
 
-The process speaks MCP over stdio. It does not print logs or document content to
-stdout because that channel is reserved for protocol messages.
+如果 `ok` 为 `false`，按照返回的 `next_action` 修复后重新运行。
 
-## 5. Use from Codex
+## 4. 连接 Codex
 
-There are two alternative connection modes. Choose one; they are not sequential
-setup steps.
+选择一种方式，不要同时使用。
 
-### 5.1 Installed plugin mode
+### 使用源码
 
-Use this mode after Codex2Lark has been installed as a Codex plugin. The plugin
-contains three integration layers:
+按照[使用与停止](usage.md#2-首次把源码注册到-codex)执行一次
+`codex mcp add`。之后由 Codex 自动启动 MCP，不需要手工保持
+`uv run codex2lark mcp` 运行。
 
-| File | Role |
+### 使用已安装插件
+
+插件自带 `.mcp.json`，Codex 会自动启动 MCP。安装或更新插件后重启 Codex，并用
+`/mcp` 检查工具。不要再添加同名的手工 MCP 注册。
+
+## 5. 配置并启动 Gateway
+
+如果只从 Codex 创建和修改飞书内容，跳过本节。
+
+如果需要机器人进群后立即执行自动化，在飞书开发者后台完成以下配置：
+
+1. 为机器人授予：
+   - `im:chat.members:bot_access`
+   - `im:chat.members:read`
+   - `im:chat.members:write_only`
+2. 打开“事件与回调”，添加“机器人被添加至群聊”事件：
+   `im.chat.member.bot.added_v1`。
+3. 创建并发布新的应用版本。只保存配置不会生效。
+4. 确认当前 lark-cli 用户位于应用可用范围内。
+
+先做一次两秒连接探针：
+
+```bash
+lark-cli event consume im.chat.member.bot.added_v1 --as bot --timeout 2s
+```
+
+正常结果包含：
+
+```text
+[event] ready event_key=im.chat.member.bot.added_v1
+[source] feishu-websocket: connected
+```
+
+停止探针，然后启动 Gateway：
+
+```bash
+uv run codex2lark gateway
+```
+
+看到 `INFO event gateway ready` 后即可把机器人加入测试群。机器人已经在群里时不会
+产生新的进群事件，需要先移除再重新加入。
+
+Gateway 需要访问公网，但不需要公网 IP 或域名。当前默认使用内存队列，停止期间的
+事件和退出时尚未完成的任务不会重放。
+
+## 6. 停止和卸载
+
+### 停止前台进程
+
+- 手工运行的 MCP：在对应终端按 `Ctrl+C`；
+- Gateway：在对应终端按 `Ctrl+C`；
+- Codex 自动启动的 MCP：由 Codex 管理；关闭或重启 Codex 即可停止或重启子进程。
+
+### 删除源码 MCP 注册
+
+```bash
+codex mcp remove codex2lark
+```
+
+### 卸载插件
+
+先查看插件来源：
+
+```bash
+codex plugin list --json
+```
+
+然后使用列表中显示的 marketplace 名称：
+
+```bash
+codex plugin remove codex2lark@MARKETPLACE
+```
+
+删除 MCP 注册或插件不会删除飞书授权、仓库或已创建的飞书资源。
+
+### 退出飞书登录
+
+只有需要撤销本机 lark-cli 登录时才执行：
+
+```bash
+lark-cli auth logout
+```
+
+## 7. 飞书功能权限
+
+不同操作需要对应的飞书权限。遇到权限错误时，以 lark-cli 返回的缺失 scope 为准。
+
+常用权限包括：
+
+| 功能 | 常用权限 |
 |---|---|
-| `.codex-plugin/plugin.json` | Identifies the plugin and points Codex to its packaged capabilities. |
-| `skills/feishu-authoring/SKILL.md` | Tells the model when and how to compose safe Feishu authoring workflows. |
-| `.mcp.json` | Tells Codex how to launch the local Codex2Lark stdio MCP server. |
+| 创建和修改文档 | Docs、Drive、`space:folder:create`、`search:docs:read` |
+| 修改完成后发送通知 | `im:message:send_as_bot` |
+| 读取群消息并生成汇总 | `im:chat:read`、`im:message:readonly` 和用户消息历史权限 |
+| 邀请当前用户进入机器人所在群 | `im:chat.members:read`、`im:chat.members:write_only` |
 
-This packaging follows the
-[official Codex plugin guidance for bundled MCP servers](https://developers.openai.com/plugins/build/plugins#bundled-mcp-servers-and-lifecycle-hooks).
+新建的文档、电子表格和多维表格进入飞书云盘根目录下的 `Codex2Lark` 文件夹。
+文件夹由系统按需创建，不在本地保存 folder token。
 
-Codex reads these files and starts the MCP server with `uv` when the plugin is
-enabled. The user does not manually keep `uv run codex2lark mcp` running. The
-MCP server exposes named operations such as document publishing, inspection,
-precise editing, and verification; it does not expose an arbitrary shell or raw
-`lark-cli` command surface.
+## 8. 故障排查
 
-The bundled `.mcp.json` runs relative to the installed plugin root and sets
-`UV_CACHE_DIR=/tmp/codex2lark-uv-cache`. That directory contains reusable Python
-dependencies only. Feishu document content, edit plans, credentials, and
-resource copies are not stored there.
-
-### 5.2 Source development mode
-
-Use this mode while running Codex2Lark directly from a cloned repository that
-has not been installed as a plugin. Register the repository's launcher with
-`codex mcp add`, as documented in [usage.md](usage.md#3-connect-codex2lark).
-
-The registration is stored in the local Codex configuration; it is not a
-repository-local or project-scoped configuration entry. Its launcher command
-contains the repository's absolute path, so Codex still starts the correct
-checkout regardless of the task's current working directory.
-
-After either mode is configured, start a new Codex task or restart the Codex
-host so the MCP tool inventory is rebuilt. Then inspect the configured server
-with `codex mcp get codex2lark` or `codex mcp list`.
-
-The complete registration command, verification procedure, example authoring
-requests, tool inventory, shutdown procedure, and uninstall instructions are
-maintained in [usage.md](usage.md). Keep this document focused on installation
-and runtime operations.
-
-## 6. First smoke test
-
-Ask Codex to create a disposable Feishu document containing a heading, callout,
-table, and Mermaid whiteboard. Confirm the response contains a live URL and a
-passed read-back verification. Then ask it to make a surgical edit using that
-URL and confirm unrelated text remains present.
-
-Do not use a production document for the first test.
-
-## 7. Managed folder and edit notifications
-
-Codex2Lark creates Docs, Sheets, and Base resources inside a root Drive folder
-named `Codex2Lark`. The folder is discovered from Feishu on demand and its token
-is not written to local configuration. On the first creation request the server
-creates the folder automatically. If more than one exact-name folder exists,
-rename or remove the duplicate before retrying; the server deliberately refuses
-to guess.
-
-Managed-folder discovery requires Drive metadata read access, title-based
-document discovery requires `search:docs:read`, and creating the managed folder
-requires `space:folder:create`. Resource creation still requires the
-corresponding Docs, Sheets, or Base scopes.
-
-Verified document edits send a direct message as the application bot to the
-current lark-cli user. Configure the application with
-`im:message:send_as_bot`, ensure the bot is available to that user, and establish
-a direct-message relationship with the bot before relying on notifications.
-The message contains only the document identity, link, concise change summary,
-and verification outcome.
-
-Group-chat digest publishing additionally requires group/message read scopes
-such as `im:chat:read`, `im:message:readonly`, and the user message-history
-scope reported by lark-cli for the target chat. Selective image retrieval uses
-the same readable message resource boundary. The workflow never downloads file
-attachments.
-
-When publishing with bot identity, also grant the bot
-`im:chat.members:read` and `im:chat.members:write_only`. The bot must already be
-in the group and must be allowed by the group's invitation policy to add the
-current authenticated user. Groups restricted to owner/admin invitations may
-require the bot to be an owner, administrator, or eligible creator bot. An
-invitation awaiting approval is not treated as membership, so digest publishing
-stops until approval is complete.
-
-Real-time automatic user invitation additionally requires enabling the
-`im.chat.member.bot.added_v1` event in the Feishu developer console and granting
-the bot `im:chat.members:bot_access`. Start and keep `codex2lark mcp` running;
-the server waits for the lark-cli event-ready marker before it accepts MCP work.
-Stopping the MCP process also stops immediate event handling. Codex2Lark does
-not persist or replay events received while it was offline.
-
-Notification delivery is a post-write side effect. If it fails, the MCP result
-reports `notification.status = failed`; inspect the warning and fix bot access,
-but do not rerun the document edit solely to obtain the message.
-
-## 8. Troubleshooting
-
-- `lark_cli: missing`: install lark-cli and ensure it is on the Codex host PATH.
-- lark-cli version mismatch: install the pinned runtime with
-  `npx @larksuite/cli@1.0.89 install`, then rerun `doctor`.
-- authentication error: rerun `lark-cli auth login --recommend` and inspect
-  `lark-cli auth status`.
-- `return_code: 0` paired with `lark-cli operation failed` from an older
-  Codex2Lark build: update Codex2Lark; older builds incorrectly parsed the bare
-  authentication-status response as a failed normal command envelope.
-- permission error: grant the missing scope reported by lark-cli, then log in
-  again.
-- `not_found_error` for a document title: check the exact title or provide its
-  Feishu URL; title lookup searches managed content first and legacy Drive
-  content second.
-- `ambiguity_error` for a document title or folder: rename duplicates or provide
-  an explicit document URL. The managed folder itself must have a unique exact
-  name.
-- notification failed after a successful edit: grant
-  `im:message:send_as_bot`, make the bot available to the current user, establish
-  a bot direct-message relationship, and test again with a new intentional
-  edit. Do not replay the completed edit.
-- group not found or ambiguous: provide the exact group name or its `chat_id`;
-  the digest workflow never chooses a fuzzy group-name result.
-- bot can see the group but cannot add the current user: grant the member read
-  and write scopes, confirm the user is inside the application's availability
-  range, and allow the bot to invite members (or have a group owner add the user
-  manually). A pending invitation must be approved before retrying.
-- MCP fails during bot-added listener startup: enable
-  `im.chat.member.bot.added_v1`, grant `im:chat.members:bot_access`, verify the
-  bot identity, and ensure no incompatible event-bus consumer owns the local
-  connection. Restart MCP after correcting the configuration.
-- incomplete group history: narrow the start/end range or intentionally raise
-  the bounded page/message limits, then retry. No partial digest was created.
-- startup timeout: run `uv sync` once in the installed plugin directory or
-  increase the plugin-scoped MCP startup timeout.
-- verification error: the write reached Feishu but the live resource did not
-  satisfy the requested invariants; inspect it before retrying.
+- `lark_cli: missing`：重新安装 `@larksuite/cli@1.0.89` 并检查 PATH。
+- lark-cli 版本不匹配：重新运行固定版本安装命令，不要使用 `@latest`。
+- 身份不可用：运行 `lark-cli auth login --recommend`。
+- MCP 已注册但没有工具：重启 Codex 或新建任务，再用 `/mcp` 检查。
+- 文档标题不唯一：提供文档 URL，或重命名重复文档。
+- `Codex2Lark` 文件夹重复：保留一个准确名称的文件夹后重试。
+- 机器人无法邀请用户：检查成员权限、应用可用范围和群邀请策略。
+- Gateway 无法启动：确认事件已经随新应用版本发布，并重新运行连接探针。
+- 修改成功但通知失败：检查 `im:message:send_as_bot`；不要为了补发通知重复修改文档。

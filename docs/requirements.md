@@ -12,10 +12,16 @@ local copy of Feishu content.
 
 ## 2. Product definition
 
-`Codex2Lark` is an AI plugin made of:
+`Codex2Lark` is a Harness-centered Feishu AI Agent platform made of:
 
+- a versioned Agent Harness that owns context, model/tool execution, policy,
+  approvals, verification, compaction, recovery, and evaluation;
 - a Feishu authoring Skill that teaches the agent how to plan and verify work;
-- semantic MCP tools that expose safe Feishu capabilities;
+- semantic MCP tools that expose safe Feishu capabilities to interactive
+  Codex/ChatGPT clients;
+- an always-on Feishu Event Gateway with a bounded scheduler for inbound
+  automation independent of MCP availability; a durable external queue is an
+  optional reliability adapter, not a runtime prerequisite;
 - an ephemeral compiler that converts structured authoring requests into
   `lark-cli` operations;
 - a verifier that reads Feishu back after every write.
@@ -94,22 +100,27 @@ list, unavailable user identity, rejected or approval-pending invitation, or
 failed read-back stops the workflow before message retrieval and document
 creation. The workflow never invites a guessed user or a caller-supplied ID.
 
-The primary trigger is real-time rather than digest-time. While the
-`codex2lark mcp` process is running, Codex2Lark consumes
-`im.chat.member.bot.added_v1` as the bot. The MCP server becomes ready only
-after lark-cli emits the event consumer's ready marker. Each event supplies the
-authoritative `chat_id`; Codex2Lark immediately runs the same membership gate
-and invites the current authenticated user when absent. Events are processed
-sequentially, and repeated delivery is safe because every attempt begins with a
-live member read. The digest-time gate remains as a recovery check.
+The primary trigger is real-time rather than digest-time. A standalone Event
+Gateway receives `im.chat.member.bot.added_v1` over an outbound Feishu long
+connection independently of Codex and MCP, normalizes a minimal event
+reference, and dispatches a deterministic membership handler. The handler reads
+live members and invites the configured group owner only when absent. Repeated
+delivery is safe because the operation begins with a live read and is verified
+after the write. The digest-time gate remains an idempotent recovery check.
 
-No event checkpoint, queue, event body, or membership state is persisted by
-Codex2Lark. Graceful MCP shutdown closes the consumer's stdin and waits for
-lark-cli to exit; it never uses an unclean kill. An unexpected consumer exit is
-logged safely and restarted with bounded backoff. Event processing failures are
-reported to stderr without exposing event payloads or credentials and do not
-stop later events. Immediate handling is guaranteed only while the MCP process
-and its event connection are running; downtime has no Codex2Lark-owned replay.
+The default V2 Lite scheduler uses bounded process memory and persists nothing.
+It accepts only minimal event references and preserves per-chat order while
+allowing independent partitions to run concurrently. Its queue is lost if the
+Gateway process exits; this reduced delivery guarantee is the explicit tradeoff
+for a one-service deployment. Stopping Codex or MCP does not stop the standalone
+Gateway.
+
+Deployments that require accepted tasks to survive Gateway or Worker restart
+may replace the in-memory queue through the same `TaskQueue` port with RabbitMQ
+or a managed durable queue. That adapter may retain event ID, event type,
+tenant/app/chat/message identifiers, timestamps, delivery attempts, and
+acknowledgement state under bounded TTLs. It must not retain the raw event body,
+group-message content, attachments, document content, prompts, or model output.
 
 Each entry shows local time, sender display name, and message content. Date
 headings make long ranges scannable, while messages remain globally ordered by
@@ -135,6 +146,44 @@ with the newly requested complete range and sends the normal verified-edit bot
 notification. Multiple matches or a same-title document without the marker stop
 before overwrite; ordinary user documents are never assumed to be digests.
 
+### Serve many groups with one logical Agent
+
+One immutable AgentDefinition may serve N enrolled Feishu groups. Each group or
+topic has an isolated SessionKey derived from trusted tenant, app, chat, and
+optional thread identifiers. Events for one key are processed in order; events
+for different keys may run concurrently across a Worker pool. No model context,
+authorization state, tool target, or completion result may leak between keys.
+
+The AgentDefinition versions instructions, Skills, tool profiles, model policy,
+approval policy, context policy, retention policy, verification policy, and
+eval suite. "One Agent" means this shared policy bundle, not one process and not
+one global model conversation.
+
+Group enrollment and desired behavior are stored in a Feishu
+`Codex2Lark Control` Base. The configuration identifies the group, owner,
+AgentDefinition, trigger policy, authorized tools, and approval level. Secrets
+are external and Base contains only opaque credential references.
+
+The default group trigger is an explicit bot mention or approved command.
+Bot-authored messages and unaddressed ordinary chat do not invoke the model.
+Bot/group lifecycle, membership, permission, and enrollment events use
+deterministic workers and remain available when the model provider is disabled.
+
+### Execute through an Agent Harness
+
+Every semantic Agent run must pass through the Harness contract in
+`agent-harness.md`. Raw Feishu events never become direct model input. Channel
+adapters normalize `AgentMessage` values, the ContextBuilder progressively
+loads approved resources and bounded live Feishu context, and the Agent loop
+alternates model inference with typed tool observations until a verified
+terminal state.
+
+A final model message is not sufficient evidence for an external-write task.
+The run completes only when the requested observable outcome passes the
+configured verifier, or ends truthfully as blocked, failed, or cancelled.
+Steering, follow-up, approval, cancellation, and compaction occur only at safe
+Harness boundaries.
+
 ### Create or update embedded artifacts
 
 The agent may create or update:
@@ -156,10 +205,16 @@ The application MUST NOT persist:
 - edit plans;
 - copies of Sheet or Base data;
 - generated diagram sources after the request completes;
-- application-level operation history.
+- unbounded application-level operation history.
 
 Per-request state may exist in memory or in an isolated temporary directory and
 must be destroyed when the request ends.
+
+Reliable inbound processing may retain bounded operational metadata outside the
+developer workstation: minimal event references, delivery acknowledgements,
+leases, retry/dead-letter state, and short-lived idempotency keys. These records
+must exclude message/document bodies, attachments, prompts, and model output;
+must have documented TTLs; and must not become a business-data source of truth.
 
 ### Live source of truth
 
@@ -173,6 +228,10 @@ Tools that mutate existing resources accept an expected revision when Feishu or
 the selected API supports it. A revision mismatch must stop the write, refetch
 live state, and require replanning rather than overwrite a concurrent edit.
 
+Each SessionKey has at most one active Agent run. Different SessionKeys may run
+concurrently. Broker delivery is at least once, so handlers and observable
+Feishu side effects must be idempotent and verified before acknowledgement.
+
 ### Quality
 
 A successful API response is insufficient. Create and edit workflows must read
@@ -185,6 +244,11 @@ the affected resource back and validate observable structure and content.
 - Subprocess arguments are never interpreted by a shell.
 - Credentials never appear in tool output or logs.
 - Write tools are clearly described as side-effecting.
+- Trusted routing code binds tenant, app, chat, thread, identity, credentials,
+  tools, and approval policy outside model-visible arguments.
+- Harness changes are versioned and gated by contract tests and evals covering
+  routing isolation, prompt injection, tool use, approval, redelivery,
+  compaction, and truthful completion.
 
 ## 5. Explicit non-goals for the first release
 
@@ -194,6 +258,9 @@ the affected resource back and validate observable structure and content.
 - Pixel-perfect arbitrary HTML/CSS rendering inside Feishu Docs.
 - Browser automation as the primary write path.
 - Exposing all 2,500+ Feishu APIs directly to the model.
+- Treating Codex desktop, a Codex task, or stdio MCP as an always-on event
+  receiver.
+- One shared model conversation across multiple Feishu groups.
 
 ## 6. Acceptance criteria for the first release
 
@@ -213,5 +280,14 @@ the affected resource back and validate observable structure and content.
 11. A bounded group-chat range can be published chronologically with sender
     names, selectively embedded images, filename-only file entries, managed
     folder placement, and live read-back verification.
-12. While MCP is running, a bot-added event immediately and idempotently ensures
-    the current authenticated user is a verified member of that group.
+12. A standalone Event Gateway and deterministic worker handle bot-added events
+    while Codex and MCP are stopped, and idempotently ensure the configured
+    owner is a verified group member.
+13. N enrolled groups share one AgentDefinition while maintaining per-group
+    ordering, cross-group concurrency, and complete context/authorization
+    isolation.
+14. The Agent Harness exposes versioned run events, bounded context, typed tool
+    policy hooks, steering/follow-up, compaction, and verified terminal states.
+15. The default standalone Gateway requires no database, cache, message broker,
+    public callback endpoint, or running MCP process; its documented limitation
+    is that in-memory tasks do not survive process exit.

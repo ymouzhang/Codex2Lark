@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from codex2lark import cli
-from codex2lark.lark_cli import LarkCliResult
+from codex2lark.adapters.lark_cli import LarkCliResult
 
 
 class FakeLark:
@@ -24,6 +24,10 @@ class FakeLark:
     async def auth_status(self, *, verify: bool = True) -> LarkCliResult:
         assert verify is True
         return LarkCliResult(data=self.status, identity=self.status.get("identity"))
+
+
+def test_parser_exposes_independent_gateway_command() -> None:
+    assert cli._parser().parse_args(["gateway"]).command == "gateway"
 
 
 @pytest.mark.asyncio

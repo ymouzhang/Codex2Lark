@@ -51,3 +51,28 @@ it. It is not a release changelog.
   `im.chat.member.bot.added_v1` consumer before implementing fixed-key event
   supervision, ready-marker startup, graceful shutdown, bounded restart, and
   the retained digest-time recovery gate.
+- Clarified the deployed bot-added event runbook after live verification:
+  publishing a Feishu application version is required, the bounded event probe
+  must report both readiness and WebSocket connection, and offline or existing
+  group membership does not produce a replayed event.
+- Reclassified the MCP-lifespan event consumer as a development bridge after
+  identifying that stdio MCP cannot provide inbound availability when Codex is
+  stopped. Defined the V2 standalone Gateway, reliable broker, per-group router,
+  deterministic workers, and N-group isolation before implementation.
+- Defined Codex2Lark as a Harness-centered AI Agent after researching OpenAI
+  Harness Engineering, Codex Core/App Server and Agent loop, Pi Agent Core,
+  LangBot/AstrBot, RabbitMQ, Temporal, and LangGraph. Added the versioned Agent
+  loop, message transformation, Resources, Sessions, tool policy hooks,
+  steering/follow-up, compaction, verification, eval, and terminal-outcome
+  contracts before implementation.
+- Replaced the broker-first/Webhook-first V2 event contract with the approved
+  lightweight default before refactoring runtime code: one independently
+  operated outbound long-connection Gateway, a bounded in-memory `TaskQueue`,
+  partitioned per-chat dispatch, and deterministic handlers. RabbitMQ or a
+  managed queue is now an optional adapter for restart-safe delivery; Webhook is
+  an optional ingress adapter, and MCP no longer owns event availability.
+- Defined the responsibility-based Python package layout before moving code:
+  shared contracts in `core`, lark-cli integration in `adapters`, compilation
+  and verification in `authoring`, application use cases in `services`, event
+  runtime in `realtime`, and MCP composition in `interfaces`. Removed the former
+  flat internal module paths instead of retaining redundant forwarding shims.

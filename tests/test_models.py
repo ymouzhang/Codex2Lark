@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from codex2lark.models import (
+from codex2lark.core.models import (
     ChatDigestRequest,
     DiagramFormat,
     EditCommand,

@@ -6,8 +6,8 @@ from typing import Any
 
 import pytest
 
-from codex2lark.errors import ErrorCategory, LarkCliError
-from codex2lark.lark_cli import LarkCli
+from codex2lark.adapters.lark_cli import LarkCli
+from codex2lark.core.errors import ErrorCategory, LarkCliError
 
 
 class FakeProcess:

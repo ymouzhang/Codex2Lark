@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from codex2lark.lark_cli import LarkCliResult
-from codex2lark.notification_service import NotificationService
+from codex2lark.adapters.lark_cli import LarkCliResult
+from codex2lark.services.notification import NotificationService
 
 
 class NotificationLark:

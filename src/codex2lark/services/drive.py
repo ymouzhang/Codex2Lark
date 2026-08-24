@@ -5,10 +5,10 @@ import re
 import unicodedata
 from typing import Any
 
-from .errors import AmbiguityError, NotFoundError, VerificationError
-from .lark_cli import LarkCli
-from .models import Identity
-from .verifier import find_first_value
+from ..adapters.lark_cli import LarkCli
+from ..authoring.verifier import find_first_value
+from ..core.errors import AmbiguityError, NotFoundError, VerificationError
+from ..core.models import Identity
 
 MANAGED_FOLDER_NAME = "Codex2Lark"
 _MAX_SEARCH_PAGES = 3

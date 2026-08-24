@@ -3,8 +3,8 @@ from __future__ import annotations
 from html import escape
 from xml.etree import ElementTree
 
-from .errors import Codex2LarkError, ErrorCategory
-from .models import (
+from ..core.errors import Codex2LarkError, ErrorCategory
+from ..core.models import (
     BookmarkBlock,
     CalloutBlock,
     CheckboxBlock,

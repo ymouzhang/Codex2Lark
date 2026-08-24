@@ -3,12 +3,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 from collections.abc import Sequence
 
 from . import __version__
-from .application import create_application
-from .lark_cli import SUPPORTED_LARK_CLI_VERSION, safe_tool_call_error
-from .mcp_server import run_stdio
+from .adapters.lark_cli import SUPPORTED_LARK_CLI_VERSION, safe_tool_call_error
+from .interfaces.application import create_application
+from .interfaces.mcp import run_stdio
+from .realtime.application import create_gateway
 
 
 async def _doctor() -> int:
@@ -103,11 +105,22 @@ async def _doctor() -> int:
     return 0
 
 
+async def _gateway() -> int:
+    gateway = create_gateway()
+    await gateway.start()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await gateway.stop()
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codex2lark")
     parser.add_argument("--version", action="version", version=__version__)
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("mcp", help="run the stdio MCP server")
+    subcommands.add_parser("gateway", help="run the standalone Feishu event gateway")
     subcommands.add_parser("doctor", help="check lark-cli and authentication")
     return parser
 
@@ -119,6 +132,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if arguments.command == "doctor":
         return asyncio.run(_doctor())
+    if arguments.command == "gateway":
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        try:
+            return asyncio.run(_gateway())
+        except KeyboardInterrupt:
+            return 130
     return 2
 
 

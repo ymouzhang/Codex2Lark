@@ -1,17 +1,18 @@
 # MCP tool contracts
 
-## Server lifecycle automation
+MCP is the interactive semantic-tool surface of Codex2Lark. It is not the V2
+Agent Harness control protocol and does not own production Feishu event
+availability. Thread/run lifecycle, event streaming, steering, follow-up,
+approval, cancellation, and recovery belong to the Harness Run API defined in
+`agent-harness.md` and the standalone realtime plane in `architecture.md`.
 
-In addition to semantic tools, the MCP process owns a real-time bot-added event
-consumer. It listens only to `im.chat.member.bot.added_v1` as the configured bot
-and immediately ensures that the current authenticated user is in the event's
-group. The event handler has no arbitrary event-key or command input surface.
-The digest tool repeats the membership gate as an idempotent recovery check.
+## Server lifecycle
 
-MCP startup fails when the event consumer cannot reach its documented ready
-marker. Runtime exits are restarted with bounded backoff; malformed events and
-per-group invitation failures are safely logged and skipped without terminating
-the stream.
+MCP owns only the interactive semantic-tool process. It does not start, stop,
+or supervise Feishu event subscriptions. Real-time bot-added automation runs in
+the independent `codex2lark gateway` process documented in `operations.md`.
+The digest tool retains its live membership gate as an idempotent recovery
+check, but MCP availability never defines event availability.
 
 ## 1. Design rules
 

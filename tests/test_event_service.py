@@ -6,23 +6,22 @@ from typing import Any
 
 import pytest
 
-import codex2lark.event_service as event_module
-from codex2lark.errors import Codex2LarkError
-from codex2lark.event_service import BOT_ADDED_EVENT_KEY, BotAddedEventSupervisor
-from codex2lark.lark_cli import LarkCli
+import codex2lark.realtime.source as event_module
+from codex2lark.adapters.lark_cli import LarkCli
+from codex2lark.core.errors import Codex2LarkError
+from codex2lark.realtime.delivery import EventReference
+from codex2lark.realtime.handlers import BOT_ADDED_EVENT_KEY
+from codex2lark.realtime.source import LarkLongConnectionEventSource
 
 
-class FakeMembership:
+class FakePublisher:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, object]] = []
+        self.references: list[EventReference] = []
         self.called = asyncio.Event()
 
-    async def ensure_current_user(
-        self, *, chat_id: str, chat_identity: object
-    ) -> dict[str, object]:
-        self.calls.append((chat_id, chat_identity))
+    async def publish(self, reference: EventReference) -> None:
+        self.references.append(reference)
         self.called.set()
-        return {"status": "added" if len(self.calls) == 1 else "already_member"}
 
 
 class FakeStdin:
@@ -95,22 +94,24 @@ def install_processes(
 
 
 @pytest.mark.asyncio
-async def test_supervisor_handles_bot_added_event_and_stops_gracefully(
+async def test_source_publishes_bot_added_reference_and_stops_gracefully(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     process = FakeProcess()
     calls = install_processes(monkeypatch, process)
-    membership = FakeMembership()
-    supervisor = BotAddedEventSupervisor(  # type: ignore[arg-type]
-        LarkCli("lark-cli"), membership, shutdown_timeout_seconds=0.5
+    publisher = FakePublisher()
+    source = LarkLongConnectionEventSource(
+        LarkCli("lark-cli"), publisher.publish, shutdown_timeout_seconds=0.5
     )
 
-    await supervisor.start()
+    await source.start()
     process.feed_event(bot_added_event())
-    await asyncio.wait_for(membership.called.wait(), timeout=1)
-    await supervisor.stop()
+    await asyncio.wait_for(publisher.called.wait(), timeout=1)
+    await source.stop()
 
-    assert membership.calls[0][0] == "oc_group"
+    assert publisher.references == [
+        EventReference(event_id="evt_1", event_type=BOT_ADDED_EVENT_KEY, chat_id="oc_group")
+    ]
     assert calls[0][0] == (
         "lark-cli",
         "event",
@@ -124,25 +125,25 @@ async def test_supervisor_handles_bot_added_event_and_stops_gracefully(
 
 
 @pytest.mark.asyncio
-async def test_duplicate_events_repeat_the_live_idempotent_membership_gate(
+async def test_duplicate_events_are_published_for_idempotent_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     process = FakeProcess()
     install_processes(monkeypatch, process)
-    membership = FakeMembership()
-    supervisor = BotAddedEventSupervisor(  # type: ignore[arg-type]
-        LarkCli("lark-cli"), membership, shutdown_timeout_seconds=0.5
+    publisher = FakePublisher()
+    source = LarkLongConnectionEventSource(
+        LarkCli("lark-cli"), publisher.publish, shutdown_timeout_seconds=0.5
     )
 
-    await supervisor.start()
+    await source.start()
     process.feed_event(bot_added_event())
     process.feed_event(bot_added_event())
     async with asyncio.timeout(1):
-        while len(membership.calls) < 2:
+        while len(publisher.references) < 2:
             await asyncio.sleep(0)
-    await supervisor.stop()
+    await source.stop()
 
-    assert [chat_id for chat_id, _ in membership.calls] == ["oc_group", "oc_group"]
+    assert [reference.chat_id for reference in publisher.references] == ["oc_group", "oc_group"]
 
 
 @pytest.mark.asyncio
@@ -151,18 +152,18 @@ async def test_malformed_event_is_skipped_without_stopping_stream(
 ) -> None:
     process = FakeProcess()
     install_processes(monkeypatch, process)
-    membership = FakeMembership()
-    supervisor = BotAddedEventSupervisor(  # type: ignore[arg-type]
-        LarkCli("lark-cli"), membership, shutdown_timeout_seconds=0.5
+    publisher = FakePublisher()
+    source = LarkLongConnectionEventSource(
+        LarkCli("lark-cli"), publisher.publish, shutdown_timeout_seconds=0.5
     )
 
-    await supervisor.start()
+    await source.start()
     process.feed_event({"event": {"chat_id": "not-a-chat"}})
     process.feed_event(bot_added_event(chat_id="oc_valid"))
-    await asyncio.wait_for(membership.called.wait(), timeout=1)
-    await supervisor.stop()
+    await asyncio.wait_for(publisher.called.wait(), timeout=1)
+    await source.stop()
 
-    assert membership.calls[0][0] == "oc_valid"
+    assert publisher.references[0].chat_id == "oc_valid"
 
 
 @pytest.mark.asyncio
@@ -185,12 +186,12 @@ async def test_start_fails_when_consumer_exits_before_ready(
     )
     process.finish(3)
     install_processes(monkeypatch, process)
-    supervisor = BotAddedEventSupervisor(  # type: ignore[arg-type]
-        LarkCli("lark-cli"), FakeMembership(), startup_timeout_seconds=0.5
+    source = LarkLongConnectionEventSource(
+        LarkCli("lark-cli"), FakePublisher().publish, startup_timeout_seconds=0.5
     )
 
     with pytest.raises(Codex2LarkError, match="before becoming ready"):
-        await supervisor.start()
+        await source.start()
 
 
 @pytest.mark.asyncio
@@ -199,16 +200,16 @@ async def test_runtime_exit_restarts_consumer(monkeypatch: pytest.MonkeyPatch) -
     second = FakeProcess()
     calls = install_processes(monkeypatch, first, second)
     monkeypatch.setattr(event_module, "_RESTART_DELAYS", (0.01,))
-    supervisor = BotAddedEventSupervisor(  # type: ignore[arg-type]
-        LarkCli("lark-cli"), FakeMembership(), shutdown_timeout_seconds=0.5
+    source = LarkLongConnectionEventSource(
+        LarkCli("lark-cli"), FakePublisher().publish, shutdown_timeout_seconds=0.5
     )
 
-    await supervisor.start()
+    await source.start()
     first.finish(4)
     async with asyncio.timeout(1):
         while len(calls) < 2:
             await asyncio.sleep(0)
-    await supervisor.stop()
+    await source.stop()
 
     assert len(calls) == 2
     assert second.stdin.closed is True

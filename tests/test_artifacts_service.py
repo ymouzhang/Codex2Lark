@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from codex2lark.artifacts_service import ArtifactsService
-from codex2lark.lark_cli import LarkCliResult
-from codex2lark.models import CreateBaseRequest, CreateWorkbookRequest, SheetSpec
+from codex2lark.adapters.lark_cli import LarkCliResult
+from codex2lark.core.models import CreateBaseRequest, CreateWorkbookRequest, SheetSpec
+from codex2lark.services.artifacts import ArtifactsService
 
 
 class ManagedDrive:

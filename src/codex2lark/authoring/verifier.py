@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from .models import VerificationPolicy
+from ..core.models import VerificationPolicy
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,10 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from codex2lark.docs_service import DocsService
-from codex2lark.errors import AmbiguityError, ConflictError
-from codex2lark.lark_cli import LarkCli, LarkCliResult
-from codex2lark.models import (
+from codex2lark.adapters.lark_cli import LarkCli, LarkCliResult
+from codex2lark.core.errors import AmbiguityError, ConflictError
+from codex2lark.core.models import (
     DocumentSpec,
     EditCommand,
     EditDocumentRequest,
@@ -19,6 +18,7 @@ from codex2lark.models import (
     RichTextSpan,
     VerificationPolicy,
 )
+from codex2lark.services.docs import DocsService
 
 
 class StubDrive:

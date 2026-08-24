@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from codex2lark.drive_service import DriveService
-from codex2lark.errors import AmbiguityError, NotFoundError
-from codex2lark.lark_cli import LarkCliResult
-from codex2lark.models import Identity
+from codex2lark.adapters.lark_cli import LarkCliResult
+from codex2lark.core.errors import AmbiguityError, NotFoundError
+from codex2lark.core.models import Identity
+from codex2lark.services.drive import DriveService
 
 
 def search_result(*items: dict[str, object]) -> LarkCliResult:

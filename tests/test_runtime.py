@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from codex2lark.errors import Codex2LarkError
-from codex2lark.runtime import EphemeralWorkspace
+from codex2lark.core.errors import Codex2LarkError
+from codex2lark.core.runtime import EphemeralWorkspace
 
 
 def test_workspace_is_removed_after_success() -> None:

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .errors import Codex2LarkError, ErrorCategory, LarkCliError
+from ..core.errors import Codex2LarkError, ErrorCategory, LarkCliError
 
 _SECRET_PATTERN = re.compile(
     r"(?i)(app_secret|access_token|refresh_token|authorization)"

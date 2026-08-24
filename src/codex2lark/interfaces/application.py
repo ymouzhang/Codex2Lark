@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .artifacts_service import ArtifactsService
-from .chat_digest_service import ChatDigestService
-from .chat_membership_service import ChatMembershipService
-from .docs_service import DocsService
-from .drive_service import DriveService
-from .event_service import BotAddedEventSupervisor
-from .lark_cli import LarkCli
-from .notification_service import NotificationService
+from ..adapters.lark_cli import LarkCli
+from ..services.artifacts import ArtifactsService
+from ..services.chat_digest import ChatDigestService
+from ..services.chat_membership import ChatMembershipService
+from ..services.docs import DocsService
+from ..services.drive import DriveService
+from ..services.notification import NotificationService
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +17,6 @@ class Application:
     drive: DriveService
     notifier: NotificationService
     membership: ChatMembershipService
-    events: BotAddedEventSupervisor
     docs: DocsService
     artifacts: ArtifactsService
     chat_digest: ChatDigestService
@@ -35,7 +33,6 @@ def create_application(lark: LarkCli | None = None) -> Application:
         drive=drive,
         notifier=notifier,
         membership=membership,
-        events=BotAddedEventSupervisor(client, membership),
         docs=docs,
         artifacts=ArtifactsService(client, docs, drive),
         chat_digest=ChatDigestService(client, docs, drive, notifier, membership),
