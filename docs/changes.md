@@ -3,6 +3,11 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Declared the durable V3 Gateway as the only executable group-runtime
+  semantics and removed the superseded V2 `realtime` package, volatile broker,
+  composition root, and their implementation-specific tests. Historical
+  architecture research remains clearly non-normative.
+
 - Restricted durable child artifacts with any Feishu business-data capability
   to content-free completion/verification/resource references; document,
   Sheet, Base, Whiteboard, and Drive-derived summaries and claims must be

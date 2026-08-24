@@ -4,7 +4,7 @@ MCP is the interactive semantic-tool surface of Codex2Lark. It is not the V2
 Agent Harness control protocol and does not own production Feishu event
 availability. Thread/run lifecycle, event streaming, steering, follow-up,
 approval, cancellation, and recovery belong to the Harness Run API defined in
-`agent-harness.md` and the standalone realtime plane in `architecture.md`.
+`agent-harness.md` and the standalone V3 Gateway in `architecture.md`.
 
 ## Server lifecycle
 

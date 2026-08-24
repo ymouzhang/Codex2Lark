@@ -8,6 +8,12 @@ and Gateway scheduling contracts may be replaced. Compatibility with the V2
 implementation is not a design constraint. Migration is required only for
 operator configuration and business data explicitly selected for retention.
 
+The V2 `realtime` package and its volatile queue/composition root are removed
+once the V3 Gateway owns production event admission. The repository does not
+ship two selectable group-runtime semantics. Historical research may describe
+V2 decisions, but executable imports and operator commands resolve only to the
+V3 durable composition root in `bootstrap.gateway`.
+
 The `gateway` executable now uses the V3 durable kernel, service-native Feishu
 IM transport, live context reconciliation, model Harness, task worker, and
 outbox delivery path. Authoring capability plugins, full multi-Agent graph
