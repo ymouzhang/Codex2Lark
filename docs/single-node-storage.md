@@ -153,6 +153,13 @@ key and verifies the observable result where supported.
 Stores bounded operation keys, states, result references, and expiry. It never
 stores a full response body solely for convenience.
 
+An operation claim is checked before expiry deletion. Completed claims remain
+replayable until retention GC removes them. An expired incomplete claim is
+atomically reassigned in `reconciliation_required` state, not deleted and
+treated as a fresh write. The deterministic key contains no plaintext content;
+arguments contribute only through a canonical SHA-256 digest. The row stores a
+verified resource reference, never the write body or tool observation.
+
 ### Multi-Agent coordination
 
 The kernel additionally owns typed `runtime_graphs`, `runtime_agent_nodes`,

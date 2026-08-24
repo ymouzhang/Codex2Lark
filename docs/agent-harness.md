@@ -327,6 +327,21 @@ checkpoint exists, resume starts at its `next_turn`. A terminal run is never
 resumed. Provider response IDs are diagnostics, not permission to trust a
 partially observed model response or skip deterministic tool idempotency.
 
+For every production write/destructive tool call, the executor derives a
+stable operation key from the trusted run/node binding, tool ID and schema
+version, plus canonical validated arguments. It durably claims that key before
+calling Feishu. A verified resource reference completes the claim; a replay of
+a completed operation returns the verified reference without writing again.
+
+If the process or transport fails after the claim but before completion, the
+claim becomes `reconciliation_required` after its short execution lease. The
+tool must then perform a read-only, capability-specific live inspection. It may
+complete the old operation when the intended effect is proven, or retry only
+when absence/no-effect is proven and the tool declares replay safe. An
+in-progress claim or inconclusive inspection returns an
+`ambiguous_external_effect` observation and blocks blind replay. The model
+cannot clear, replace, or bypass an operation claim.
+
 ## 9. Model provider boundary
 
 The Harness uses a provider-neutral interface:

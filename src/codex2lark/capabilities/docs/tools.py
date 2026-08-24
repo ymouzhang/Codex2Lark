@@ -14,7 +14,7 @@ from codex2lark.core.models import (
     ResourceRef,
     SearchDocumentsRequest,
 )
-from codex2lark.runtime.tools import SemanticTool, ToolContext
+from codex2lark.runtime.tools import SemanticTool, ToolContext, ToolReconciliation
 from codex2lark.runtime.types import (
     ToolDefinition,
     ToolEffect,
@@ -96,6 +96,19 @@ class _DocumentTool:
             f"{self.definition.tool_id}.read_back",
             str(status or "live read completed"),
             self._resource_refs(observation),
+        )
+
+    async def reconcile(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> ToolReconciliation:
+        del arguments, context
+        return ToolReconciliation(
+            {},
+            VerificationRecord(
+                VerificationState.UNCERTAIN,
+                f"{self.definition.tool_id}.reconcile",
+                "the live effect cannot be identified conclusively",
+            ),
         )
 
     def _request(self, arguments: dict[str, object]) -> object:
@@ -197,6 +210,55 @@ class CreateDocumentTool(_DocumentTool):
         assert isinstance(request, CreateDocumentRequest)
         return await self._service.create(request)
 
+    async def reconcile(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> ToolReconciliation:
+        request = self._request(arguments)
+        found = await self._service.search(
+            SearchDocumentsRequest(title=request.title, identity=self._identity)
+        )
+        if found.get("scope") != "managed_folder":
+            return await super().reconcile(arguments, context)
+        matches = found.get("matches")
+        if not isinstance(matches, list) or len(matches) != 1:
+            return await super().reconcile(arguments, context)
+        candidate = matches[0]
+        if not isinstance(candidate, dict):
+            return await super().reconcile(arguments, context)
+        reference = candidate.get("url") or candidate.get("token")
+        if not isinstance(reference, str) or not reference:
+            return await super().reconcile(arguments, context)
+        inspected = await self._service.inspect(
+            InspectDocumentRequest(
+                resource=_resource(reference),
+                format=DocumentFormat.XML,
+                detail=DetailLevel.FULL,
+                identity=self._identity,
+            )
+        )
+        required = arguments.get("required_text")
+        content = str(inspected.get("data", ""))
+        if (
+            not isinstance(required, list)
+            or not required
+            or not all(isinstance(item, str) and item in content for item in required)
+        ):
+            return await super().reconcile(arguments, context)
+        observation = {
+            **inspected,
+            "resource": candidate,
+            "verification": {"status": "passed", "reconciled": True},
+        }
+        return ToolReconciliation(
+            observation,
+            VerificationRecord(
+                VerificationState.VERIFIED,
+                f"{self.definition.tool_id}.reconcile",
+                "existing live document matches the interrupted create intent",
+                (reference,),
+            ),
+        )
+
 
 class EditDocumentTool(_DocumentTool):
     definition = ToolDefinition(
@@ -259,6 +321,45 @@ class EditDocumentTool(_DocumentTool):
     async def _invoke(self, request: object) -> dict[str, Any]:
         assert isinstance(request, EditDocumentRequest)
         return await self._service.edit(request)
+
+    async def reconcile(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> ToolReconciliation:
+        request = self._request(arguments)
+        resource = request.resource
+        if resource is None and request.document_title is not None:
+            found = await self._service.search(
+                SearchDocumentsRequest(title=request.document_title, identity=self._identity)
+            )
+            matches = found.get("matches")
+            if isinstance(matches, list) and len(matches) == 1 and isinstance(matches[0], dict):
+                reference = matches[0].get("url") or matches[0].get("token")
+                if isinstance(reference, str) and reference:
+                    resource = _resource(reference)
+        required = arguments.get("required_text")
+        if resource is None or not isinstance(required, list) or not required:
+            return await super().reconcile(arguments, context)
+        inspected = await self._service.inspect(
+            InspectDocumentRequest(
+                resource=resource,
+                format=DocumentFormat.XML,
+                detail=DetailLevel.FULL,
+                identity=self._identity,
+            )
+        )
+        content = str(inspected.get("data", ""))
+        if not all(isinstance(item, str) and item in content for item in required):
+            return await super().reconcile(arguments, context)
+        reference = resource.value
+        return ToolReconciliation(
+            {**inspected, "verification": {"status": "passed", "reconciled": True}},
+            VerificationRecord(
+                VerificationState.VERIFIED,
+                f"{self.definition.tool_id}.reconcile",
+                "the required live document state already exists",
+                (reference,),
+            ),
+        )
 
 
 def document_tools(service: DocumentService, identity: Identity) -> list[SemanticTool]:

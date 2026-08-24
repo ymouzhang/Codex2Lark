@@ -14,7 +14,7 @@ from codex2lark.core.models import (
     WhiteboardRenderRequest,
     WriteSheetRequest,
 )
-from codex2lark.runtime.tools import SemanticTool, ToolContext
+from codex2lark.runtime.tools import SemanticTool, ToolContext, ToolReconciliation
 from codex2lark.runtime.types import (
     ToolDefinition,
     ToolEffect,
@@ -107,6 +107,19 @@ class _ArtifactTool:
             f"{self.definition.tool_id}.read_back",
             str(status or "verification missing"),
             self._resource_refs(observation),
+        )
+
+    async def reconcile(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> ToolReconciliation:
+        del arguments, context
+        return ToolReconciliation(
+            {},
+            VerificationRecord(
+                VerificationState.UNCERTAIN,
+                f"{self.definition.tool_id}.reconcile",
+                "the live artifact effect cannot be identified conclusively",
+            ),
         )
 
     def _request(self, arguments: dict[str, object]) -> object:

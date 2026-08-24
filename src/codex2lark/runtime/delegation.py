@@ -22,7 +22,7 @@ from .multi_agent import (
     NodeSpec,
 )
 from .sessions import SessionStore
-from .tools import ToolContext, ToolRegistry
+from .tools import ToolContext, ToolReconciliation, ToolRegistry
 from .types import (
     AgentDefinition,
     RunStatus,
@@ -363,4 +363,17 @@ class DelegateAgentTool:
             state=state,
             verifier_id="multi-agent.artifact",
             summary=f"delegated artifact is {state.value}",
+        )
+
+    async def reconcile(
+        self, arguments: dict[str, object], context: ToolContext
+    ) -> ToolReconciliation:
+        del arguments, context
+        return ToolReconciliation(
+            {},
+            VerificationRecord(
+                VerificationState.NOT_REQUIRED,
+                "multi-agent.artifact",
+                "delegation is not an external write",
+            ),
         )

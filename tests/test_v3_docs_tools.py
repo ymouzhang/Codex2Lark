@@ -116,6 +116,44 @@ async def test_create_binds_operator_identity_and_returns_verified_resource() ->
     assert verification.resource_refs == ("https://example.feishu.cn/docx/docx_2",)
 
 
+async def test_create_reconciliation_finds_and_verifies_existing_live_document() -> None:
+    class ReconcileDocs(FakeDocsService):
+        async def search(self, request: object) -> dict[str, Any]:
+            self.requests.append(request)
+            return {
+                "ok": True,
+                "scope": "managed_folder",
+                "matches": [
+                    {
+                        "title": "Architecture",
+                        "url": "https://example.feishu.cn/docx/docx_existing",
+                    }
+                ],
+            }
+
+        async def inspect(self, request: object) -> dict[str, Any]:
+            self.requests.append(request)
+            return {
+                "ok": True,
+                "resource": {"url": "https://example.feishu.cn/docx/docx_existing"},
+                "data": {"content": "Architecture body is present"},
+                "revision": 4,
+            }
+
+    tool = CreateDocumentTool(ReconcileDocs(), Identity.USER)  # type: ignore[arg-type]
+    result = await tool.reconcile(
+        {
+            "title": "Architecture",
+            "content_xml": "<title>Architecture</title><p>body is present</p>",
+            "required_text": ["body is present"],
+        },
+        context(),
+    )
+
+    assert result.verification.state is VerificationState.VERIFIED
+    assert result.verification.resource_refs == ("https://example.feishu.cn/docx/docx_existing",)
+
+
 def test_edit_rejects_ambiguous_target_before_service_call() -> None:
     tool = EditDocumentTool(FakeDocsService(), Identity.USER)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="exactly one"):

@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined production semantic-write idempotency using deterministic operation
+  keys, durable pre-write claims, completed-reference replay, and mandatory
+  live reconciliation after ambiguous interruption; inconclusive effects block
+  instead of being blindly repeated. Implementation area: ToolExecutor,
+  RuntimeStore, and write-tool reconciliation hooks.
+
 - Defined an explicitly confirmed, stopped-Gateway, bounded retention pass for
   due event payloads, IM mirrors and parser output, artifacts, idempotency rows,
   and reference-safe encrypted blob reclamation. Implementation area: storage

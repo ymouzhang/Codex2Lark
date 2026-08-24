@@ -30,6 +30,7 @@ class IdempotencyClaim:
     acquired: bool
     state: str
     result_ref: str | None = None
+    recovery_required: bool = False
 
 
 class RuntimeStore:
@@ -455,15 +456,28 @@ class RuntimeStore:
         now_ms: int,
     ) -> IdempotencyClaim:
         def operation(connection: sqlite3.Connection) -> IdempotencyClaim:
-            connection.execute(
-                "DELETE FROM runtime_idempotency WHERE expires_at_ms <= ?", (now_ms,)
-            )
             row = connection.execute(
-                "SELECT state, result_ref FROM runtime_idempotency WHERE idempotency_key = ?",
+                """
+                SELECT state, result_ref, expires_at_ms
+                FROM runtime_idempotency WHERE idempotency_key = ?
+                """,
                 (key,),
             ).fetchone()
             if row is not None:
-                return IdempotencyClaim(False, row["state"], row["result_ref"])
+                if row["state"] == "completed":
+                    return IdempotencyClaim(False, "completed", row["result_ref"])
+                if row["expires_at_ms"] > now_ms:
+                    return IdempotencyClaim(False, row["state"], row["result_ref"])
+                connection.execute(
+                    """
+                    UPDATE runtime_idempotency
+                    SET state = 'reconciliation_required', owner = ?,
+                        expires_at_ms = ?, updated_at_ms = ?
+                    WHERE idempotency_key = ?
+                    """,
+                    (owner, expires_at_ms, now_ms, key),
+                )
+                return IdempotencyClaim(True, "reconciliation_required", None, True)
             connection.execute(
                 """
                 INSERT INTO runtime_idempotency(
@@ -490,7 +504,8 @@ class RuntimeStore:
                 """
                 UPDATE runtime_idempotency
                 SET state = 'completed', result_ref = ?, updated_at_ms = ?
-                WHERE idempotency_key = ? AND state = 'claimed' AND owner = ?
+                WHERE idempotency_key = ?
+                  AND state IN ('claimed', 'reconciliation_required') AND owner = ?
                 """,
                 (result_ref, now_ms, key, owner),
             )

@@ -311,7 +311,39 @@ async def test_idempotency_claim_is_owned_and_expires(tmp_path: Path) -> None:
             expires_at_ms=400,
             now_ms=201,
         )
-        assert after_expiry.acquired
+        assert not after_expiry.acquired
+        assert after_expiry.state == "completed"
+        assert after_expiry.result_ref == "docx_123"
+    finally:
+        await database.close()
+
+
+async def test_expired_incomplete_idempotency_claim_requires_reconciliation(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "runtime.db")
+    await database.open()
+    store = RuntimeStore(database, cipher())
+    try:
+        await store.claim_idempotency(
+            key="write-1",
+            operation_kind="docs.edit",
+            owner="worker-a",
+            expires_at_ms=200,
+            now_ms=100,
+        )
+
+        recovered = await store.claim_idempotency(
+            key="write-1",
+            operation_kind="docs.edit",
+            owner="worker-b",
+            expires_at_ms=400,
+            now_ms=200,
+        )
+
+        assert recovered.acquired
+        assert recovered.recovery_required
+        assert recovered.state == "reconciliation_required"
     finally:
         await database.close()
 

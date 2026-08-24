@@ -266,6 +266,7 @@ def create_v3_gateway(
             business_registry,
             policy,
             approvals,
+            runtime_store,
         ),
         resources=ResourceLoader([]),
         context=ContextEngine(),
@@ -290,7 +291,7 @@ def create_v3_gateway(
     harness = AgentHarness(
         model=selected_model,
         tools=registry,
-        tool_executor=ToolExecutor(registry, policy, approvals),
+        tool_executor=ToolExecutor(registry, policy, approvals, runtime_store),
         resources=ResourceLoader([]),
         context=ContextEngine(),
         sessions=sessions,
