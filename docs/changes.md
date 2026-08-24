@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Specified the first V3 Feishu IM implementation boundary before code: official
+  Channel SDK transport, Codex2Lark-owned normalized values, explicit bot
+  mention matching, encrypted typed mirror storage, and replay-safe admission
+  with an acknowledgement outbox intent.
+
 - Defined the Runtime API 1 multi-Agent persistence and transaction boundaries
   before implementation: atomic graph/root creation and child spawn, scoped
   tools/budgets/context, acyclic dependencies, durable mailboxes and artifacts,

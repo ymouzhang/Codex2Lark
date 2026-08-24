@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -276,8 +276,80 @@ CREATE TABLE IF NOT EXISTS runtime_budget_ledger (
 );
 """
 
+IM_SCHEMA = """
+CREATE TABLE IF NOT EXISTS im_chats (
+    tenant_key TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    name_ciphertext BLOB,
+    chat_mode TEXT NOT NULL,
+    enabled INTEGER NOT NULL,
+    bot_member_state TEXT NOT NULL,
+    access_state TEXT NOT NULL,
+    last_reconciled_at_ms INTEGER NOT NULL,
+    retention_policy_id TEXT NOT NULL,
+    purge_after_ms INTEGER,
+    PRIMARY KEY (tenant_key, app_id, chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS im_messages (
+    tenant_key TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    thread_id TEXT,
+    root_id TEXT,
+    parent_id TEXT,
+    sender_type TEXT NOT NULL,
+    sender_id TEXT NOT NULL,
+    sender_name_ciphertext BLOB,
+    message_type TEXT NOT NULL,
+    content_ciphertext BLOB NOT NULL,
+    mentions_ciphertext BLOB NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at_source_ms INTEGER NOT NULL,
+    updated_at_source_ms INTEGER NOT NULL,
+    is_recalled INTEGER NOT NULL,
+    is_deleted INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL,
+    last_reconciled_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER,
+    PRIMARY KEY (tenant_key, app_id, message_id),
+    FOREIGN KEY (tenant_key, app_id, chat_id)
+      REFERENCES im_chats(tenant_key, app_id, chat_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS im_messages_context_idx
+ON im_messages(tenant_key, app_id, chat_id, created_at_source_ms, message_id);
+
+CREATE TABLE IF NOT EXISTS im_attachments (
+    tenant_key TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    resource_key TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    filename_ciphertext BLOB,
+    media_type TEXT,
+    declared_size INTEGER,
+    blob_id TEXT,
+    download_state TEXT NOT NULL,
+    parse_state TEXT NOT NULL,
+    parser_id TEXT,
+    parser_version TEXT,
+    parsed_content_ciphertext BLOB,
+    parsed_content_hash TEXT,
+    warning_code TEXT,
+    expires_at_ms INTEGER,
+    PRIMARY KEY (tenant_key, app_id, message_id, resource_key),
+    FOREIGN KEY (tenant_key, app_id, message_id)
+      REFERENCES im_messages(tenant_key, app_id, message_id) ON DELETE CASCADE
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
     (3, MULTI_AGENT_SCHEMA),
+    (4, IM_SCHEMA),
 )

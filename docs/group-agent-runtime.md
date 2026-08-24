@@ -59,6 +59,34 @@ A message starts an Agent run only when all conditions hold:
 Bot-authored messages, ordinary unaddressed chat, edited-event echoes, malformed
 events, and duplicate deliveries do not invoke the model.
 
+### Runtime API 1 IM boundary
+
+The production transport uses the official `lark-channel-sdk` package pinned to
+`1.0.0`. It runs in WebSocket mode with strict security limits, resolves the
+connected bot identity before readiness, and passes normalized values through a
+Codex2Lark-owned adapter. SDK objects, raw OpenAPI clients, and SDK-managed cache
+paths never cross the plugin boundary or become model tools.
+
+The plugin's canonical inbound value contains tenant/app/event identity, chat
+and message identity, optional thread/root/parent identity, sender identity and
+type, message type, safe normalized body text, explicit mention identities,
+attachment references, source create/update times, and receive time. Exact
+admission compares the configured bot open ID with the explicit mention list;
+an SDK convenience boolean is not sufficient evidence.
+
+Admission is split into two durable operations with safe replay semantics:
+
+1. upsert the encrypted normalized chat/message/attachment mirror using source
+   update time and tombstone precedence;
+2. atomically insert the normalized runtime event, one pending task, and one
+   acknowledgement outbox intent.
+
+A crash between the two operations may leave an unused mirror row but cannot
+acknowledge forgotten work. Redelivery completes admission. The runtime event's
+`(tenant, app, event_id)` uniqueness prevents a second task or acknowledgement.
+Ignored events return a typed reason and create neither a task nor an outbox
+intent.
+
 ## 4. Acknowledgement and terminal replies
 
 After admission and durable task creation, the bot replies to the source message
