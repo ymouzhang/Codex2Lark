@@ -62,6 +62,24 @@ The Harness does not own:
 
 ## 3. Core abstractions
 
+### V3 Runtime API 1 value contract
+
+The first implementation uses immutable typed values at every Harness boundary:
+
+```text
+ModelRequest    run/node identity, ordered ModelMessage[], ToolDefinition[], budget snapshot
+ModelResponse   assistant text, zero or more ToolCall values, usage, provider response ID
+ToolCall        call ID, semantic tool ID/version, strict object arguments
+ToolResult      call ID, typed observation, error category, effect class, verification
+RunEvent        run ID, monotonic sequence, event type, encrypted typed payload, source time
+Checkpoint      run ID, definition/resource versions, next turn, messages, verified effects,
+                blockers, source versions, budget snapshot, compactor version
+AgentOutcome    terminal state, user-visible summary, verified resource references, warnings
+```
+
+Model providers never execute tools. Tools never decide the terminal run state.
+The Harness validates and sequences both.
+
 ### AgentDefinition
 
 A versioned immutable definition loaded at run start:
@@ -79,6 +97,11 @@ verification_policy
 retention_policy
 eval_suite_version
 ```
+
+The Runtime API 1 definition also contains hard maximum turns, context tokens,
+tool calls, external writes, wall time, and cost, plus a declared model profile,
+tool allowlist, required resource packages, and whether completion requires at
+least one verified external effect.
 
 A running turn never silently changes definition version. New events may use a
 new version after rollout; an in-flight run remains reproducible against the
@@ -289,6 +312,13 @@ invalid or freshness-sensitive evidence, inspects uncertain external writes,
 and re-enters the Agent loop. Stable operation keys and read-back verification
 prevent blind replay. The storage and invalidation contract is defined in
 [single-node-storage.md](single-node-storage.md).
+
+Run creation, every lifecycle transition, every tool request/result, every
+compaction, and terminal outcome append one monotonically sequenced event in the
+same serialized store. A checkpoint is written only after a complete model turn
+and all of that turn's tool results. Recovery rejects a checkpoint when its
+AgentDefinition, resource package, policy, tool schema, source version, or
+compactor version is incompatible.
 
 ## 9. Model provider boundary
 

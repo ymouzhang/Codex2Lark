@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the Runtime API 1 one-node Harness values before implementation:
+  immutable model/tool/result/outcome boundaries, monotonic encrypted RunEvents,
+  complete-turn checkpoints, hard budgets, semantic tool policy, and verified
+  external-effect completion.
+
 - Selected the Phase 1 storage primitives before implementation: serialized
   SQLite access, WAL transactions, durable leases/idempotency/outbox, owner-only
   data paths, and versioned AES-256-GCM envelope encryption with an externally

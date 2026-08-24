@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -125,3 +125,22 @@ CREATE TABLE IF NOT EXISTS runtime_idempotency (
     updated_at_ms INTEGER NOT NULL
 );
 """
+
+SESSION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runtime_checkpoints (
+    run_id TEXT PRIMARY KEY,
+    payload_ciphertext BLOB NOT NULL,
+    next_turn INTEGER NOT NULL,
+    agent_id TEXT NOT NULL,
+    agent_version INTEGER NOT NULL,
+    compactor_version INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES runtime_runs(run_id) ON DELETE CASCADE
+);
+"""
+
+MIGRATIONS: tuple[tuple[int, str], ...] = (
+    (1, INITIAL_SCHEMA),
+    (2, SESSION_SCHEMA),
+)

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar, cast
 
-from .migrations import INITIAL_SCHEMA, SCHEMA_VERSION
+from .migrations import MIGRATIONS
 
 T = TypeVar("T")
 
@@ -179,15 +179,26 @@ class SQLiteDatabase:
 
     @staticmethod
     def _migrate(connection: sqlite3.Connection) -> None:
-        connection.executescript(INITIAL_SCHEMA)
-        checksum = hashlib.sha256(INITIAL_SCHEMA.encode("utf-8")).hexdigest()
-        row = connection.execute(
-            "SELECT checksum FROM runtime_migrations WHERE version = ?", (SCHEMA_VERSION,)
-        ).fetchone()
-        if row is not None and row["checksum"] != checksum:
-            raise RuntimeError("database migration checksum mismatch")
-        if row is None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_migrations (
+                version INTEGER PRIMARY KEY,
+                checksum TEXT NOT NULL,
+                applied_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+        for version, script in MIGRATIONS:
+            checksum = hashlib.sha256(script.encode("utf-8")).hexdigest()
+            row = connection.execute(
+                "SELECT checksum FROM runtime_migrations WHERE version = ?", (version,)
+            ).fetchone()
+            if row is not None:
+                if row["checksum"] != checksum:
+                    raise RuntimeError("database migration checksum mismatch")
+                continue
+            connection.executescript(script)
             connection.execute(
                 "INSERT INTO runtime_migrations(version, checksum, applied_at_ms) VALUES (?, ?, ?)",
-                (SCHEMA_VERSION, checksum, int(time.time() * 1000)),
+                (version, checksum, int(time.time() * 1000)),
             )
