@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined enforceable active wall-time and truthful external-effect completion
+  before implementation. The Harness persists cumulative monotonic execution,
+  bounds provider/tool awaits, and fails deterministically on exhaustion; every
+  write/destructive result lacking read-back verification is durably unresolved
+  and model prose cannot convert it into completion. Implementation area:
+  Harness checkpoints, encrypted checkpoint serialization, outcome gate, and
+  direct timeout/write-verification tests.
+
 - Defined trusted IM admission authorization before implementation. The default
   remains bot-present groups plus human actors, with optional exact chat/actor
   allowlists; disabled/revoked chat state overrides configuration, and denial

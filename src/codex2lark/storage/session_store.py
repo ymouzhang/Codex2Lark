@@ -359,6 +359,7 @@ class SQLiteSessionStore:
             "consumed_budget": checkpoint.consumed_budget,
             "compactor_version": checkpoint.compactor_version,
             "applied_control_ids": list(checkpoint.applied_control_ids),
+            "unresolved_external_effects": list(checkpoint.unresolved_external_effects),
         }
 
     @staticmethod
@@ -401,6 +402,9 @@ class SQLiteSessionStore:
             consumed_budget={str(k): int(v) for k, v in value["consumed_budget"].items()},
             compactor_version=int(value["compactor_version"]),
             applied_control_ids=tuple(str(item) for item in value.get("applied_control_ids", [])),
+            unresolved_external_effects=tuple(
+                str(item) for item in value.get("unresolved_external_effects", [])
+            ),
         )
 
     @staticmethod

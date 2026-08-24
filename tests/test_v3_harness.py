@@ -184,7 +184,20 @@ class ParallelReadTool:
         raise AssertionError("read tools do not reconcile writes")
 
 
-def definition(*, require_verified: bool = True, max_turns: int = 4) -> AgentDefinition:
+def definition(
+    *,
+    require_verified: bool = True,
+    max_turns: int = 4,
+    wall_time_ms: int | None = None,
+) -> AgentDefinition:
+    budgets = [
+        BudgetLimit(BudgetKind.MODEL_TOKENS, 10_000),
+        BudgetLimit(BudgetKind.TOOL_CALLS, 5),
+        BudgetLimit(BudgetKind.EXTERNAL_WRITES, 3),
+        BudgetLimit(BudgetKind.COST_MICROS, 1_000),
+    ]
+    if wall_time_ms is not None:
+        budgets.append(BudgetLimit(BudgetKind.WALL_TIME_MS, wall_time_ms))
     return AgentDefinition(
         agent_id="codex2lark-default",
         version=1,
@@ -192,12 +205,7 @@ def definition(*, require_verified: bool = True, max_turns: int = 4) -> AgentDef
         model_profile="test-model",
         tool_ids=("docs.create",),
         resource_packages=("authoring",),
-        budget_limits=(
-            BudgetLimit(BudgetKind.MODEL_TOKENS, 10_000),
-            BudgetLimit(BudgetKind.TOOL_CALLS, 5),
-            BudgetLimit(BudgetKind.EXTERNAL_WRITES, 3),
-            BudgetLimit(BudgetKind.COST_MICROS, 1_000),
-        ),
+        budget_limits=tuple(budgets),
         max_turns=max_turns,
         max_context_tokens=2_000,
         require_verified_external_effect=require_verified,
@@ -358,7 +366,127 @@ async def test_harness_refuses_unverified_completion() -> None:
     outcome = await harness.run(request(), definition(), now_ms=100)
 
     assert outcome.status is RunStatus.FAILED
-    assert outcome.warnings == ("verification_missing",)
+    assert outcome.warnings == ("external_effect_unverified",)
+
+
+async def test_unverified_write_blocks_completion_even_when_definition_does_not_require_write() -> (
+    None
+):
+    tool = FakeWriteTool(VerificationState.UNCERTAIN)
+    model = FakeModel(
+        [
+            ModelResponse("", (ToolCall("call-1", "docs.create", {"title": "A"}),)),
+            ModelResponse("已经完成。"),
+        ]
+    )
+    harness, sessions = build_harness(model, tool=tool)
+
+    outcome = await harness.run(request(), definition(require_verified=False), now_ms=100)
+
+    assert outcome.status is RunStatus.FAILED
+    assert outcome.warnings == ("external_effect_unverified",)
+    assert sessions.checkpoints["run-1"].unresolved_external_effects == (
+        "call-1:docs.create:uncertain",
+    )
+
+
+async def test_wall_time_budget_cancels_hanging_model_call() -> None:
+    class HangingModel:
+        async def complete(self, request: object) -> ModelResponse:
+            del request
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    registry = ToolRegistry([FakeWriteTool()])
+    sessions = InMemorySessionStore()
+    harness = AgentHarness(
+        model=HangingModel(),
+        tools=registry,
+        tool_executor=ToolExecutor(registry, AllowPolicy(), FakeApprovals()),
+        resources=ResourceLoader(
+            [ResourcePackage("authoring", "1.0.0", ("Use tools.",), ("Verify writes.",))]
+        ),
+        context=ContextEngine(),
+        sessions=sessions,
+    )
+
+    outcome = await harness.run(
+        request(),
+        definition(require_verified=False, wall_time_ms=5),
+        now_ms=100,
+    )
+
+    assert outcome.status is RunStatus.FAILED
+    assert outcome.summary == "wall_time_ms budget exceeded"
+    assert outcome.warnings == ("wall_time_budget_exhausted",)
+    assert sessions.runs["run-1"] is RunStatus.FAILED
+
+
+async def test_unverified_write_remains_blocking_after_checkpoint_resume() -> None:
+    sessions = InMemorySessionStore()
+    first, _ = build_harness(
+        FakeModel(
+            [
+                ModelResponse("", (ToolCall("call-1", "docs.create", {"title": "A"}),)),
+                ConnectionError("simulated worker loss"),
+            ]
+        ),
+        tool=FakeWriteTool(VerificationState.UNCERTAIN),
+        sessions=sessions,
+    )
+    with pytest.raises(ConnectionError, match="worker loss"):
+        await first.run(request(), definition(require_verified=False), now_ms=100)
+
+    recovered, _ = build_harness(FakeModel([ModelResponse("已经完成。")]), sessions=sessions)
+    outcome = await recovered.run(
+        request(), definition(require_verified=False), resume=True, now_ms=200
+    )
+
+    assert outcome.status is RunStatus.FAILED
+    assert outcome.warnings == ("external_effect_unverified",)
+
+
+async def test_active_wall_time_consumption_survives_checkpoint_resume() -> None:
+    class IncrementingClock:
+        def __init__(self) -> None:
+            self.value = 0
+
+        def __call__(self) -> int:
+            self.value += 1_000_000
+            return self.value
+
+    sessions = InMemorySessionStore()
+    registry = ToolRegistry([FakeWriteTool()])
+    first = AgentHarness(
+        model=FakeModel(
+            [
+                ModelResponse("", (ToolCall("call-1", "docs.create", {"title": "A"}),)),
+                ConnectionError("simulated worker loss"),
+            ]
+        ),
+        tools=registry,
+        tool_executor=ToolExecutor(registry, AllowPolicy(), FakeApprovals()),
+        resources=ResourceLoader(
+            [ResourcePackage("authoring", "1.0.0", ("Use tools.",), ("Verify writes.",))]
+        ),
+        context=ContextEngine(),
+        sessions=sessions,
+        monotonic_ns=IncrementingClock(),
+    )
+    agent = definition(require_verified=False, wall_time_ms=20)
+    with pytest.raises(ConnectionError, match="worker loss"):
+        await first.run(request(), agent, now_ms=100)
+
+    consumed = sessions.checkpoints["run-1"].consumed_budget["wall_time_ms"]
+    recovered_model = FakeModel([ModelResponse("Recovered.")])
+    recovered, _ = build_harness(recovered_model, sessions=sessions)
+    outcome = await recovered.run(request(), agent, resume=True, now_ms=200)
+
+    sent = recovered_model.requests[0]
+    assert isinstance(sent, ModelRequest)
+    assert consumed > 0
+    assert sent.remaining_budget["wall_time_ms"] == 20 - consumed
+    assert outcome.status is RunStatus.COMPLETED
 
 
 async def test_harness_policy_denial_is_a_typed_tool_observation() -> None:
@@ -714,6 +842,7 @@ async def test_sqlite_session_store_encrypts_events_and_checkpoint(tmp_path: Pat
             source_versions={"m1": "v1"},
             consumed_budget={"tool_calls": 1},
             compactor_version=1,
+            unresolved_external_effects=("call-1:docs.create:uncertain",),
         )
         await sessions.save_checkpoint(checkpoint, now_ms=3)
 

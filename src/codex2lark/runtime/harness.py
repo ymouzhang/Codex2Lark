@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from codex2lark.core.budgets import BudgetKind, BudgetLedger
 from codex2lark.core.cancellation import CancellationToken, CancelledByPolicyError
@@ -43,6 +44,54 @@ class HarnessRequest:
     evidence: tuple[ContextEvidence, ...] = ()
 
 
+_T = TypeVar("_T")
+
+
+class WallTimeBudgetExceeded(ValueError):
+    pass
+
+
+class _ActiveWallTime:
+    def __init__(self, ledger: BudgetLedger, clock_ns: Callable[[], int]) -> None:
+        self._ledger = ledger
+        self._clock_ns = clock_ns
+        self._last_ns = clock_ns()
+        self._remainder_ns = 0
+
+    def charge(self) -> None:
+        current = self._clock_ns()
+        elapsed = max(0, current - self._last_ns)
+        self._last_ns = current
+        total = self._remainder_ns + elapsed
+        elapsed_ms, self._remainder_ns = divmod(total, 1_000_000)
+        if elapsed_ms and BudgetKind.WALL_TIME_MS in self._ledger.limits:
+            try:
+                self._ledger.consume(BudgetKind.WALL_TIME_MS, elapsed_ms)
+            except ValueError as exc:
+                raise WallTimeBudgetExceeded("wall_time_ms budget exceeded") from exc
+
+    async def wait_for(self, awaitable: Awaitable[_T]) -> _T:
+        self.charge()
+        if BudgetKind.WALL_TIME_MS not in self._ledger.limits:
+            return await awaitable
+        remaining_ms = self._ledger.available(BudgetKind.WALL_TIME_MS)
+        if remaining_ms <= 0:
+            cancel = getattr(awaitable, "cancel", None)
+            close = getattr(awaitable, "close", None)
+            if callable(cancel):
+                cancel()
+            elif callable(close):
+                close()
+            raise WallTimeBudgetExceeded("wall_time_ms budget exceeded")
+        try:
+            async with asyncio.timeout(remaining_ms / 1000):
+                return await awaitable
+        except TimeoutError as exc:
+            raise WallTimeBudgetExceeded("wall_time_ms budget exceeded") from exc
+        finally:
+            self.charge()
+
+
 class AgentHarness:
     def __init__(
         self,
@@ -54,6 +103,7 @@ class AgentHarness:
         context: ContextEngine,
         sessions: SessionStore,
         controls: RunControlInbox | None = None,
+        monotonic_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
         self._model = model
         self._tools = tools
@@ -62,6 +112,7 @@ class AgentHarness:
         self._context = context
         self._sessions = sessions
         self._controls = controls
+        self._monotonic_ns = monotonic_ns
 
     async def run(
         self,
@@ -78,6 +129,7 @@ class AgentHarness:
         ledger = BudgetLedger.from_limits(list(definition.budget_limits))
         journal: tuple[ModelMessage, ...] = ()
         verified: tuple[VerificationRecord, ...] = ()
+        unresolved_external_effects: tuple[str, ...] = ()
         nonpersistable_calls: set[str] = set()
         source_versions = {item.source_ref: item.source_version for item in request.evidence}
         first_turn = 1
@@ -105,6 +157,7 @@ class AgentHarness:
                 else:
                     journal = checkpoint.messages
                     verified = checkpoint.verified_effects
+                    unresolved_external_effects = checkpoint.unresolved_external_effects
                     first_turn = checkpoint.next_turn
                     applied_control_ids.update(checkpoint.applied_control_ids)
                     if self._controls is not None and checkpoint.applied_control_ids:
@@ -135,6 +188,8 @@ class AgentHarness:
                 },
                 clock_ms,
             )
+
+        wall_time = _ActiveWallTime(ledger, self._monotonic_ns)
 
         try:
             for turn in range(first_turn, definition.max_turns + 1):
@@ -183,7 +238,7 @@ class AgentHarness:
                     },
                     clock_ms,
                 )
-                response = await self._model.complete(model_request)
+                response = await wall_time.wait_for(self._model.complete(model_request))
                 self._consume_if_limited(
                     ledger,
                     BudgetKind.MODEL_TOKENS,
@@ -238,6 +293,7 @@ class AgentHarness:
                             },
                             compactor_version=definition.compactor_version,
                             applied_control_ids=tuple(sorted(applied_control_ids)),
+                            unresolved_external_effects=unresolved_external_effects,
                         )
                         await self._sessions.save_checkpoint(checkpoint, now_ms=clock_ms)
                         await self._acknowledge_controls(
@@ -245,7 +301,12 @@ class AgentHarness:
                         )
                         pending_ack_ids.clear()
                         continue
-                    outcome = self._outcome(response.content, definition, verified)
+                    outcome = self._outcome(
+                        response.content,
+                        definition,
+                        verified,
+                        unresolved_external_effects,
+                    )
                     if await self._finish(request.run_id, outcome, clock_ms):
                         return outcome
                     continue
@@ -260,23 +321,35 @@ class AgentHarness:
                         clock_ms,
                     )
                 if self._tools.batch_parallel_safe(response.tool_calls):
-                    results = await asyncio.gather(
-                        *(
-                            self._tool_executor.execute(call, request.tool_context)
-                            for call in response.tool_calls
+                    results = await wall_time.wait_for(
+                        asyncio.gather(
+                            *(
+                                self._tool_executor.execute(call, request.tool_context)
+                                for call in response.tool_calls
+                            )
                         )
                     )
                 else:
                     results = []
                     for call in response.tool_calls:
                         results.append(
-                            await self._tool_executor.execute(call, request.tool_context)
+                            await wall_time.wait_for(
+                                self._tool_executor.execute(call, request.tool_context)
+                            )
                         )
                 for result in results:
                     if result.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE):
                         self._consume_if_limited(ledger, BudgetKind.EXTERNAL_WRITES, 1)
                     if result.verification.state is VerificationState.VERIFIED:
                         verified = (*verified, result.verification)
+                    elif result.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE):
+                        unresolved_external_effects = (
+                            *unresolved_external_effects,
+                            (
+                                f"{result.call_id}:{result.tool_id}:"
+                                f"{result.error_code or result.verification.state.value}"
+                            ),
+                        )
                     if not result.checkpoint_safe_observation:
                         nonpersistable_calls.add(result.call_id)
                     journal = (
@@ -336,6 +409,7 @@ class AgentHarness:
                     },
                     compactor_version=definition.compactor_version,
                     applied_control_ids=tuple(sorted(applied_control_ids)),
+                    unresolved_external_effects=unresolved_external_effects,
                 )
                 await self._sessions.save_checkpoint(checkpoint, now_ms=clock_ms)
                 await self._acknowledge_controls(request.task_id, pending_ack_ids, now_ms=clock_ms)
@@ -363,6 +437,14 @@ class AgentHarness:
                 applied_control_ids=tuple(pending_ack_ids),
             )
             await self._acknowledge_controls(request.task_id, pending_ack_ids, now_ms=clock_ms)
+            return outcome
+        except WallTimeBudgetExceeded as exc:
+            outcome = AgentOutcome(
+                status=RunStatus.FAILED,
+                summary=str(exc),
+                warnings=("wall_time_budget_exhausted",),
+            )
+            await self._finish(request.run_id, outcome, clock_ms)
             return outcome
         except (LookupError, ValueError, RuntimeError) as exc:
             outcome = AgentOutcome(
@@ -454,10 +536,21 @@ class AgentHarness:
         content: str,
         definition: AgentDefinition,
         verified: tuple[VerificationRecord, ...],
+        unresolved_external_effects: tuple[str, ...],
     ) -> AgentOutcome:
         verified_refs = tuple(
             reference for record in verified for reference in record.resource_refs
         )
+        if unresolved_external_effects:
+            return AgentOutcome(
+                status=RunStatus.FAILED,
+                summary=(
+                    "The Agent produced a response, but at least one external effect "
+                    "was not verified. Completion cannot be claimed safely."
+                ),
+                resource_refs=verified_refs,
+                warnings=("external_effect_unverified",),
+            )
         if definition.require_verified_external_effect and not verified:
             return AgentOutcome(
                 status=RunStatus.FAILED,

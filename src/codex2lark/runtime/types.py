@@ -161,6 +161,7 @@ class RunCheckpoint:
     consumed_budget: dict[str, int]
     compactor_version: int
     applied_control_ids: tuple[str, ...] = ()
+    unresolved_external_effects: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

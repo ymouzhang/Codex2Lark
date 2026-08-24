@@ -73,7 +73,8 @@ ToolCall        call ID, semantic tool ID/version, strict object arguments
 ToolResult      call ID, typed observation, error category, effect class, verification
 RunEvent        run ID, monotonic sequence, event type, encrypted typed payload, source time
 Checkpoint      run ID, definition/resource versions, next turn, messages, verified effects,
-                blockers, source versions, budget snapshot, compactor version
+                unresolved write effects, blockers, source versions, budget snapshot,
+                compactor version
 AgentOutcome    terminal state, user-visible summary, verified resource references, warnings
 ```
 
@@ -199,6 +200,21 @@ tool calls, context tokens, output bytes, wall time, Feishu requests, model
 cost, and external writes. A final assistant message alone does not prove task
 completion when the requested outcome includes an external write; the Outcome
 Gate requires a verified resource or a truthful blocked/failed result.
+
+`wall_time_ms` measures cumulative active Harness execution across checkpoint
+and resume. Time spent while a run is durably stopped does not consume this
+budget. The Harness charges elapsed monotonic time at every safe boundary and
+bounds each model or tool await by the remaining allowance. Exhaustion produces
+a deterministic failed outcome with `wall_time_budget_exhausted`; it must not
+leave an unbounded provider or tool coroutine running.
+
+The Harness durably records every write/destructive tool call whose result is
+not read-back verified. A policy denial, validation failure, upstream failure,
+or `UNCERTAIN`/`FAILED` verification remains an unresolved write effect. Once a
+run has such an effect, model prose can never turn it into `completed`; the
+terminal outcome is failed with `external_effect_unverified`. Successfully
+verified writes retain their resource references. A run that used only
+read-only tools may still complete normally.
 
 Read-only tools may execute in parallel when they are independent. Mutations of
 one Feishu resource execute sequentially. A mixed tool batch becomes sequential
