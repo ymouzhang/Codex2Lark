@@ -11,6 +11,8 @@ class IMAdmissionReason(StrEnum):
     BOT_NOT_MENTIONED = "bot_not_mentioned"
     EMPTY_REQUEST = "empty_request"
     ACCESS_REVOKED = "access_revoked"
+    DISABLED_GROUP = "disabled_group"
+    UNAUTHORIZED_ACTOR = "unauthorized_actor"
     MALFORMED = "malformed"
 
 

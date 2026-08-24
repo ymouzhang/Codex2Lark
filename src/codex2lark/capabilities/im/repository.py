@@ -7,13 +7,39 @@ from typing import Any
 from codex2lark.storage.crypto import EnvelopeCipher
 from codex2lark.storage.database import SQLiteDatabase
 
-from .models import IncomingMessage, Mention, StoredAttachment, StoredMessage
+from .models import (
+    IMAdmissionReason,
+    IncomingMessage,
+    Mention,
+    StoredAttachment,
+    StoredMessage,
+)
 
 
 class SQLiteIMRepository:
     def __init__(self, database: SQLiteDatabase, cipher: EnvelopeCipher) -> None:
         self._database = database
         self._cipher = cipher
+
+    async def chat_admission_denial(
+        self, tenant_key: str, app_id: str, chat_id: str
+    ) -> IMAdmissionReason | None:
+        row = await self._database.call(
+            lambda connection: connection.execute(
+                """
+                SELECT enabled, bot_member_state, access_state FROM im_chats
+                WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                """,
+                (tenant_key, app_id, chat_id),
+            ).fetchone()
+        )
+        if row is None:
+            return None
+        if row["access_state"] == "revoked":
+            return IMAdmissionReason.ACCESS_REVOKED
+        if not bool(row["enabled"]) or row["bot_member_state"] == "removed":
+            return IMAdmissionReason.DISABLED_GROUP
+        return None
 
     async def upsert_message(self, message: IncomingMessage) -> bool:
         def operation(connection: sqlite3.Connection) -> bool:
@@ -534,8 +560,7 @@ class SQLiteIMRepository:
             ON CONFLICT(tenant_key, app_id, chat_id) DO UPDATE SET
                 name_ciphertext = COALESCE(excluded.name_ciphertext, im_chats.name_ciphertext),
                 chat_mode = excluded.chat_mode,
-                enabled = CASE WHEN im_chats.access_state = 'revoked'
-                               THEN im_chats.enabled ELSE 1 END,
+                enabled = im_chats.enabled,
                 bot_member_state = CASE WHEN im_chats.access_state = 'revoked'
                                         THEN im_chats.bot_member_state ELSE 'present' END,
                 access_state = CASE WHEN im_chats.access_state = 'revoked'

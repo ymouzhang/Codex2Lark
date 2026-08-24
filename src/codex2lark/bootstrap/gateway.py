@@ -15,6 +15,7 @@ from codex2lark.capabilities.chat_digest.tools import ChatDigestService
 from codex2lark.capabilities.docs.plugin import FeishuDocsPlugin
 from codex2lark.capabilities.docs.tools import DocumentService
 from codex2lark.capabilities.im.admission import IMAdmissionService
+from codex2lark.capabilities.im.admission_policy import IMAdmissionPolicy
 from codex2lark.capabilities.im.attachments import AttachmentService, SafeAttachmentParser
 from codex2lark.capabilities.im.channel_adapter import (
     ChannelPort,
@@ -253,6 +254,10 @@ def create_v3_gateway(
         acknowledgement_text=im_templates.acknowledgement,
         agent_definition_version=lambda message: rollout.select(
             message.tenant_key, message.app_id, message.chat_id
+        ),
+        policy=IMAdmissionPolicy(
+            enabled_chat_ids=config.enabled_chat_ids,
+            authorized_actor_ids=config.authorized_actor_ids,
         ),
     )
     membership_admission = BotAddedAdmissionService(

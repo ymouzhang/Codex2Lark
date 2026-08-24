@@ -38,6 +38,8 @@ class GatewayConfig:
     canary_percent: int = 0
     rollout_salt: str = field(default="", repr=False)
     canary_model: str | None = None
+    enabled_chat_ids: frozenset[str] = field(default_factory=frozenset)
+    authorized_actor_ids: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         required = (
@@ -95,6 +97,8 @@ class GatewayConfig:
             canary_percent=cls._integer(values, "CODEX2LARK_CANARY_PERCENT", 0),
             rollout_salt=values.get("CODEX2LARK_ROLLOUT_SALT", ""),
             canary_model=values.get("CODEX2LARK_CANARY_MODEL") or None,
+            enabled_chat_ids=cls._id_set(values, "CODEX2LARK_ENABLED_CHAT_IDS"),
+            authorized_actor_ids=cls._id_set(values, "CODEX2LARK_AUTHORIZED_ACTOR_IDS"),
         )
 
     @staticmethod
@@ -118,3 +122,15 @@ class GatewayConfig:
     def _optional_integer(cls, values: Mapping[str, str], name: str) -> int | None:
         raw = values.get(name)
         return None if raw is None or not raw.strip() else cls._integer(values, name, 0)
+
+    @staticmethod
+    def _id_set(values: Mapping[str, str], name: str) -> frozenset[str]:
+        raw = values.get(name)
+        if raw is None or not raw.strip():
+            return frozenset()
+        items = tuple(item.strip() for item in raw.split(","))
+        if any(not item for item in items):
+            raise ValueError(f"{name} contains an empty ID")
+        if len(set(items)) != len(items):
+            raise ValueError(f"{name} contains duplicate IDs")
+        return frozenset(items)

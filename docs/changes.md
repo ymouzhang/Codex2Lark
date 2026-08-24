@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined trusted IM admission authorization before implementation. The default
+  remains bot-present groups plus human actors, with optional exact chat/actor
+  allowlists; disabled/revoked chat state overrides configuration, and denial
+  occurs before any mirror, ACK, task, rollout, or model side effect.
+  Implementation area: Gateway config, admission policy, IM repository state
+  probe, production composition, and pre-side-effect tests.
+
 - Reopened the V3 completion claim after a requirement-by-requirement audit.
   Added `v3-completion-audit.md` with concrete contradictions and required
   evidence for admission authorization, hierarchical limits, wall-time and

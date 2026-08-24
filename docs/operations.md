@@ -151,6 +151,19 @@ lark-cli identity used by authoring tools. Group text cannot override it. The
 selected lark-cli identity must be authenticated and have the document/Drive
 permissions listed below.
 
+By default, every group where the bot is currently present is enabled and every
+human group member delivered by Feishu may address it. Narrow admission when
+required:
+
+```bash
+export CODEX2LARK_ENABLED_CHAT_IDS='oc_group_one,oc_group_two'
+export CODEX2LARK_AUTHORIZED_ACTOR_IDS='ou_user_one,ou_user_two'
+```
+
+These are exact trusted IDs, not display names. Changes apply after Gateway
+restart. A removed/revoked group remains denied even if listed. A denied event
+is not mirrored locally and receives no acknowledgement.
+
 `CODEX2LARK_DATA_DIR` optionally selects the state directory. Its default is
 the platform user-state directory. The directory contains SQLite state and
 encrypted attachment blobs; losing the master key makes encrypted state

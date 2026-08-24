@@ -88,6 +88,8 @@ def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_pa
     assert config.storage_capacity.maximum_managed_bytes == 123456
     assert config.storage_capacity.minimum_free_bytes == 789
     assert config.max_attachment_bytes == 456
+    assert config.enabled_chat_ids == frozenset()
+    assert config.authorized_actor_ids == frozenset()
     assert "secret" not in repr(config)
     (tmp_path / "key-rotation.json").write_text("{}")
     with pytest.raises(ValueError, match="incomplete key rotation"):
@@ -110,6 +112,16 @@ def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_pa
     assert canary.canary_model == "candidate-model"
     values["CODEX2LARK_ROLLOUT_SALT"] = ""
     with pytest.raises(ValueError, match="enabled canary"):
+        GatewayConfig.from_environment(values)
+
+    values["CODEX2LARK_ROLLOUT_SALT"] = "test-salt"
+    values["CODEX2LARK_ENABLED_CHAT_IDS"] = "oc_one,oc_two"
+    values["CODEX2LARK_AUTHORIZED_ACTOR_IDS"] = "ou_one,ou_two"
+    restricted = GatewayConfig.from_environment(values)
+    assert restricted.enabled_chat_ids == frozenset({"oc_one", "oc_two"})
+    assert restricted.authorized_actor_ids == frozenset({"ou_one", "ou_two"})
+    values["CODEX2LARK_ENABLED_CHAT_IDS"] = "oc_one,,oc_two"
+    with pytest.raises(ValueError, match="empty ID"):
         GatewayConfig.from_environment(values)
 
 

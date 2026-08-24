@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from codex2lark.capabilities.im.admission import IMAdmissionService
+from codex2lark.capabilities.im.admission_policy import IMAdmissionPolicy
 from codex2lark.capabilities.im.attachments import (
     AttachmentEvidence,
     AttachmentLoadRequest,
@@ -135,6 +136,72 @@ async def test_exact_mention_admission_rejects_non_requests(tmp_path: Path) -> N
                 for table in ("im_messages", "runtime_tasks", "runtime_outbox")
             )
         )
+        assert counts == (0, 0, 0)
+    finally:
+        await database.close()
+
+
+async def test_admission_policy_rejects_chat_and_actor_before_any_side_effect(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "runtime.db")
+    await database.open()
+    cipher = EnvelopeCipher(MasterKey("test", b"i" * 32))
+    repository = SQLiteIMRepository(database, cipher)
+    runtime_store = RuntimeStore(database, cipher)
+    service = IMAdmissionService(
+        runtime_store,
+        repository,
+        bot_open_id="ou_bot",
+        acknowledgement_text="I will handle this.",
+        policy=IMAdmissionPolicy(
+            enabled_chat_ids=frozenset({"oc_allowed"}),
+            authorized_actor_ids=frozenset({"ou_allowed"}),
+        ),
+    )
+    try:
+        denied_chat = await service.admit(message())
+        denied_actor = await service.admit(message(chat_id="oc_allowed", sender_id="ou_denied"))
+        counts = await database.call(
+            lambda connection: tuple(
+                connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("im_chats", "im_messages", "runtime_tasks", "runtime_outbox")
+            )
+        )
+
+        assert denied_chat.reason is IMAdmissionReason.DISABLED_GROUP
+        assert denied_actor.reason is IMAdmissionReason.UNAUTHORIZED_ACTOR
+        assert counts == (0, 0, 0, 0)
+    finally:
+        await database.close()
+
+
+async def test_persisted_disabled_chat_overrides_default_open_policy(tmp_path: Path) -> None:
+    database, _repository, _runtime_store, service = await setup(tmp_path)
+    try:
+        await database.transaction(
+            lambda connection: connection.execute(
+                """
+                INSERT INTO im_chats(
+                    tenant_key, app_id, chat_id, chat_mode, enabled,
+                    bot_member_state, access_state, last_reconciled_at_ms,
+                    retention_policy_id
+                ) VALUES ('tenant-1', 'app-1', 'oc_group', 'group', 0,
+                          'present', 'visible', 1, 'default')
+                """
+            )
+        )
+
+        denied = await service.admit(message())
+        counts = await database.call(
+            lambda connection: (
+                connection.execute("SELECT COUNT(*) FROM im_messages").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM runtime_tasks").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM runtime_outbox").fetchone()[0],
+            )
+        )
+
+        assert denied.reason is IMAdmissionReason.DISABLED_GROUP
         assert counts == (0, 0, 0)
     finally:
         await database.close()

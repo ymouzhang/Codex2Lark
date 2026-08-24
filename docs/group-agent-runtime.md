@@ -412,6 +412,26 @@ Follow-up messages in the same Feishu thread reuse the durable session identity,
 but the runtime still reconciles live Feishu messages before using local content.
 No context crosses a chat or tenant boundary.
 
+### Admission authorization policy
+
+Admission applies a trusted operator policy before writing the incoming message
+mirror, acknowledgement, task, rollout selection, or invoking a model. The
+default single-node profile enables any group in which the bot has visible
+membership and authorizes any non-bot human actor delivered by Feishu. Operators
+may narrow this with comma-separated exact IDs:
+
+- `CODEX2LARK_ENABLED_CHAT_IDS` permits only those chat IDs;
+- `CODEX2LARK_AUTHORIZED_ACTOR_IDS` permits only those sender open IDs.
+
+An empty variable means the corresponding default-open policy; whitespace,
+empty list members, and duplicate IDs are normalized and rejected where
+ambiguous. Existing `im_chats.enabled=0` or `access_state=revoked` always wins
+over configuration. A previously unknown chat may be admitted under the
+default-open policy and becomes a typed enabled mirror only after authorization.
+Bot removal disables the chat immediately. Policy-denied events produce no
+local message content, event, task, acknowledgement, rollout binding, or model
+call. Repeated delivery remains denied deterministically.
+
 The durable task scheduler leases at most one task per SessionKey and excludes
 any SessionKey that already has a live lease. A batch may execute independent
 SessionKeys concurrently. A handler returns a typed terminal task result and

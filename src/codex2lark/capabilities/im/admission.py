@@ -9,10 +9,15 @@ from codex2lark.core.ids import new_trace_id
 from codex2lark.runtime.controls import RunControlKind
 from codex2lark.storage.runtime_store import RuntimeStore
 
+from .admission_policy import IMAdmissionPolicy
 from .models import IMAdmissionDecision, IMAdmissionReason, IncomingMessage
 
 
 class MessageMirror(Protocol):
+    async def chat_admission_denial(
+        self, tenant_key: str, app_id: str, chat_id: str
+    ) -> IMAdmissionReason | None: ...
+
     async def upsert_message(self, message: IncomingMessage) -> bool: ...
 
 
@@ -25,6 +30,7 @@ class IMAdmissionService:
         bot_open_id: str | Callable[[], str | None],
         acknowledgement_text: str,
         agent_definition_version: int | Callable[[IncomingMessage], int] = 1,
+        policy: IMAdmissionPolicy | None = None,
     ) -> None:
         if not bot_open_id:
             raise ValueError("bot_open_id is required")
@@ -39,11 +45,21 @@ class IMAdmissionService:
             if isinstance(agent_definition_version, int)
             else agent_definition_version
         )
+        self._policy = policy or IMAdmissionPolicy()
 
     async def admit(self, message: IncomingMessage) -> IMAdmissionDecision:
         reason = self._evaluate(message)
         if reason is not IMAdmissionReason.ADMITTED:
             return IMAdmissionDecision(reason)
+
+        reason = self._policy.evaluate(message)
+        if reason is not IMAdmissionReason.ADMITTED:
+            return IMAdmissionDecision(reason)
+        denial = await self._message_mirror.chat_admission_denial(
+            message.tenant_key, message.app_id, message.chat_id
+        )
+        if denial is not None:
+            return IMAdmissionDecision(denial)
 
         if not await self._message_mirror.upsert_message(message):
             return IMAdmissionDecision(IMAdmissionReason.ACCESS_REVOKED)
