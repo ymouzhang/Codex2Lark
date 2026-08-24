@@ -444,3 +444,15 @@ The collaboration layer is not releasable until deterministic tests prove:
 - root-only terminal publishing;
 - bounded performance with many groups and concurrent graphs;
 - no authority escalation through prompts, child messages, or artifacts.
+
+The single-node release includes one restart-chaos acceptance fixture with a
+root and three independent children. The fixture leases all three children,
+persists a complete-turn checkpoint and a pending typed mailbox item, holds a
+bounded resource lock, then closes the database without completing the leases.
+After reopening the same encrypted runtime, no worker may steal a live lease;
+after expiry, a new three-slot worker pool recovers all children concurrently,
+the expired lock is gone, the mailbox item is redelivered and acknowledged, and
+exactly three verified artifacts are committed. The root then performs the only
+graph terminal transition. This is the executable meaning of “restart
+mid-graph” for the single-process profile; partial model streams are deliberately
+not recovered.

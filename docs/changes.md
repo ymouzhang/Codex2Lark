@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined the single-node multi-Agent restart-chaos and 64-group burst
+  acceptance fixtures before implementation. The fixtures cover three expired
+  child leases, encrypted checkpoints, durable mailbox redelivery, lock expiry,
+  concurrent artifact recovery, root-only termination, per-SessionKey
+  serialization, and bounded progress across independent groups. Implementation
+  area: multi-Agent and task-scheduler acceptance tests.
+
 - Defined production progress and destructive-tool approvals before
   implementation: one retry-safe execution-start notice, stable argument-free
   approval identities, encrypted approval cards, no-attempt task deferral,

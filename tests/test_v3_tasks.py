@@ -193,6 +193,44 @@ async def test_task_worker_commits_terminal_failure_when_retries_are_exhausted(
         await database.close()
 
 
+async def test_scheduler_makes_bounded_progress_across_64_group_sessions(
+    tmp_path: Path,
+) -> None:
+    database, store = await setup(tmp_path)
+    try:
+        for index in range(64):
+            await store.admit(event(index), command(f"group-{index}"), now_ms=index)
+        for index in range(64, 68):
+            await store.admit(event(index), command("group-0"), now_ms=index)
+
+        completed: list[str] = []
+        now_ms = 100
+        while len(completed) < 68:
+            leased = await store.lease_tasks(
+                worker_id="burst-worker",
+                now_ms=now_ms,
+                lease_ms=100,
+                limit=8,
+            )
+            assert leased
+            session_keys = [item.session_key for item in leased]
+            assert len(session_keys) == len(set(session_keys))
+            for item in leased:
+                completed.append(str(item.payload["message_id"]))
+                await store.finish_task(
+                    item.task_id,
+                    worker_id="burst-worker",
+                    state=TaskState.SUCCEEDED,
+                    now_ms=now_ms + 1,
+                )
+            now_ms += 2
+
+        assert {f"group-{index}" for index in range(64)} <= set(completed)
+        assert completed.count("group-0") == 5
+    finally:
+        await database.close()
+
+
 async def test_expired_final_lease_is_terminalized_without_reexecution(
     tmp_path: Path,
 ) -> None:

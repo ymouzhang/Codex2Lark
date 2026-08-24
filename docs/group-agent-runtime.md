@@ -424,6 +424,13 @@ lease. The next worker skips business execution, asks the registered handler to
 render the typed failure outcome, and atomically commits that terminal state and
 reply intent. Finalization itself is repeatable until that transaction commits.
 
+The automated burst fixture admits at least 64 independent group SessionKeys
+plus repeated work for noisy SessionKeys. Fixed-size lease batches must contain
+at most one task per SessionKey, eventually lease every independent group, and
+leave repeated same-session work pending until its predecessor completes. This
+proves bounded scheduler progress and session isolation; it is not a throughput
+SLO or a substitute for opt-in live Feishu soak testing.
+
 ## 11. Single-node failure model
 
 The single machine is one failure domain. SQLite and the encrypted attachment

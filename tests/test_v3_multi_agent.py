@@ -461,3 +461,113 @@ async def test_supervisor_executes_three_independent_workers_concurrently(
         assert root_after.status is NodeStatus.READY
     finally:
         await database.close()
+
+
+async def test_three_worker_graph_recovers_mail_checkpoint_and_lock_after_restart(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "runtime.db"
+    key = MasterKey("test", b"r" * 32)
+    first_database = SQLiteDatabase(path)
+    await first_database.open()
+    first_store = SQLiteAgentGraphStore(first_database, EnvelopeCipher(key))
+    first_supervisor = MultiAgentSupervisor(first_store)
+    graph, root = await first_supervisor.create_graph(
+        root_run_id="restart-run",
+        tenant_key="tenant-1",
+        app_id="app-1",
+        source_resource_kind="im.thread",
+        source_resource_id="thread-restart",
+        agent_definition_id="default",
+        agent_definition_version=1,
+        root_spec=root_spec(),
+        limits=GraphLimits(max_concurrency=3),
+        now_ms=1,
+    )
+    children = [
+        await first_supervisor.spawn(
+            graph.graph_id,
+            root.node_id,
+            child_spec(name, role),
+            now_ms=2,
+        )
+        for name, role in (
+            ("research", AgentRole.RESEARCHER),
+            ("author", AgentRole.AUTHOR),
+            ("analysis", AgentRole.DATA_ANALYST),
+        )
+    ]
+    checkpoint = await first_store.save_checkpoint(
+        root.node_id, {"turn": 2, "state": "complete safe turn"}, now_ms=2
+    )
+    mailbox = await first_supervisor.send(
+        graph_id=graph.graph_id,
+        sender_node_id=root.node_id,
+        recipient_node_id=children[0].node_id,
+        kind=MailboxKind.STEER,
+        payload={"instruction": "Use the newest authorized evidence."},
+        now_ms=2,
+    )
+    crashed = await first_store.lease_ready(
+        graph.graph_id,
+        worker_id="crashed-process",
+        now_ms=3,
+        lease_ms=100,
+        limit=3,
+    )
+    assert len(crashed) == 3
+    assert await first_store.acquire_lock(
+        graph.graph_id,
+        children[1].node_id,
+        ResourceTarget("tenant-1", "docx", "docx-restart", "revision-1"),
+        now_ms=4,
+        lease_ms=99,
+    )
+    await first_database.close()
+
+    recovered_database = SQLiteDatabase(path)
+    await recovered_database.open()
+    recovered_store = SQLiteAgentGraphStore(recovered_database, EnvelopeCipher(key))
+    recovered_supervisor = MultiAgentSupervisor(recovered_store)
+    try:
+        assert (
+            await recovered_store.lease_ready(
+                graph.graph_id,
+                worker_id="early-process",
+                now_ms=102,
+                lease_ms=100,
+                limit=3,
+            )
+            == []
+        )
+        assert await recovered_store.latest_checkpoint(root.node_id) == checkpoint
+        redelivered = await recovered_store.receive_mail(children[0].node_id, now_ms=103)
+        assert [item.item_id for item in redelivered] == [mailbox.item_id]
+        await recovered_store.acknowledge_mail(mailbox.item_id, children[0].node_id, now_ms=103)
+
+        worker = ConcurrentWorker(expected=3)
+        batch = await recovered_supervisor.execute_ready(
+            graph.graph_id,
+            worker_id="recovery-process",
+            worker=worker,
+            now_ms=104,
+            lease_ms=100,
+        )
+
+        assert len(batch.completed_artifacts) == 3
+        assert batch.failed_node_ids == ()
+        assert worker.maximum_active == 3
+        assert len(await recovered_store.list_artifacts(graph.graph_id)) == 3
+        assert await recovered_store.list_locks(children[1].node_id, now_ms=104) == ()
+        recovered_nodes = {
+            node.node_id: node for node in await recovered_store.list_nodes(graph.graph_id)
+        }
+        assert all(recovered_nodes[item.node_id].attempt_count == 2 for item in children)
+        assert recovered_nodes[root.node_id].status is NodeStatus.READY
+
+        await recovered_supervisor.publish_terminal(
+            graph.graph_id, root.node_id, RunStatus.COMPLETED, now_ms=105
+        )
+        assert (await recovered_store.get_graph(graph.graph_id)).status is GraphStatus.COMPLETED
+    finally:
+        await recovered_database.close()
