@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Sequence
+from dataclasses import asdict
 from pathlib import Path
 
 from . import __version__
@@ -13,6 +14,7 @@ from .bootstrap.config import GatewayConfig, resolve_data_dir
 from .bootstrap.gateway import create_v3_gateway
 from .interfaces.application import create_application
 from .interfaces.mcp import run_stdio
+from .runtime.resources import ResourceLoader
 from .storage.maintenance import (
     BackupResult,
     GarbageCollectionResult,
@@ -31,7 +33,8 @@ async def _doctor() -> int:
                     "checks": {
                         "lark_cli": "missing",
                         "mcp_server": "available",
-                        "business_data_persistence": "disabled",
+                        "interactive_authoring": "unavailable",
+                        "interactive_document_persistence": "disabled",
                     },
                     "next_action": "install and authenticate lark-cli",
                 },
@@ -55,7 +58,8 @@ async def _doctor() -> int:
                             "installed": installed_version,
                             "required": SUPPORTED_LARK_CLI_VERSION,
                         },
-                        "business_data_persistence": "disabled",
+                        "interactive_authoring": "unavailable",
+                        "interactive_document_persistence": "disabled",
                     },
                     "next_action": (
                         f"install the pinned CLI with "
@@ -87,7 +91,8 @@ async def _doctor() -> int:
                         "lark_cli": "available",
                         "lark_cli_version": installed_version,
                         "authentication": status.data,
-                        "business_data_persistence": "disabled",
+                        "interactive_authoring": "unavailable",
+                        "interactive_document_persistence": "disabled",
                     },
                     "next_action": "configure credentials or run lark-cli auth login --recommend",
                 },
@@ -104,7 +109,50 @@ async def _doctor() -> int:
                     "lark_cli": "available",
                     "lark_cli_version": installed_version,
                     "authentication": status.data,
-                    "business_data_persistence": "disabled",
+                    "interactive_authoring": "ready",
+                    "interactive_document_persistence": "disabled",
+                },
+            },
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def _doctor_gateway() -> int:
+    try:
+        config = GatewayConfig.from_environment()
+        loader = ResourceLoader.from_package("codex2lark.bundled_resources")
+        group = loader.load(("group-agent-core",))
+        worker = loader.load(("delegated-worker-core",))
+        templates = ResourceLoader.load_im_templates("codex2lark.bundled_resources", "zh-CN")
+        database_path = config.data_dir / "runtime.db"
+        storage: object
+        if database_path.is_file():
+            status = StorageMaintenance(config.data_dir).status()
+            storage = asdict(status)
+            if not status.ok:
+                raise RuntimeError(f"existing runtime storage is unhealthy: {status.integrity}")
+        else:
+            storage = "not_initialized"
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
+        return 1
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "version": __version__,
+                "checks": {
+                    "gateway_configuration": "valid",
+                    "credentials": "configured",
+                    "master_key": "valid_32_byte_key",
+                    "agent_resources": {**group.versions, **worker.versions},
+                    "im_templates": {
+                        "bundle_id": templates.bundle_id,
+                        "version": templates.version,
+                    },
+                    "storage": storage,
                 },
             },
             ensure_ascii=False,
@@ -129,7 +177,8 @@ def _parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("mcp", help="run the stdio MCP server")
     subcommands.add_parser("gateway", help="run the standalone Feishu event gateway")
-    subcommands.add_parser("doctor", help="check lark-cli and authentication")
+    doctor = subcommands.add_parser("doctor", help="check interactive or Gateway readiness")
+    doctor.add_argument("--gateway", action="store_true")
     storage = subcommands.add_parser("storage", help="inspect and protect V3 runtime state")
     storage_commands = storage.add_subparsers(dest="storage_command", required=True)
     storage_commands.add_parser("status", help="check storage integrity and safe counts")
@@ -178,7 +227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_stdio()
         return 0
     if arguments.command == "doctor":
-        return asyncio.run(_doctor())
+        return _doctor_gateway() if arguments.gateway else asyncio.run(_doctor())
     if arguments.command == "gateway":
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         try:

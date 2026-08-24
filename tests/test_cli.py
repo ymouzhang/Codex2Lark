@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -36,6 +37,33 @@ def test_parser_exposes_storage_administration_commands(tmp_path) -> None:
     )
     assert arguments.command == "storage"
     assert arguments.storage_command == "restore"
+
+
+def test_gateway_doctor_validates_configuration_without_printing_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    values = {
+        "CODEX2LARK_FEISHU_APP_ID": "cli_app",
+        "CODEX2LARK_FEISHU_APP_SECRET": "feishu-secret-value",
+        "OPENAI_API_KEY": "openai-secret-value",
+        "CODEX2LARK_MODEL": "configured-model",
+        "CODEX2LARK_MASTER_KEY_ID": "key-v1",
+        "CODEX2LARK_MASTER_KEY_BASE64": base64.b64encode(b"k" * 32).decode(),
+        "CODEX2LARK_DATA_DIR": str(tmp_path),
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+    assert cli.main(["doctor", "--gateway"]) == 0
+    raw = capsys.readouterr().out
+    output = json.loads(raw)
+
+    assert output["checks"]["storage"] == "not_initialized"
+    assert output["checks"]["agent_resources"]["group-agent-core"] == "1.0.0"
+    assert "feishu-secret-value" not in raw
+    assert "openai-secret-value" not in raw
 
 
 def test_gateway_reports_invalid_configuration_without_traceback(

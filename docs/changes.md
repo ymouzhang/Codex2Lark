@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Split diagnostics into an accurate interactive lark-cli/auth check and a
+  secret-safe `doctor --gateway` local preflight for V3 configuration, bundled
+  resources, key shape, and existing storage integrity; removed the obsolete
+  claim that all business-data persistence is disabled. Implementation area:
+  CLI diagnostics and operator documentation.
+
 - Defined importable, strictly validated, versioned production resource and IM
   response-template packages, selected explicitly by root/worker
   AgentDefinitions and checkpointed by version rather than hard-coded in the

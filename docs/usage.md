@@ -168,7 +168,7 @@ codex mcp list
 
 Removing the registration does not remove the repository, Feishu authorization,
 or any Feishu documents already created. For plugin-mode removal, see
-[Installation and configuration](operations.md#6-stop-and-uninstall).
+[Installation and configuration](operations.md#7-stop-and-uninstall).
 
 ## 5. Troubleshooting
 

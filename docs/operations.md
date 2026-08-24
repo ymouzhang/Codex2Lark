@@ -48,13 +48,30 @@ A healthy result includes:
   "ok": true,
   "checks": {
     "lark_cli_version": "1.0.89",
-    "business_data_persistence": "disabled"
+    "interactive_authoring": "ready",
+    "interactive_document_persistence": "disabled"
   }
 }
 ```
 
 If `ok` is `false`, follow the returned `next_action`, fix the issue, and run the
 command again.
+
+This default check covers Codex/MCP interactive authoring. It does not imply
+that the independent V3 group Runtime is stateless. After exporting the Gateway
+environment, validate its local configuration separately:
+
+```bash
+uv run codex2lark doctor --gateway
+```
+
+This check parses all required secrets without printing them, validates the
+32-byte master key, model/profile values, absolute state path, bundled Agent
+resources and IM templates, and—when `runtime.db` already exists—storage schema,
+referenced blobs, and SQLite integrity. A missing database is reported as
+`not_initialized` and is healthy before the first Gateway start. This is a
+local preflight; the actual `gateway` startup remains the live Feishu long-
+connection and bot-identity readiness check.
 
 ## 4. Connect Codex
 
