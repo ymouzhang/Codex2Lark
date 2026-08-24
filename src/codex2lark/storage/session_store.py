@@ -125,8 +125,29 @@ class SQLiteSessionStore:
                     now_ms,
                 ),
             )
+            connection.execute(
+                "DELETE FROM runtime_checkpoint_sources WHERE run_id = ?",
+                (checkpoint.run_id,),
+            )
+            connection.executemany(
+                """
+                INSERT INTO runtime_checkpoint_sources(run_id, source_ref, source_version)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    (checkpoint.run_id, source_ref, source_version)
+                    for source_ref, source_version in sorted(checkpoint.source_versions.items())
+                ),
+            )
 
         await self._database.transaction(operation)
+
+    async def discard_checkpoint(self, run_id: str) -> None:
+        await self._database.transaction(
+            lambda connection: connection.execute(
+                "DELETE FROM runtime_checkpoints WHERE run_id = ?", (run_id,)
+            )
+        )
 
     async def load_checkpoint(self, run_id: str) -> RunCheckpoint | None:
         row = await self._database.call(

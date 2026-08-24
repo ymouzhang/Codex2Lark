@@ -6,7 +6,7 @@ from codex2lark.runtime.plugins import PluginHealth, PluginManifest
 class FeishuIMPlugin:
     manifest = PluginManifest(
         plugin_id="feishu-im",
-        version="1.0.0",
+        version="1.1.0",
         runtime_api=1,
         capabilities=(
             "im.group_message.receive",
@@ -14,7 +14,12 @@ class FeishuIMPlugin:
             "im.thread.read",
             "im.attachment.read",
         ),
-        events=("im.message.receive_v1", "im.chat.member.bot.added_v1"),
+        events=(
+            "im.message.receive_v1",
+            "im.message.recalled_v1",
+            "im.chat.member.bot.added_v1",
+            "im.chat.member.bot.deleted_v1",
+        ),
         required_scopes=(
             "im:message.group_at_msg:readonly",
             "im:message:readonly",

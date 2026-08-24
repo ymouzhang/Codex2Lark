@@ -361,6 +361,20 @@ IM reconciliation handles:
 - retention expiry independently of Feishu deletion;
 - attachment resource failure without corrupting the parent message.
 
+The production invalidation boundary is transactional. A message tombstone
+removes that message's attachment and parser rows and deletes checkpoint-source
+index entries before the task commits. A chat access revocation first changes
+the chat to `revoked`/disabled, then purges its message, attachment, parser, and
+checkpoint-derived content. Blob files are removed after commit only when a
+reference check shows that no surviving attachment owns them. Cleanup is
+idempotent, so recovery may safely repeat it.
+
+Checkpoint ciphertext is accompanied by a content-free source index containing
+only `source_ref` and `source_version`. This index exists solely to invalidate
+derived state without decrypting or scanning every checkpoint. It is deleted
+with the checkpoint and contains no message body, filename, sender name, or
+model output.
+
 Local tombstones prevent an older redelivery or backfill page from resurrecting
 deleted content without a newer trusted source version.
 

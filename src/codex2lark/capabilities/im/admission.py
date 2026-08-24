@@ -13,7 +13,7 @@ from .models import IMAdmissionDecision, IMAdmissionReason, IncomingMessage
 
 
 class MessageMirror(Protocol):
-    async def upsert_message(self, message: IncomingMessage) -> None: ...
+    async def upsert_message(self, message: IncomingMessage) -> bool: ...
 
 
 class IMAdmissionService:
@@ -39,7 +39,8 @@ class IMAdmissionService:
         if reason is not IMAdmissionReason.ADMITTED:
             return IMAdmissionDecision(reason)
 
-        await self._message_mirror.upsert_message(message)
+        if not await self._message_mirror.upsert_message(message):
+            return IMAdmissionDecision(IMAdmissionReason.ACCESS_REVOKED)
         source_payload = json.dumps(
             {
                 "chat_id": message.chat_id,

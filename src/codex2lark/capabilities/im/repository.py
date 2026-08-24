@@ -15,21 +15,46 @@ class SQLiteIMRepository:
         self._database = database
         self._cipher = cipher
 
-    async def upsert_message(self, message: IncomingMessage) -> None:
-        def operation(connection: sqlite3.Connection) -> None:
+    async def upsert_message(self, message: IncomingMessage) -> bool:
+        def operation(connection: sqlite3.Connection) -> bool:
             self._upsert_chat(connection, message)
+            chat = connection.execute(
+                """
+                SELECT access_state FROM im_chats
+                WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                """,
+                (message.tenant_key, message.app_id, message.chat_id),
+            ).fetchone()
+            if chat is not None and chat["access_state"] == "revoked":
+                return False
             existing = connection.execute(
                 """
-                SELECT updated_at_source_ms FROM im_messages
+                SELECT updated_at_source_ms, is_recalled, is_deleted FROM im_messages
                 WHERE tenant_key = ? AND app_id = ? AND message_id = ?
                 """,
                 (message.tenant_key, message.app_id, message.message_id),
             ).fetchone()
-            if (
-                existing is not None
-                and existing["updated_at_source_ms"] > message.source_version_ms
-            ):
-                return
+            if existing is not None:
+                existing_version = int(existing["updated_at_source_ms"])
+                if existing_version > message.source_version_ms or (
+                    existing_version == message.source_version_ms
+                    and (bool(existing["is_recalled"]) or bool(existing["is_deleted"]))
+                    and not (message.is_recalled or message.is_deleted)
+                ):
+                    return True
+                if existing_version != message.source_version_ms:
+                    connection.execute(
+                        """
+                        DELETE FROM runtime_checkpoints WHERE run_id IN (
+                            SELECT run_id FROM runtime_checkpoint_sources
+                            WHERE source_ref = ? OR source_ref LIKE ?
+                        )
+                        """,
+                        (
+                            f"im.message:{message.message_id}",
+                            f"im.attachment:{message.message_id}:%",
+                        ),
+                    )
 
             content = self._cipher.encrypt(
                 message.body_text.encode(),
@@ -135,7 +160,9 @@ class SQLiteIMRepository:
                     ),
                 )
 
-        await self._database.transaction(operation)
+            return True
+
+        return await self._database.transaction(operation)
 
     async def get_message(
         self, tenant_key: str, app_id: str, message_id: str
@@ -150,6 +177,208 @@ class SQLiteIMRepository:
             ).fetchone()
         )
         return None if row is None else self._message(row)
+
+    async def invalidate_message(
+        self,
+        *,
+        tenant_key: str,
+        app_id: str,
+        chat_id: str,
+        message_id: str,
+        source_version_ms: int,
+        now_ms: int,
+    ) -> tuple[str, ...]:
+        """Write a monotonic recall tombstone and remove its derived state."""
+
+        def operation(connection: sqlite3.Connection) -> tuple[str, ...]:
+            existing = connection.execute(
+                """
+                SELECT updated_at_source_ms FROM im_messages
+                WHERE tenant_key = ? AND app_id = ? AND message_id = ?
+                """,
+                (tenant_key, app_id, message_id),
+            ).fetchone()
+            if existing is not None and existing["updated_at_source_ms"] > source_version_ms:
+                return ()
+            candidates = self._attachment_blob_ids(
+                connection, tenant_key=tenant_key, app_id=app_id, message_id=message_id
+            )
+            connection.execute(
+                """
+                INSERT INTO im_chats(
+                    tenant_key, app_id, chat_id, chat_mode, enabled,
+                    bot_member_state, access_state, last_reconciled_at_ms,
+                    retention_policy_id
+                ) VALUES (?, ?, ?, 'unknown', 1, 'present', 'visible', ?, 'default')
+                ON CONFLICT(tenant_key, app_id, chat_id) DO NOTHING
+                """,
+                (tenant_key, app_id, chat_id, now_ms),
+            )
+            if existing is None:
+                content = self._cipher.encrypt(
+                    b"",
+                    associated_data=self._message_identity_aad(
+                        tenant_key, app_id, message_id, "content"
+                    ),
+                )
+                mentions = self._cipher.encrypt(
+                    b"[]",
+                    associated_data=self._message_identity_aad(
+                        tenant_key, app_id, message_id, "mentions"
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO im_messages(
+                        tenant_key, app_id, message_id, chat_id, sender_type,
+                        sender_id, message_type, content_ciphertext,
+                        mentions_ciphertext, content_hash, created_at_source_ms,
+                        updated_at_source_ms, is_recalled, is_deleted,
+                        schema_version, last_reconciled_at_ms, expires_at_ms
+                    ) VALUES (?, ?, ?, ?, 'unknown', 'unknown', 'unknown', ?, ?, ?,
+                              ?, ?, 1, 0, 1, ?, ?)
+                    """,
+                    (
+                        tenant_key,
+                        app_id,
+                        message_id,
+                        chat_id,
+                        content,
+                        mentions,
+                        self._cipher.opaque_digest(b""),
+                        source_version_ms,
+                        source_version_ms,
+                        now_ms,
+                        now_ms + 90 * 24 * 60 * 60 * 1000,
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE im_messages
+                    SET is_recalled = 1, updated_at_source_ms = ?,
+                        last_reconciled_at_ms = ?
+                    WHERE tenant_key = ? AND app_id = ? AND message_id = ?
+                    """,
+                    (source_version_ms, now_ms, tenant_key, app_id, message_id),
+                )
+            connection.execute(
+                """
+                DELETE FROM runtime_checkpoints WHERE run_id IN (
+                    SELECT run_id FROM runtime_checkpoint_sources
+                    WHERE source_ref = ? OR source_ref LIKE ?
+                )
+                """,
+                (f"im.message:{message_id}", f"im.attachment:{message_id}:%"),
+            )
+            connection.execute(
+                """
+                DELETE FROM im_attachments
+                WHERE tenant_key = ? AND app_id = ? AND message_id = ?
+                """,
+                (tenant_key, app_id, message_id),
+            )
+            return self._drop_unreferenced_blob_metadata(connection, candidates)
+
+        return await self._database.transaction(operation)
+
+    async def revoke_chat_access(
+        self,
+        *,
+        tenant_key: str,
+        app_id: str,
+        chat_id: str,
+        now_ms: int,
+    ) -> tuple[str, ...]:
+        """Disable a chat and purge all locally derived business content."""
+
+        def operation(connection: sqlite3.Connection) -> tuple[str, ...]:
+            candidates = tuple(
+                str(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT blob_id FROM im_attachments
+                    WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                      AND blob_id IS NOT NULL
+                    """,
+                    (tenant_key, app_id, chat_id),
+                )
+            )
+            message_ids = tuple(
+                str(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT message_id FROM im_messages
+                    WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                    """,
+                    (tenant_key, app_id, chat_id),
+                )
+            )
+            if message_ids:
+                source_refs = tuple(f"im.message:{item}" for item in message_ids)
+                placeholders = ",".join("?" for _ in source_refs)
+                connection.execute(
+                    f"""
+                    DELETE FROM runtime_checkpoints WHERE run_id IN (
+                        SELECT run_id FROM runtime_checkpoint_sources
+                        WHERE source_ref IN ({placeholders})
+                    )
+                    """,
+                    source_refs,
+                )
+            connection.execute(
+                """
+                DELETE FROM im_messages
+                WHERE tenant_key = ? AND app_id = ? AND chat_id = ?
+                """,
+                (tenant_key, app_id, chat_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO im_chats(
+                    tenant_key, app_id, chat_id, chat_mode, enabled,
+                    bot_member_state, access_state, last_reconciled_at_ms,
+                    retention_policy_id, purge_after_ms
+                ) VALUES (?, ?, ?, 'unknown', 0, 'removed', 'revoked', ?, 'default', ?)
+                ON CONFLICT(tenant_key, app_id, chat_id) DO UPDATE SET
+                    enabled = 0, bot_member_state = 'removed',
+                    access_state = 'revoked',
+                    last_reconciled_at_ms = excluded.last_reconciled_at_ms,
+                    purge_after_ms = excluded.purge_after_ms
+                """,
+                (tenant_key, app_id, chat_id, now_ms, now_ms),
+            )
+            connection.execute(
+                """
+                UPDATE runtime_tasks SET state = 'cancelled', updated_at_ms = ?
+                WHERE session_key LIKE ? AND state = 'pending'
+                  AND command_type != 'im.revoke_chat_access'
+                """,
+                (now_ms, f"{tenant_key}/{app_id}/{chat_id}/%"),
+            )
+            return self._drop_unreferenced_blob_metadata(connection, candidates)
+
+        return await self._database.transaction(operation)
+
+    async def restore_chat_access(
+        self, *, tenant_key: str, app_id: str, chat_id: str, now_ms: int
+    ) -> None:
+        await self._database.transaction(
+            lambda connection: connection.execute(
+                """
+                INSERT INTO im_chats(
+                    tenant_key, app_id, chat_id, chat_mode, enabled,
+                    bot_member_state, access_state, last_reconciled_at_ms,
+                    retention_policy_id, purge_after_ms
+                ) VALUES (?, ?, ?, 'unknown', 1, 'present', 'visible', ?, 'default', NULL)
+                ON CONFLICT(tenant_key, app_id, chat_id) DO UPDATE SET
+                    enabled = 1, bot_member_state = 'present', access_state = 'visible',
+                    last_reconciled_at_ms = excluded.last_reconciled_at_ms,
+                    purge_after_ms = NULL
+                """,
+                (tenant_key, app_id, chat_id, now_ms),
+            )
+        )
 
     async def recent_messages(
         self,
@@ -305,9 +534,12 @@ class SQLiteIMRepository:
             ON CONFLICT(tenant_key, app_id, chat_id) DO UPDATE SET
                 name_ciphertext = COALESCE(excluded.name_ciphertext, im_chats.name_ciphertext),
                 chat_mode = excluded.chat_mode,
-                enabled = 1,
-                bot_member_state = 'present',
-                access_state = 'visible',
+                enabled = CASE WHEN im_chats.access_state = 'revoked'
+                               THEN im_chats.enabled ELSE 1 END,
+                bot_member_state = CASE WHEN im_chats.access_state = 'revoked'
+                                        THEN im_chats.bot_member_state ELSE 'present' END,
+                access_state = CASE WHEN im_chats.access_state = 'revoked'
+                                    THEN im_chats.access_state ELSE 'visible' END,
                 last_reconciled_at_ms = excluded.last_reconciled_at_ms
             """,
             (
@@ -319,6 +551,42 @@ class SQLiteIMRepository:
                 message.received_at_ms,
             ),
         )
+
+    @staticmethod
+    def _attachment_blob_ids(
+        connection: sqlite3.Connection,
+        *,
+        tenant_key: str,
+        app_id: str,
+        message_id: str,
+    ) -> tuple[str, ...]:
+        return tuple(
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT DISTINCT blob_id FROM im_attachments
+                WHERE tenant_key = ? AND app_id = ? AND message_id = ?
+                  AND blob_id IS NOT NULL
+                """,
+                (tenant_key, app_id, message_id),
+            )
+        )
+
+    @staticmethod
+    def _drop_unreferenced_blob_metadata(
+        connection: sqlite3.Connection, candidates: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        unreferenced: list[str] = []
+        for blob_id in candidates:
+            if (
+                connection.execute(
+                    "SELECT 1 FROM im_attachments WHERE blob_id = ? LIMIT 1", (blob_id,)
+                ).fetchone()
+                is None
+            ):
+                connection.execute("DELETE FROM im_file_blobs WHERE blob_id = ?", (blob_id,))
+                unreferenced.append(blob_id)
+        return tuple(unreferenced)
 
     def _message(self, row: sqlite3.Row) -> StoredMessage:
         identity = (row["tenant_key"], row["app_id"], row["message_id"])

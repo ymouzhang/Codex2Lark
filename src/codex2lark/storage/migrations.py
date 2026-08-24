@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -385,6 +385,19 @@ ALTER TABLE runtime_agent_nodes
 ADD COLUMN requires_write_scope INTEGER NOT NULL DEFAULT 0;
 """
 
+CHECKPOINT_SOURCE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runtime_checkpoint_sources (
+    run_id TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    source_version TEXT NOT NULL,
+    PRIMARY KEY (run_id, source_ref),
+    FOREIGN KEY (run_id) REFERENCES runtime_checkpoints(run_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS runtime_checkpoint_sources_ref_idx
+ON runtime_checkpoint_sources(source_ref, run_id);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
@@ -393,4 +406,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (5, IM_BLOB_SCHEMA),
     (6, RUN_CONTROL_SCHEMA),
     (7, AGENT_WRITE_SCOPE_SCHEMA),
+    (8, CHECKPOINT_SOURCE_SCHEMA),
 )

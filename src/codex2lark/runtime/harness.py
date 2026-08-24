@@ -90,19 +90,31 @@ class AgentHarness:
             if status is not RunStatus.RUNNING:
                 raise LookupError(f"running run is unavailable: {request.run_id}")
             if checkpoint is not None:
-                self._validate_checkpoint(checkpoint, definition, loaded.versions, source_versions)
-                journal = checkpoint.messages
-                verified = checkpoint.verified_effects
-                first_turn = checkpoint.next_turn
-                applied_control_ids.update(checkpoint.applied_control_ids)
-                if self._controls is not None and checkpoint.applied_control_ids:
-                    await self._controls.acknowledge_controls(
-                        request.task_id, checkpoint.applied_control_ids, now_ms=clock_ms
+                try:
+                    self._validate_checkpoint(
+                        checkpoint, definition, loaded.versions, source_versions
                     )
-                for key, amount in checkpoint.consumed_budget.items():
-                    kind = BudgetKind(key)
-                    if kind in ledger.limits:
-                        ledger.consumed[kind] = amount
+                except ValueError as exc:
+                    await self._sessions.discard_checkpoint(request.run_id)
+                    await self._sessions.append_event(
+                        run_id=request.run_id,
+                        event_type="checkpoint_invalidated",
+                        payload={"reason": str(exc)},
+                        now_ms=clock_ms,
+                    )
+                else:
+                    journal = checkpoint.messages
+                    verified = checkpoint.verified_effects
+                    first_turn = checkpoint.next_turn
+                    applied_control_ids.update(checkpoint.applied_control_ids)
+                    if self._controls is not None and checkpoint.applied_control_ids:
+                        await self._controls.acknowledge_controls(
+                            request.task_id, checkpoint.applied_control_ids, now_ms=clock_ms
+                        )
+                    for key, amount in checkpoint.consumed_budget.items():
+                        kind = BudgetKind(key)
+                        if kind in ledger.limits:
+                            ledger.consumed[kind] = amount
         else:
             await self._sessions.start_run(
                 run_id=request.run_id,

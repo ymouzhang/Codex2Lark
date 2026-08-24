@@ -18,6 +18,8 @@ class _DurableDispatcherBridge:
         self._converter = converter
         self._message: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._bot_added: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        self._message_recalled: Callable[[dict[str, Any]], Awaitable[None]] | None = None
+        self._bot_removed: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="codex2lark-admission"
         )
@@ -26,15 +28,25 @@ class _DurableDispatcherBridge:
         self,
         message: Callable[[dict[str, Any]], Awaitable[None]] | None,
         bot_added: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        message_recalled: Callable[[dict[str, Any]], Awaitable[None]] | None,
+        bot_removed: Callable[[dict[str, Any]], Awaitable[None]] | None,
     ) -> None:
         self._message = message
         self._bot_added = bot_added
+        self._message_recalled = message_recalled
+        self._bot_removed = bot_removed
 
     def dispatch_message(self, data: object) -> None:
         self._dispatch(self._message, data, "message")
 
     def dispatch_bot_added(self, data: object) -> None:
         self._dispatch(self._bot_added, data, "botAdded")
+
+    def dispatch_message_recalled(self, data: object) -> None:
+        self._dispatch(self._message_recalled, data, "messageRecalled")
+
+    def dispatch_bot_removed(self, data: object) -> None:
+        self._dispatch(self._bot_removed, data, "botLeave")
 
     def close(self) -> None:
         self._executor.shutdown(wait=True, cancel_futures=True)
@@ -84,6 +96,12 @@ class BotAddedHandler(Protocol):
     async def handle_bot_added(self, event: object) -> None: ...
 
 
+class LifecycleHandler(Protocol):
+    async def handle_message_recalled(self, raw: dict[str, Any]) -> None: ...
+
+    async def handle_bot_removed(self, raw: dict[str, Any]) -> None: ...
+
+
 def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
     from lark_channel import (  # type: ignore[import-untyped]
         ChatQueueConfig,
@@ -106,14 +124,36 @@ def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
             self,
             message: Callable[[dict[str, Any]], Awaitable[None]] | None,
             bot_added: Callable[[dict[str, Any]], Awaitable[None]] | None,
+            message_recalled: Callable[[dict[str, Any]], Awaitable[None]] | None,
+            bot_removed: Callable[[dict[str, Any]], Awaitable[None]] | None,
         ) -> None:
-            self._durable_bridge.bind(message, bot_added)
+            self._durable_bridge.bind(message, bot_added, message_recalled, bot_removed)
+
+        def _build_dispatcher(self) -> object:
+            dispatcher = super()._build_dispatcher()
+            from lark_channel.event.custom import (  # type: ignore[import-untyped]
+                CustomizedEventProcessor,
+            )
+
+            processors = getattr(dispatcher, "_processorMap", None)
+            if not isinstance(processors, dict):
+                raise RuntimeError("official Channel dispatcher does not expose event processors")
+            processors["p2.im.message.recalled_v1"] = CustomizedEventProcessor(
+                self._on_p2_message_recalled
+            )
+            return dispatcher
 
         def _on_p2_im_message_receive_v1(self, data: object) -> None:
             self._durable_bridge.dispatch_message(data)
 
         def _on_p2_bot_added(self, data: object) -> None:
             self._durable_bridge.dispatch_bot_added(data)
+
+        def _on_p2_message_recalled(self, data: object) -> None:
+            self._durable_bridge.dispatch_message_recalled(data)
+
+        def _on_p2_bot_deleted(self, data: object) -> None:
+            self._durable_bridge.dispatch_bot_removed(data)
 
         async def disconnect(self) -> None:
             try:
@@ -382,12 +422,14 @@ class OfficialChannelEventSource:
         app_id: str,
         received_at_ms: Callable[[], int],
         bot_added_handler: BotAddedHandler | None = None,
+        lifecycle_handler: LifecycleHandler | None = None,
     ) -> None:
         self._channel = channel
         self._admission = admission
         self._app_id = app_id
         self._received_at_ms = received_at_ms
         self._bot_added_handler = bot_added_handler
+        self._lifecycle_handler = lifecycle_handler
         self._started = False
         self._ready = asyncio.Event()
         self._normalizer: ChannelMessageNormalizer | None = None
@@ -402,6 +444,8 @@ class OfficialChannelEventSource:
             self._channel.on("message", self._on_message)
             if self._bot_added_handler is not None:
                 self._channel.on("botAdded", self._on_bot_added)
+            if self._lifecycle_handler is not None:
+                self._channel.on("botLeave", self._on_bot_removed)
         try:
             await self._channel.connect_until_ready(timeout=30.0)
             identity = self._channel.bot_identity
@@ -415,6 +459,16 @@ class OfficialChannelEventSource:
                 durable_binder(
                     self._on_raw_message,
                     self._on_raw_bot_added if self._bot_added_handler is not None else None,
+                    (
+                        self._lifecycle_handler.handle_message_recalled
+                        if self._lifecycle_handler is not None
+                        else None
+                    ),
+                    (
+                        self._lifecycle_handler.handle_bot_removed
+                        if self._lifecycle_handler is not None
+                        else None
+                    ),
                 )
             self._ready.set()
         except BaseException:
@@ -428,7 +482,7 @@ class OfficialChannelEventSource:
             return
         durable_binder = getattr(self._channel, "bind_durable_handlers", None)
         if callable(durable_binder):
-            durable_binder(None, None)
+            durable_binder(None, None, None, None)
         await self._channel.disconnect()
         self._started = False
         self._normalizer = None
@@ -462,6 +516,15 @@ class OfficialChannelEventSource:
         await self._bot_added_handler.handle_bot_added(
             SimpleNamespace(raw=raw, chat_id=event.get("chat_id"))
         )
+
+    async def _on_bot_removed(self, event: object) -> None:
+        await self._ready.wait()
+        if self._lifecycle_handler is None:
+            raise RuntimeError("official Channel lifecycle handler is unavailable")
+        raw = getattr(event, "raw", None)
+        if not isinstance(raw, dict):
+            raise ValueError("bot-removed event does not expose its raw envelope")
+        await self._lifecycle_handler.handle_bot_removed(raw)
 
     @staticmethod
     def _mapping(value: object) -> dict[str, Any]:

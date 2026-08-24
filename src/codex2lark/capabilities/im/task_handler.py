@@ -5,6 +5,7 @@ from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from codex2lark.core.events import LeasedTask, OutboxDraft, TaskState
+from codex2lark.runtime.context import ContextEvidence
 from codex2lark.runtime.harness import AgentHarness, HarnessRequest
 from codex2lark.runtime.sessions import SessionStore
 from codex2lark.runtime.tasks import TaskExecutionResult
@@ -112,7 +113,14 @@ class IMMentionTaskHandler:
                             policy_version=self._definition.policy_version,
                             task_id=task.task_id,
                         ),
-                        evidence=context.evidence,
+                        evidence=(
+                            ContextEvidence(
+                                source_ref=f"im.message:{context.trigger.message_id}",
+                                content="Active request source binding.",
+                                source_version=str(context.trigger.source_version_ms),
+                            ),
+                            *context.evidence,
+                        ),
                     ),
                     self._definition,
                     resume=status is RunStatus.RUNNING,

@@ -48,7 +48,7 @@ class LiveIMReader(Protocol):
 
 
 class MessageMirror(Protocol):
-    async def upsert_message(self, message: IncomingMessage) -> None: ...
+    async def upsert_message(self, message: IncomingMessage) -> bool: ...
 
 
 class AttachmentEvidenceLoader(Protocol):
@@ -80,7 +80,8 @@ class IMContextProvider:
     async def collect(self, request: IMContextRequest) -> IMContextBundle:
         trigger = await self._source.get_message(request)
         self._validate_binding(request, trigger)
-        await self._mirror.upsert_message(trigger)
+        if not await self._mirror.upsert_message(trigger):
+            raise PermissionError("chat access was revoked")
         if trigger.is_recalled or trigger.is_deleted:
             raise LookupError("trigger message is no longer available")
 
@@ -96,7 +97,8 @@ class IMContextProvider:
         selected: dict[str, IncomingMessage] = {}
         for message in page.messages:
             self._validate_binding(request, message)
-            await self._mirror.upsert_message(message)
+            if not await self._mirror.upsert_message(message):
+                raise PermissionError("chat access was revoked")
             if (
                 message.message_id == trigger.message_id
                 or message.is_recalled

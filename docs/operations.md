@@ -105,7 +105,10 @@ Create a custom Feishu application and configure its bot, then publish these
 events in the Feishu developer console:
 
 - `im.message.receive_v1` for mention-driven work;
-- `im.chat.member.bot.added_v1` for immediate group-membership automation.
+- `im.message.recalled_v1` for immediate source invalidation;
+- `im.chat.member.bot.added_v1` for immediate group-membership automation;
+- `im.chat.member.bot.deleted_v1` for immediate access revocation and local
+  cleanup.
 
 Grant the least permissions needed for enabled capabilities. The IM runtime
 requires message read/history, reply-as-bot, chat metadata, and message-resource
@@ -116,7 +119,9 @@ read permissions. Group-member automation additionally requires:
    - `im:chat.members:read`
    - `im:chat.members:write_only`
 2. Open **Events and callbacks** and add the **Bot added to group chat** event:
-   `im.chat.member.bot.added_v1`.
+   `im.chat.member.bot.added_v1`, the **Bot removed from group chat** event:
+   `im.chat.member.bot.deleted_v1`, and the **Message recalled** event:
+   `im.message.recalled_v1`.
 3. Create and publish a new application version. Saving the configuration alone
    does not activate it.
 4. Confirm that the current lark-cli user is within the application's

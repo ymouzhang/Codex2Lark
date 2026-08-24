@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined authoritative IM invalidation before implementation: durable
+  pre-ACK recall and bot-removal admission, monotonic tombstones, immediate chat
+  access revocation, reference-safe attachment cleanup, indexed checkpoint
+  invalidation, and live edit reconciliation because Feishu has no ordinary
+  message-edit push event. Implementation area: Channel adapter, IM lifecycle
+  tasks/repository, session source index, context recovery, storage migration,
+  and end-to-end lifecycle tests.
+
 - Defined trusted parallel-writer delegation before implementation: structured
   targets, capability-owned live resolution, created-before-ready activation,
   durable multi-target lock acquisition, crash recovery, per-child persisted

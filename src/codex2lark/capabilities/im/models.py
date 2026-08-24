@@ -10,6 +10,7 @@ class IMAdmissionReason(StrEnum):
     BOT_SENDER = "bot_sender"
     BOT_NOT_MENTIONED = "bot_not_mentioned"
     EMPTY_REQUEST = "empty_request"
+    ACCESS_REVOKED = "access_revoked"
     MALFORMED = "malformed"
 
 

@@ -17,6 +17,12 @@ class MembershipService(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class ChatAccessRepository(Protocol):
+    async def restore_chat_access(
+        self, *, tenant_key: str, app_id: str, chat_id: str, now_ms: int
+    ) -> None: ...
+
+
 class BotAddedAdmissionService:
     def __init__(
         self, store: RuntimeStore, *, app_id: str, received_at_ms: Callable[[], int]
@@ -77,12 +83,18 @@ class BotAddedAdmissionService:
 
 
 class MembershipTaskHandler:
-    def __init__(self, service: MembershipService, *, bot_identity: Identity) -> None:
+    def __init__(
+        self,
+        service: MembershipService,
+        *,
+        bot_identity: Identity,
+        access_repository: ChatAccessRepository | None = None,
+    ) -> None:
         self._service = service
         self._bot_identity = bot_identity
+        self._access_repository = access_repository
 
     async def execute(self, task: LeasedTask, *, now_ms: int) -> TaskExecutionResult:
-        del now_ms
         chat_id = task.payload.get("chat_id")
         if not isinstance(chat_id, str) or not chat_id:
             raise ValueError("membership task requires chat_id")
@@ -90,6 +102,17 @@ class MembershipTaskHandler:
             chat_id=chat_id,
             chat_identity=self._bot_identity,
         )
+        if self._access_repository is not None:
+            tenant_key = task.payload.get("tenant_key")
+            app_id = task.payload.get("app_id")
+            if not isinstance(tenant_key, str) or not isinstance(app_id, str):
+                raise ValueError("membership task requires tenant_key and app_id")
+            await self._access_repository.restore_chat_access(
+                tenant_key=tenant_key,
+                app_id=app_id,
+                chat_id=chat_id,
+                now_ms=now_ms,
+            )
         return TaskExecutionResult(TaskState.SUCCEEDED)
 
     def failure(self, task: LeasedTask, error: BaseException) -> TaskExecutionResult:

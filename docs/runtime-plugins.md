@@ -80,7 +80,7 @@ Every plugin has a versioned manifest validated before code activation:
 
 ```yaml
 id: feishu-im
-version: 1.0.0
+version: 1.1.0
 runtime_api: 1
 entrypoint: codex2lark.capabilities.im.plugin:create_plugin
 capabilities:
@@ -90,7 +90,9 @@ capabilities:
   - im.attachment.read
 events:
   - im.message.receive_v1
+  - im.message.recalled_v1
   - im.chat.member.bot.added_v1
+  - im.chat.member.bot.deleted_v1
 required_scopes:
   - im:message:readonly
   - im:message:send_as_bot

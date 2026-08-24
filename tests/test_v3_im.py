@@ -6,7 +6,7 @@ import zipfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from codex2lark.capabilities.im.admission import IMAdmissionService
 from codex2lark.capabilities.im.attachments import (
@@ -19,11 +19,16 @@ from codex2lark.capabilities.im.channel_adapter import (
     ChannelMessageNormalizer,
     OfficialChannelEventSource,
     _DurableDispatcherBridge,
+    create_official_channel,
 )
 from codex2lark.capabilities.im.context_provider import (
     IMContextProvider,
     IMContextRequest,
     MessagePage,
+)
+from codex2lark.capabilities.im.lifecycle import (
+    IMLifecycleAdmissionService,
+    IMLifecycleTaskHandler,
 )
 from codex2lark.capabilities.im.membership import (
     BotAddedAdmissionService,
@@ -47,11 +52,19 @@ from codex2lark.core.models import Identity
 from codex2lark.runtime.context import ContextEvidence
 from codex2lark.runtime.outbox import OutboxDispatcher
 from codex2lark.runtime.sessions import InMemorySessionStore
-from codex2lark.runtime.types import AgentDefinition, AgentOutcome, RunStatus
+from codex2lark.runtime.types import (
+    AgentDefinition,
+    AgentOutcome,
+    MessageRole,
+    ModelMessage,
+    RunCheckpoint,
+    RunStatus,
+)
 from codex2lark.storage.blobs import EncryptedBlobStore
 from codex2lark.storage.crypto import EnvelopeCipher, MasterKey
 from codex2lark.storage.database import SQLiteDatabase
 from codex2lark.storage.runtime_store import RuntimeStore
+from codex2lark.storage.session_store import SQLiteSessionStore
 
 
 def message(**changes: object) -> IncomingMessage:
@@ -371,12 +384,201 @@ async def test_pinned_channel_dispatcher_waits_for_durable_handler() -> None:
         await asyncio.sleep(0.01)
         completed.append(str(raw["header"]["event_id"]))
 
-    bridge.bind(admit, None)
+    bridge.bind(admit, None, admit, admit)
 
     bridge.dispatch_message(raw_channel_event())
+    bridge.dispatch_message_recalled(raw_channel_event())
+    bridge.dispatch_bot_removed(raw_channel_event())
 
-    assert completed == ["event-raw"]
+    assert completed == ["event-raw", "event-raw", "event-raw"]
     bridge.close()
+
+
+def test_pinned_channel_registers_custom_recall_processor() -> None:
+    channel = cast(Any, create_official_channel(app_id="cli_test", app_secret="secret"))
+    try:
+        dispatcher = channel._build_dispatcher()
+        assert "p2.im.message.recalled_v1" in dispatcher._processorMap
+    finally:
+        channel.close_durable_bridge()
+
+
+async def test_lifecycle_events_are_durable_before_callback_returns(tmp_path: Path) -> None:
+    database, _repository, runtime, _service = await setup(tmp_path)
+    lifecycle = IMLifecycleAdmissionService(
+        runtime, app_id="app-1", received_at_ms=lambda: 1_720_000_000_100
+    )
+    recall = {
+        "header": {
+            "event_id": "event-recall",
+            "tenant_key": "tenant-1",
+            "create_time": "1720000000000",
+        },
+        "event": {
+            "chat_id": "oc_group",
+            "message_id": "om_recalled",
+            "recall_time": "1720000000050",
+        },
+    }
+    removed = {
+        "header": {
+            "event_id": "event-removed",
+            "tenant_key": "tenant-1",
+            "create_time": "1720000000100",
+        },
+        "event": {"chat_id": "oc_group"},
+    }
+    try:
+        await lifecycle.handle_message_recalled(recall)
+        await lifecycle.handle_message_recalled(recall)
+        await lifecycle.handle_bot_removed(removed)
+
+        assert (await runtime.counts())["runtime_tasks"] == 2
+        command_types = await database.call(
+            lambda connection: {
+                str(row[0]) for row in connection.execute("SELECT command_type FROM runtime_tasks")
+            }
+        )
+        assert command_types == {
+            "im.invalidate_message",
+            "im.revoke_chat_access",
+        }
+    finally:
+        await database.close()
+
+
+async def test_recall_tombstone_cleans_derived_state_and_cannot_be_resurrected(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime, admission = await setup(tmp_path)
+    cipher = EnvelopeCipher(MasterKey("test", b"i" * 32))
+    sessions = SQLiteSessionStore(database, cipher)
+    blobs = EncryptedBlobStore(tmp_path / "blobs", cipher)
+    incoming = message(updated_at_ms=200)
+    try:
+        decision = await admission.admit(incoming)
+        attachment = await repository.get_attachment(
+            "tenant-1", "app-1", "oc_group", "om_request", "file-key"
+        )
+        assert attachment is not None and decision.task_id is not None
+        blob_id = blobs.put(b"private attachment")
+        await repository.record_attachment_blob(
+            attachment,
+            blob_id=blob_id,
+            byte_size=18,
+            media_type="application/docx",
+            now_ms=210,
+        )
+        await sessions.start_run(
+            run_id="run-recall",
+            task_id=decision.task_id,
+            session_key=incoming.session_key,
+            agent_id="agent",
+            agent_version=1,
+            policy_version=1,
+            now_ms=220,
+        )
+        await sessions.save_checkpoint(
+            RunCheckpoint(
+                run_id="run-recall",
+                agent_id="agent",
+                agent_version=1,
+                resource_versions={},
+                next_turn=2,
+                messages=(ModelMessage(MessageRole.USER, "derived"),),
+                verified_effects=(),
+                blockers=(),
+                source_versions={"im.message:om_request": "200"},
+                consumed_budget={},
+                compactor_version=1,
+            ),
+            now_ms=230,
+        )
+        task = LeasedTask(
+            task_id="lifecycle-task",
+            event_id="event-recall",
+            plugin_id="feishu-im",
+            command_type="im.invalidate_message",
+            session_key="tenant-1/app-1/oc_group/lifecycle/om_request",
+            payload={
+                "tenant_key": "tenant-1",
+                "app_id": "app-1",
+                "chat_id": "oc_group",
+                "message_id": "om_request",
+                "source_version_ms": 300,
+            },
+            attempt_count=1,
+            max_attempts=3,
+            lease_expires_at_ms=1_000,
+        )
+
+        result = await IMLifecycleTaskHandler(repository, blobs).execute(task, now_ms=310)
+        await repository.upsert_message(incoming)
+
+        stored = await repository.get_message("tenant-1", "app-1", "om_request")
+        assert result.state.value == "succeeded"
+        assert stored is not None and stored.is_recalled
+        assert await sessions.load_checkpoint("run-recall") is None
+        assert (
+            await repository.get_attachment(
+                "tenant-1", "app-1", "oc_group", "om_request", "file-key"
+            )
+            is None
+        )
+        assert not blobs.exists(blob_id)
+    finally:
+        await database.close()
+
+
+async def test_bot_removal_disables_chat_purges_content_and_cancels_pending_work(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime, admission = await setup(tmp_path)
+    cipher = EnvelopeCipher(MasterKey("test", b"i" * 32))
+    blobs = EncryptedBlobStore(tmp_path / "blobs", cipher)
+    try:
+        await admission.admit(message())
+        task = LeasedTask(
+            task_id="remove-task",
+            event_id="event-removed",
+            plugin_id="feishu-im",
+            command_type="im.revoke_chat_access",
+            session_key="tenant-1/app-1/oc_group/lifecycle/access",
+            payload={
+                "tenant_key": "tenant-1",
+                "app_id": "app-1",
+                "chat_id": "oc_group",
+            },
+            attempt_count=1,
+            max_attempts=3,
+            lease_expires_at_ms=1_000,
+        )
+
+        await IMLifecycleTaskHandler(repository, blobs).execute(task, now_ms=500)
+        delayed = await admission.admit(message(event_id="delayed", received_at_ms=600))
+
+        stored = await repository.get_message("tenant-1", "app-1", "om_request")
+        state = await database.call(
+            lambda connection: (
+                tuple(
+                    connection.execute(
+                        """
+                        SELECT enabled, bot_member_state, access_state FROM im_chats
+                        WHERE tenant_key = 'tenant-1' AND app_id = 'app-1'
+                          AND chat_id = 'oc_group'
+                        """
+                    ).fetchone()
+                ),
+                connection.execute(
+                    "SELECT state FROM runtime_tasks WHERE command_type = 'im.handle_mention'"
+                ).fetchone()[0],
+            )
+        )
+        assert stored is None
+        assert delayed.reason is IMAdmissionReason.ACCESS_REVOKED
+        assert state == ((0, "removed", "revoked"), "cancelled")
+    finally:
+        await database.close()
 
 
 class FakeAdmission:

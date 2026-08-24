@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -466,7 +467,7 @@ async def test_harness_recovers_from_complete_turn_checkpoint() -> None:
     first, _ = build_harness(first_model, sessions=sessions)
 
     with pytest.raises(ConnectionError, match="worker loss"):
-        await first.run(request(), definition(), now_ms=100)
+        await first.run(request(), definition(require_verified=False), now_ms=100)
 
     checkpoint = sessions.checkpoints["run-1"]
     assert checkpoint.next_turn == 2
@@ -480,6 +481,36 @@ async def test_harness_recovers_from_complete_turn_checkpoint() -> None:
 
     assert outcome.status is RunStatus.COMPLETED
     assert outcome.resource_refs == ("https://feishu.cn/docx/docx_123",)
+
+
+async def test_harness_discards_stale_source_checkpoint_and_rebuilds() -> None:
+    first_model = FakeModel(
+        [
+            ModelResponse("", (ToolCall("call-1", "docs.create", {"title": "A"}),)),
+            ConnectionError("simulated worker loss"),
+        ]
+    )
+    sessions = InMemorySessionStore()
+    first, _ = build_harness(first_model, sessions=sessions)
+    with pytest.raises(ConnectionError, match="worker loss"):
+        await first.run(request(), definition(), now_ms=100)
+
+    changed = replace(
+        request(),
+        evidence=(ContextEvidence("im:message-1", "Edited project facts", "v2", required=True),),
+    )
+    recovered_model = FakeModel([ModelResponse("Rebuilt from edited source.")])
+    recovered, _ = build_harness(recovered_model, sessions=sessions)
+
+    outcome = await recovered.run(
+        changed, definition(require_verified=False), resume=True, now_ms=200
+    )
+
+    assert outcome.summary == "Rebuilt from edited source."
+    assert any(event.event_type == "checkpoint_invalidated" for event in sessions.events["run-1"])
+    sent = recovered_model.requests[0]
+    assert isinstance(sent, ModelRequest)
+    assert all(not message.tool_calls for message in sent.messages)
 
 
 async def test_harness_redacts_nonpersistable_tool_observation_only_in_checkpoint() -> None:
@@ -616,6 +647,16 @@ async def test_sqlite_session_store_encrypts_events_and_checkpoint(tmp_path: Pat
 
         assert (first.sequence, second.sequence) == (1, 2)
         assert await sessions.load_checkpoint("r1") == checkpoint
+        assert await database.call(
+            lambda connection: tuple(
+                connection.execute(
+                    """
+                    SELECT source_ref, source_version FROM runtime_checkpoint_sources
+                    WHERE run_id = 'r1'
+                    """
+                ).fetchone()
+            )
+        ) == ("m1", "v1")
         assert await sessions.events("r1") == [first, second]
         ciphertexts = await database.call(
             lambda connection: (

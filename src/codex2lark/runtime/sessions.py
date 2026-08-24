@@ -32,6 +32,8 @@ class SessionStore(Protocol):
 
     async def load_checkpoint(self, run_id: str) -> RunCheckpoint | None: ...
 
+    async def discard_checkpoint(self, run_id: str) -> None: ...
+
     async def run_status(self, run_id: str) -> RunStatus | None: ...
 
     async def load_outcome(self, run_id: str) -> AgentOutcome | None: ...
@@ -96,6 +98,9 @@ class InMemorySessionStore:
 
     async def load_checkpoint(self, run_id: str) -> RunCheckpoint | None:
         return self.checkpoints.get(run_id)
+
+    async def discard_checkpoint(self, run_id: str) -> None:
+        self.checkpoints.pop(run_id, None)
 
     async def run_status(self, run_id: str) -> RunStatus | None:
         return self.runs.get(run_id)

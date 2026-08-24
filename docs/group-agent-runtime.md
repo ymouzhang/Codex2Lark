@@ -40,6 +40,8 @@ and referenced by content hash from SQLite.
 The Gateway consumes at least these independent event keys:
 
 - `im.chat.member.bot.added_v1` for deterministic owner-membership handling;
+- `im.chat.member.bot.deleted_v1` for immediate access revocation and cleanup;
+- `im.message.recalled_v1` for immediate message tombstoning;
 - `im.message.receive_v1` for group requests.
 
 One event-handler failure must not stop the other event path. The official
@@ -55,6 +57,30 @@ authenticated user only when absent, and verify user access to the group.
 Retries are bounded and duplicate event delivery cannot repeat the logical
 membership action. This path starts immediately after the event; it never waits
 for a user mention or a Codex/MCP process.
+After membership verification succeeds, the same task restores a previously
+revoked local chat binding; delayed receive events cannot restore it by
+themselves.
+
+Recall and bot-removal callbacks use the same pre-acknowledgement durability
+boundary as receive and bot-added callbacks. A recall event admits an
+`im.invalidate_message` task containing only trusted identifiers and source
+time. The task writes a monotonic tombstone, deletes attachment/parser rows,
+invalidates checkpoints that cite the message, and reclaims blobs only after
+the database proves that no live attachment references them. An older receive
+or backfill cannot overwrite the tombstone.
+
+A bot-removal event admits an `im.revoke_chat_access` task. The task disables
+the chat before any later retrieval, cancels pending work for that chat, removes
+the chat's locally retained IM content and derived checkpoints, and reclaims
+unreferenced blobs. The event produces no group reply because the bot no longer
+has a valid delivery channel.
+
+Feishu does not publish a separate event for ordinary message edits. Context
+construction therefore refetches selected messages by `message_id`, compares
+the authoritative `update_time` and content hash with the encrypted mirror, and
+applies the same derived-data invalidation before an edited source is used.
+Checkpoint reuse is conditional on an exact source-version match; a stale
+checkpoint is discarded and rebuilt rather than failing the user task.
 
 A message starts an Agent run only when all conditions hold:
 

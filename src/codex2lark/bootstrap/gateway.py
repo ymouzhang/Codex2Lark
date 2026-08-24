@@ -17,6 +17,10 @@ from codex2lark.capabilities.im.channel_adapter import (
     create_official_channel,
 )
 from codex2lark.capabilities.im.context_provider import IMContextProvider
+from codex2lark.capabilities.im.lifecycle import (
+    IMLifecycleAdmissionService,
+    IMLifecycleTaskHandler,
+)
 from codex2lark.capabilities.im.live_reader import (
     IMMessageAPI,
     OfficialIMMessageAPI,
@@ -222,23 +226,30 @@ def create_v3_gateway(
         app_id=config.feishu_app_id,
         received_at_ms=lambda: int(time.time() * 1000),
     )
+    lifecycle_admission = IMLifecycleAdmissionService(
+        runtime_store,
+        app_id=config.feishu_app_id,
+        received_at_ms=lambda: int(time.time() * 1000),
+    )
     source = OfficialChannelEventSource(
         active_channel,
         admission,
         app_id=config.feishu_app_id,
         received_at_ms=lambda: int(time.time() * 1000),
         bot_added_handler=membership_admission,
+        lifecycle_handler=lifecycle_admission,
     )
     api = im_api or OfficialIMMessageAPI(
         app_id=config.feishu_app_id, app_secret=config.feishu_app_secret
     )
+    blob_store = EncryptedBlobStore(config.data_dir / "blobs", cipher)
     live_context = IMContextProvider(
         OfficialLiveIMReader(api, bot_open_id=bot_open_id),
         im_repository,
         attachments=AttachmentService(
             im_repository,
             active_channel,
-            EncryptedBlobStore(config.data_dir / "blobs", cipher),
+            blob_store,
             SafeAttachmentParser(),
         ),
         clock_ms=lambda: int(time.time() * 1000),
@@ -332,7 +343,10 @@ def create_v3_gateway(
             "im.ensure_owner_membership": MembershipTaskHandler(
                 authoring.membership,
                 bot_identity=Identity.BOT,
+                access_repository=im_repository,
             ),
+            "im.invalidate_message": IMLifecycleTaskHandler(im_repository, blob_store),
+            "im.revoke_chat_access": IMLifecycleTaskHandler(im_repository, blob_store),
         },
         worker_id="v3-task-worker",
         concurrency=config.task_concurrency,
