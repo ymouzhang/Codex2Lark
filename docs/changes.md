@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined bounded cooperative Gateway shutdown before implementation. Intake
+  stops first, the active batch receives a configurable drain window, cancelled
+  tasks atomically return their lease without consuming a retry, and source,
+  plugin, and database lifecycle awaits are bounded. Implementation area:
+  Gateway config/lifecycle, durable worker cancellation, operations, and direct
+  cancellation/drain tests.
+
 - Defined plugin failure isolation before implementation. Production marks IM
   ingress mandatory and business capabilities optional; optional startup/health
   failure keeps the Gateway available, while policy rechecks trusted owning-

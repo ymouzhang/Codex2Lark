@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from codex2lark.core.events import (
     LeasedTask,
     NormalizedEvent,
@@ -124,6 +126,18 @@ class DeferredHandler(ConcurrentHandler):
         raise TaskDeferred("approval_pending", delay_ms=25)
 
 
+class BlockingHandler(ConcurrentHandler):
+    def __init__(self) -> None:
+        super().__init__(1)
+        self.entered = asyncio.Event()
+
+    async def execute(self, task: LeasedTask, *, now_ms: int) -> TaskExecutionResult:
+        del task, now_ms
+        self.entered.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+
 async def test_task_deferral_releases_lease_without_spending_retry_budget(
     tmp_path: Path,
 ) -> None:
@@ -146,6 +160,36 @@ async def test_task_deferral_releases_lease_without_spending_retry_budget(
             ).fetchone()
         )
         assert tuple(state) == ("pending", 0, 35, "approval_pending")
+    finally:
+        await database.close()
+
+
+async def test_worker_cancellation_releases_lease_without_spending_retry_budget(
+    tmp_path: Path,
+) -> None:
+    database, store = await setup(tmp_path)
+    try:
+        await store.admit(event(1), command("session-a"), now_ms=1)
+        handler = BlockingHandler()
+        worker = DurableTaskWorker(
+            store,
+            {"im.handle_mention": handler},
+            worker_id="worker",
+            clock_ms=lambda: 10,
+        )
+        running = asyncio.create_task(worker.run_once(now_ms=2))
+        await handler.entered.wait()
+
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        state = await database.call(
+            lambda connection: connection.execute(
+                "SELECT state, attempt_count, lease_owner, last_error_code FROM runtime_tasks"
+            ).fetchone()
+        )
+        assert tuple(state) == ("pending", 0, None, "shutdown_cancelled")
     finally:
         await database.close()
 

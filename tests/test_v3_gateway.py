@@ -61,6 +61,22 @@ class WorkerDouble:
         return object()
 
 
+class BlockingWorkerDouble:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    async def run_once(self, **parameters: object) -> object:
+        del parameters
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        raise AssertionError("unreachable")
+
+
 class ToggleCapabilityPlugin:
     manifest = PluginManifest("feishu-docs", "1.0.0", 1, ("docs.create",))
 
@@ -119,6 +135,7 @@ def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_pa
     assert config.authorized_actor_ids == frozenset()
     assert config.run_wall_time_ms == 900_000
     assert config.run_cost_limit_micros == 1_000_000
+    assert config.shutdown_drain_ms == 30_000
     assert "secret" not in repr(config)
     missing_price = dict(values)
     del missing_price["CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS"]
@@ -170,6 +187,28 @@ async def test_v3_gateway_runs_workers_and_drains_on_stop() -> None:
     assert database.opened and database.closed
     assert source.started and source.stopped
     assert tasks.calls >= 2
+
+
+async def test_v3_gateway_cancels_active_batch_after_drain_deadline() -> None:
+    database = LifecycleDouble()
+    source = LifecycleDouble()
+    tasks = BlockingWorkerDouble()
+    service = V3Gateway(
+        database=database,  # type: ignore[arg-type]
+        plugins=LifecycleDouble(),  # type: ignore[arg-type]
+        source=source,  # type: ignore[arg-type]
+        tasks=tasks,  # type: ignore[arg-type]
+        outbox=WorkerDouble(),  # type: ignore[arg-type]
+        poll_interval_ms=10,
+        shutdown_drain_ms=5,
+    )
+
+    await service.start()
+    await tasks.started.wait()
+    await service.stop()
+
+    assert tasks.cancelled.is_set()
+    assert database.closed and source.stopped
 
 
 async def test_v3_gateway_closes_database_when_source_start_fails() -> None:

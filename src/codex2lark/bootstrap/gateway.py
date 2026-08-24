@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from typing import Protocol
+from typing import Protocol, TypeVar
 
 from codex2lark.adapters.openai_responses import OpenAIResponsesModel
 from codex2lark.capabilities.artifacts.plugin import FeishuArtifactsPlugin
@@ -81,6 +81,7 @@ from codex2lark.storage.session_store import SQLiteSessionStore
 from .config import GatewayConfig
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 class AuthoringServices(Protocol):
@@ -144,6 +145,7 @@ class V3Gateway:
         tasks: DurableTaskWorker,
         outbox: OutboxDispatcher,
         poll_interval_ms: int,
+        shutdown_drain_ms: int = 30_000,
         clock_ms: Callable[[], int] | None = None,
         data_lock: DataDirectoryLock | None = None,
     ) -> None:
@@ -153,6 +155,9 @@ class V3Gateway:
         self._tasks = tasks
         self._outbox = outbox
         self._poll_interval = poll_interval_ms / 1000
+        if shutdown_drain_ms < 1:
+            raise ValueError("Gateway shutdown drain must be positive")
+        self._shutdown_timeout = shutdown_drain_ms / 1000
         self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self._data_lock = data_lock
         self._stop = asyncio.Event()
@@ -187,28 +192,45 @@ class V3Gateway:
         worker = self._worker
         if worker is None:
             return
-        source_failure: BaseException | None = None
+        lifecycle_failure: BaseException | None = None
+        self._stop.set()
         try:
             try:
-                await self._source.stop()
+                await self._bounded(self._source.stop())
             except BaseException as exc:
-                source_failure = exc
-            self._stop.set()
-            await worker
-            await self._drain_once()
+                lifecycle_failure = exc
+            try:
+                await self._bounded(worker)
+            except TimeoutError:
+                worker.cancel()
+                with suppress(asyncio.CancelledError, TimeoutError):
+                    await self._bounded(worker)
+                logger.warning("V3 gateway drain deadline expired; active tasks were cancelled")
+            try:
+                await self._bounded(self._outbox.run_once(now_ms=self._clock_ms()))
+            except BaseException as exc:
+                lifecycle_failure = lifecycle_failure or exc
         finally:
             try:
-                await self._plugins.stop()
+                await self._bounded(self._plugins.stop())
+            except BaseException as exc:
+                lifecycle_failure = lifecycle_failure or exc
             finally:
                 try:
-                    await self._database.close()
+                    await self._bounded(self._database.close())
+                except BaseException as exc:
+                    lifecycle_failure = lifecycle_failure or exc
                 finally:
                     if self._data_lock is not None:
                         self._data_lock.release()
             self._worker = None
             logger.info("V3 gateway stopped")
-        if source_failure is not None:
-            raise source_failure
+        if lifecycle_failure is not None:
+            raise lifecycle_failure
+
+    async def _bounded(self, awaitable: Awaitable[_T]) -> _T:
+        async with asyncio.timeout(self._shutdown_timeout):
+            return await awaitable
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -468,5 +490,6 @@ def create_v3_gateway(
         tasks=task_worker,
         outbox=outbox,
         poll_interval_ms=config.poll_interval_ms,
+        shutdown_drain_ms=config.shutdown_drain_ms,
         data_lock=DataDirectoryLock(config.data_dir),
     )

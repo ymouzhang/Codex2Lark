@@ -44,6 +44,7 @@ class GatewayConfig:
     authorized_actor_ids: frozenset[str] = field(default_factory=frozenset)
     run_wall_time_ms: int = 900_000
     run_cost_limit_micros: int = 1_000_000
+    shutdown_drain_ms: int = 30_000
 
     def __post_init__(self) -> None:
         required = (
@@ -62,6 +63,7 @@ class GatewayConfig:
                 self.model_output_cost_micros_per_million_tokens,
                 self.run_wall_time_ms,
                 self.run_cost_limit_micros,
+                self.shutdown_drain_ms,
             )
             < 1
         ):
@@ -125,6 +127,7 @@ class GatewayConfig:
             run_cost_limit_micros=cls._integer(
                 values, "CODEX2LARK_RUN_COST_LIMIT_MICROS", 1_000_000
             ),
+            shutdown_drain_ms=cls._integer(values, "CODEX2LARK_SHUTDOWN_DRAIN_MS", 30_000),
         )
 
     @staticmethod

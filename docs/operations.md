@@ -208,6 +208,14 @@ Expired leases are recovered after restart. Press `Ctrl+C` for a draining stop;
 the service stops event intake, completes its bounded drain, checkpoints SQLite,
 and then exits.
 
+The in-process drain defaults to 30 seconds and can be configured with
+`CODEX2LARK_SHUTDOWN_DRAIN_MS`. Intake is disabled first. A task still running
+at the deadline is cancelled at an await boundary and its durable lease is
+returned to `pending` immediately without spending a retry attempt; it resumes
+after restart from its last safe checkpoint. Source disconnect, plugin stop,
+and database close are each bounded as well, so one faulty adapter cannot make
+graceful shutdown wait forever.
+
 The built-in single-node controller stores only a PID, timestamps, and lifecycle
 state under the data directory; logs go to `gateway.log` and must remain
 content-safe. `gateway stop` validates the live process command before signaling

@@ -130,6 +130,16 @@ class DurableTaskWorker:
             if task.recovery_error_code is not None:
                 raise PermanentTaskError(task.recovery_error_code)
             result = await handler.execute(task, now_ms=now_ms)
+        except asyncio.CancelledError:
+            transition_ms = max(now_ms, self._clock_ms())
+            await self._store.defer_task(
+                task.task_id,
+                worker_id=self._worker_id,
+                available_at_ms=transition_ms,
+                now_ms=transition_ms,
+                reason="shutdown_cancelled",
+            )
+            raise
         except TaskDeferred as exc:
             transition_ms = max(now_ms, self._clock_ms())
             await self._store.defer_task(

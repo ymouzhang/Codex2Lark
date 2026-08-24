@@ -49,6 +49,12 @@ Channel SDK owns one outbound WebSocket connection and resolves bot identity
 before readiness. Its message and membership callbacks perform only bounded
 normalization and durable admission; raw payloads are never exposed to the model.
 
+Shutdown stops admission first and gives the active durable task batch a
+configured finite drain window. On timeout, cancellation propagates through the
+Harness/model/tool awaits; each leased task is atomically deferred, its retry
+attempt is restored, and the last complete checkpoint remains the recovery
+point. No new batch is leased during shutdown.
+
 When `botAdded` arrives, the callback durably admits a normalized reference and
 returns after that transaction commits. Admission creates one
 `im.ensure_owner_membership` task keyed by tenant/app/event. The task uses the
