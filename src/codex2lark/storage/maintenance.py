@@ -307,6 +307,212 @@ class StorageMaintenance:
             resource_id=chat_id,
         )
 
+    def purge_tenant(self, *, tenant_key: str) -> PurgeResult:
+        if not tenant_key.strip():
+            raise ValueError("tenant purge target is required")
+        if not self.database_path.is_file():
+            raise FileNotFoundError(f"runtime database does not exist: {self.database_path}")
+        with DataDirectoryLock(self.data_dir), sqlite3.connect(self.database_path) as connection:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.row_factory = sqlite3.Row
+            exists = connection.execute(
+                """
+                SELECT 1 FROM im_chats WHERE tenant_key = ?
+                UNION ALL SELECT 1 FROM runtime_events WHERE tenant_key = ?
+                UNION ALL SELECT 1 FROM runtime_graphs WHERE tenant_key = ?
+                UNION ALL SELECT 1 FROM runtime_tasks WHERE session_key LIKE ?
+                LIMIT 1
+                """,
+                (tenant_key, tenant_key, tenant_key, f"{tenant_key}/%"),
+            ).fetchone()
+            if exists is None:
+                raise LookupError("exact tenant purge target does not exist")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("PRAGMA defer_foreign_keys=ON")
+            try:
+                self._prepare_tenant_purge_tables(connection, tenant_key)
+                candidates = tuple(
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT DISTINCT blob_id FROM im_attachments "
+                        "WHERE tenant_key = ? AND blob_id IS NOT NULL",
+                        (tenant_key,),
+                    )
+                )
+                counts = {
+                    "messages": self._temp_count(connection, "purge_messages"),
+                    "attachments": int(
+                        connection.execute(
+                            "SELECT COUNT(*) FROM im_attachments WHERE tenant_key = ?",
+                            (tenant_key,),
+                        ).fetchone()[0]
+                    ),
+                    "checkpoints": int(
+                        connection.execute(
+                            "SELECT COUNT(*) FROM runtime_checkpoints "
+                            "WHERE run_id IN (SELECT run_id FROM purge_runs)"
+                        ).fetchone()[0]
+                    ),
+                    "tasks": self._temp_count(connection, "purge_tasks"),
+                    "runs": self._temp_count(connection, "purge_runs"),
+                    "outbox": int(
+                        connection.execute(
+                            "SELECT COUNT(*) FROM runtime_outbox "
+                            "WHERE task_id IN (SELECT task_id FROM purge_tasks) "
+                            "OR run_id IN (SELECT run_id FROM purge_runs)"
+                        ).fetchone()[0]
+                    ),
+                }
+                connection.execute(
+                    "DELETE FROM runtime_approvals WHERE task_id IN "
+                    "(SELECT task_id FROM purge_tasks)"
+                )
+                connection.execute(
+                    "DELETE FROM runtime_run_controls WHERE target_task_id IN "
+                    "(SELECT task_id FROM purge_tasks) OR event_pk IN "
+                    "(SELECT event_pk FROM purge_events)"
+                )
+                connection.execute(
+                    "DELETE FROM runtime_outbox WHERE task_id IN "
+                    "(SELECT task_id FROM purge_tasks) OR run_id IN "
+                    "(SELECT run_id FROM purge_runs)"
+                )
+                connection.execute(
+                    "DELETE FROM runtime_idempotency WHERE EXISTS ("
+                    "SELECT 1 FROM purge_runs r WHERE owner LIKE r.run_id || ':%')"
+                )
+                connection.execute(
+                    "DELETE FROM runtime_run_events WHERE run_id IN (SELECT run_id FROM purge_runs)"
+                )
+                connection.execute(
+                    "DELETE FROM runtime_checkpoints WHERE run_id IN "
+                    "(SELECT run_id FROM purge_runs)"
+                )
+                connection.execute("DELETE FROM runtime_graphs WHERE tenant_key = ?", (tenant_key,))
+                connection.execute(
+                    "DELETE FROM runtime_runs WHERE run_id IN (SELECT run_id FROM purge_runs)"
+                )
+                connection.execute(
+                    "DELETE FROM runtime_tasks WHERE task_id IN (SELECT task_id FROM purge_tasks)"
+                )
+                connection.execute(
+                    "DELETE FROM runtime_events WHERE event_pk IN "
+                    "(SELECT event_pk FROM purge_events)"
+                )
+                attachments = connection.execute(
+                    "DELETE FROM im_attachments WHERE tenant_key = ?", (tenant_key,)
+                ).rowcount
+                messages = connection.execute(
+                    "DELETE FROM im_messages WHERE tenant_key = ?", (tenant_key,)
+                ).rowcount
+                connection.execute("DELETE FROM im_chats WHERE tenant_key = ?", (tenant_key,))
+                unreferenced = self._drop_blob_metadata(connection, candidates)
+                counts["blobs"] = len(unreferenced)
+                self._insert_purge_audit(
+                    connection,
+                    target_kind="tenant",
+                    target_digest=hashlib.sha256(tenant_key.encode()).hexdigest(),
+                    counts=counts,
+                )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            deleted, reclaimed = self._delete_blob_ids(unreferenced)
+            return PurgeResult(
+                True,
+                "tenant",
+                messages,
+                attachments,
+                counts["checkpoints"],
+                counts["tasks"],
+                counts["runs"],
+                counts["outbox"],
+                deleted,
+                reclaimed,
+            )
+
+    def purge_all(self) -> PurgeResult:
+        if not self.database_path.is_file():
+            raise FileNotFoundError(f"runtime database does not exist: {self.database_path}")
+        blob_paths = self._bounded_blob_files(10_000_000)
+        for path in blob_paths:
+            self._validate_blob_id(path.stem)
+        with DataDirectoryLock(self.data_dir), sqlite3.connect(self.database_path) as connection:
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.row_factory = sqlite3.Row
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("PRAGMA defer_foreign_keys=ON")
+            try:
+                business_tables = (
+                    "runtime_plugins",
+                    "runtime_events",
+                    "runtime_tasks",
+                    "runtime_runs",
+                    "runtime_run_events",
+                    "runtime_outbox",
+                    "runtime_idempotency",
+                    "runtime_checkpoints",
+                    "runtime_graphs",
+                    "runtime_agent_nodes",
+                    "runtime_agent_edges",
+                    "runtime_mailbox",
+                    "runtime_artifacts",
+                    "runtime_agent_checkpoints",
+                    "runtime_resource_locks",
+                    "runtime_budget_ledger",
+                    "runtime_run_controls",
+                    "runtime_checkpoint_sources",
+                    "runtime_approvals",
+                    "im_chats",
+                    "im_messages",
+                    "im_attachments",
+                    "im_file_blobs",
+                )
+                counts = {
+                    table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                    for table in business_tables
+                }
+                counts["blobs"] = len(blob_paths)
+                messages = counts["im_messages"]
+                attachments = counts["im_attachments"]
+                checkpoints = counts["runtime_checkpoints"] + counts["runtime_agent_checkpoints"]
+                tasks = counts["runtime_tasks"]
+                runs = counts["runtime_runs"]
+                outbox = counts["runtime_outbox"]
+                connection.execute("DELETE FROM runtime_admin_audit")
+                for table in reversed(business_tables):
+                    connection.execute(f"DELETE FROM {table}")
+                self._insert_purge_audit(
+                    connection,
+                    target_kind="all",
+                    target_digest=hashlib.sha256(b"all-business-data-v1").hexdigest(),
+                    counts=counts,
+                )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+        deleted = 0
+        reclaimed = 0
+        for path in blob_paths:
+            if path.is_file():
+                reclaimed += path.stat().st_size
+                path.unlink()
+                deleted += 1
+        return PurgeResult(
+            True,
+            "all",
+            messages,
+            attachments,
+            checkpoints,
+            tasks,
+            runs,
+            outbox,
+            deleted,
+            reclaimed,
+        )
+
     def _purge(
         self, *, target_kind: str, tenant_key: str, app_id: str, resource_id: str
     ) -> PurgeResult:
@@ -532,6 +738,81 @@ class StorageMaintenance:
                 """,
                 (tenant_key, app_id, resource_id),
             )
+
+    @staticmethod
+    def _prepare_tenant_purge_tables(connection: sqlite3.Connection, tenant_key: str) -> None:
+        for name in (
+            "purge_messages",
+            "purge_tasks",
+            "purge_runs",
+            "purge_events",
+        ):
+            connection.execute(f"DROP TABLE IF EXISTS temp.{name}")
+        connection.execute("CREATE TEMP TABLE purge_messages(message_id TEXT PRIMARY KEY)")
+        connection.execute(
+            "INSERT INTO purge_messages SELECT message_id FROM im_messages WHERE tenant_key = ?",
+            (tenant_key,),
+        )
+        connection.execute("CREATE TEMP TABLE purge_events(event_pk INTEGER PRIMARY KEY)")
+        connection.execute(
+            "INSERT INTO purge_events SELECT event_pk FROM runtime_events WHERE tenant_key = ?",
+            (tenant_key,),
+        )
+        connection.execute("CREATE TEMP TABLE purge_tasks(task_id TEXT PRIMARY KEY)")
+        connection.execute(
+            """
+            INSERT INTO purge_tasks
+            SELECT task_id FROM runtime_tasks
+            WHERE event_pk IN (SELECT event_pk FROM purge_events)
+               OR session_key LIKE ?
+            """,
+            (f"{tenant_key}/%",),
+        )
+        connection.execute("CREATE TEMP TABLE purge_runs(run_id TEXT PRIMARY KEY)")
+        connection.execute(
+            "INSERT INTO purge_runs SELECT run_id FROM runtime_runs "
+            "WHERE task_id IN (SELECT task_id FROM purge_tasks)"
+        )
+
+    @staticmethod
+    def _temp_count(connection: sqlite3.Connection, table: str) -> int:
+        if table not in {"purge_messages", "purge_tasks", "purge_runs", "purge_events"}:
+            raise ValueError("unsupported purge count table")
+        return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
+    @staticmethod
+    def _insert_purge_audit(
+        connection: sqlite3.Connection,
+        *,
+        target_kind: str,
+        target_digest: str,
+        counts: dict[str, int],
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO runtime_admin_audit(
+                operation, target_kind, target_digest, result_counts, created_at_ms
+            ) VALUES ('purge', ?, ?, ?, ?)
+            """,
+            (
+                target_kind,
+                target_digest,
+                json.dumps(counts, sort_keys=True, separators=(",", ":")),
+                int(time.time() * 1000),
+            ),
+        )
+
+    def _delete_blob_ids(self, blob_ids: tuple[str, ...]) -> tuple[int, int]:
+        deleted = 0
+        reclaimed = 0
+        for blob_id in blob_ids:
+            self._validate_blob_id(blob_id)
+            path = self._blob_path(self.blob_root, blob_id)
+            if path.is_file():
+                reclaimed += path.stat().st_size
+                path.unlink()
+                deleted += 1
+        return deleted, reclaimed
 
     @staticmethod
     def _drop_blob_metadata(

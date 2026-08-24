@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined broad local business-data purge before implementation. Stopped-Gateway
+  `purge-tenant` spans all tenant apps and derived runtime state; `purge-all`
+  removes every local business row and encrypted blob while preserving schema
+  migrations and exactly one content-free audit record. Implementation area:
+  storage maintenance, CLI, operator docs, and destructive-scope tests.
+
 - Defined observable complete-turn compaction before implementation. Context
   builds report journal compaction, the Harness emits a content-free
   `context_compacted` lifecycle event, and overflow evals reject assistant/tool

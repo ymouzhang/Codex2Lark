@@ -218,10 +218,17 @@ uv run codex2lark storage purge-message \
 
 uv run codex2lark storage purge-chat \
   --tenant-key tenant_x --app-id cli_x --chat-id oc_x --yes
+
+uv run codex2lark storage purge-tenant --tenant-key tenant_x --yes
+
+uv run codex2lark storage purge-all --yes
 ```
 
-The command fails for an unknown target and prints only counts and reclaimed
-bytes. It does not delete the corresponding upstream Feishu message or chat.
+Exact-target commands fail for an unknown target and print only counts and
+reclaimed bytes. Tenant purge removes every local app/chat/run belonging to the
+tenant. All purge removes all local business state while preserving migrations
+and one content-free audit record. None of these commands deletes corresponding
+upstream Feishu data.
 
 Rotate the wrapping key only after creating and verifying a backup and while the
 Gateway is stopped. Keep the current key environment configured for this

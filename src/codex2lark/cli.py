@@ -261,6 +261,15 @@ def _parser() -> argparse.ArgumentParser:
     purge_chat.add_argument("--app-id", required=True)
     purge_chat.add_argument("--chat-id", required=True)
     purge_chat.add_argument("--yes", action="store_true")
+    purge_tenant = storage_commands.add_parser(
+        "purge-tenant", help="purge all local business state for one exact tenant"
+    )
+    purge_tenant.add_argument("--tenant-key", required=True)
+    purge_tenant.add_argument("--yes", action="store_true")
+    purge_all = storage_commands.add_parser(
+        "purge-all", help="purge every local business row and encrypted blob"
+    )
+    purge_all.add_argument("--yes", action="store_true")
     rotate = storage_commands.add_parser(
         "rotate-key", help="rewrap all encrypted state with a new master key"
     )
@@ -305,6 +314,16 @@ def _storage(arguments: argparse.Namespace) -> int:
                 app_id=arguments.app_id,
                 chat_id=arguments.chat_id,
             )
+        elif arguments.storage_command == "purge-tenant":
+            if not arguments.yes:
+                raise ValueError("storage purge-tenant requires explicit --yes confirmation")
+            result = StorageMaintenance(resolve_data_dir()).purge_tenant(
+                tenant_key=arguments.tenant_key
+            )
+        elif arguments.storage_command == "purge-all":
+            if not arguments.yes:
+                raise ValueError("storage purge-all requires explicit --yes confirmation")
+            result = StorageMaintenance(resolve_data_dir()).purge_all()
         elif arguments.storage_command == "rotate-key":
             if not arguments.yes:
                 raise ValueError("storage rotate-key requires explicit --yes confirmation")

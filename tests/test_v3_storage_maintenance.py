@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import zipfile
 from pathlib import Path
 
@@ -346,12 +347,146 @@ async def test_targeted_chat_purge_removes_derived_runtime_and_preserves_shared_
         StorageMaintenance(data_dir).purge_chat(tenant_key="tenant", app_id="app", chat_id="chat-2")
 
 
+async def test_tenant_and_all_purge_remove_exact_business_scopes_and_keep_audit(
+    tmp_path: Path,
+) -> None:
+    data_dir = (tmp_path / "state").resolve()
+    await create_database(data_dir)
+    blob_id = "e" * 64
+    blob = data_dir / "blobs" / "ee" / f"{blob_id}.blob"
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"encrypted-shared")
+    database = SQLiteDatabase(data_dir / "runtime.db")
+    await database.open()
+    try:
+        await database.transaction(
+            lambda connection: connection.executescript(
+                f"""
+                INSERT INTO im_file_blobs VALUES ('{blob_id}', 16, NULL, 1);
+                INSERT INTO im_chats VALUES
+                  ('tenant-a', 'app-a', 'chat-a', NULL, 'group', 1, 'present', 'visible',
+                   1, 'default', NULL),
+                  ('tenant-b', 'app-b', 'chat-b', NULL, 'group', 1, 'present', 'visible',
+                   1, 'default', NULL);
+                INSERT INTO im_messages VALUES
+                  ('tenant-a', 'app-a', 'message-a', 'chat-a', NULL, NULL, NULL, 'user',
+                   'sender-a', NULL, 'file', X'01', X'01', 'hash-a', 1, 1, 0, 0, 1, 1, NULL),
+                  ('tenant-b', 'app-b', 'message-b', 'chat-b', NULL, NULL, NULL, 'user',
+                   'sender-b', NULL, 'file', X'01', X'01', 'hash-b', 1, 1, 0, 0, 1, 1, NULL);
+                INSERT INTO im_attachments(
+                    tenant_key, app_id, message_id, resource_key, chat_id,
+                    resource_type, blob_id, download_state, parse_state
+                ) VALUES
+                  ('tenant-a', 'app-a', 'message-a', 'resource-a', 'chat-a', 'file',
+                   '{blob_id}', 'downloaded', 'parsed'),
+                  ('tenant-b', 'app-b', 'message-b', 'resource-b', 'chat-b', 'file',
+                   '{blob_id}', 'downloaded', 'parsed');
+                INSERT INTO runtime_events(
+                    event_id, plugin_id, event_type, tenant_key, app_id,
+                    occurred_at_ms, received_at_ms, schema_version, resource_kind,
+                    resource_id, trace_id, status, created_at_ms
+                ) VALUES
+                  ('event-a', 'feishu-im', 'receive', 'tenant-a', 'app-a', 1, 1, 1,
+                   'im.message', 'message-a', 'trace-a', 'admitted', 1),
+                  ('event-b', 'feishu-im', 'receive', 'tenant-b', 'app-b', 1, 1, 1,
+                   'im.message', 'message-b', 'trace-b', 'admitted', 1);
+                INSERT INTO runtime_tasks(
+                    task_id, event_pk, plugin_id, command_type, session_key, priority,
+                    payload_ciphertext, state, available_at_ms, attempt_count,
+                    max_attempts, created_at_ms, updated_at_ms
+                )
+                  SELECT 'task-a', event_pk, 'feishu-im', 'handle',
+                    'tenant-a/app-a/chat-a/root', 0, X'01', 'pending', 1, 0, 3, 1, 1
+                    FROM runtime_events WHERE event_id = 'event-a'
+                  UNION ALL
+                  SELECT 'task-b', event_pk, 'feishu-im', 'handle',
+                    'tenant-b/app-b/chat-b/root', 0, X'01', 'pending', 1, 0, 3, 1, 1
+                    FROM runtime_events WHERE event_id = 'event-b';
+                INSERT INTO runtime_runs VALUES
+                  ('run-a', 'task-a', 'tenant-a/app-a/chat-a/root', 'agent', 1, 1,
+                   'running', 1, 1),
+                  ('run-b', 'task-b', 'tenant-b/app-b/chat-b/root', 'agent', 1, 1,
+                   'running', 1, 1);
+                INSERT INTO runtime_checkpoints VALUES
+                  ('run-a', X'01', 2, 'agent', 1, 1, 1, 1),
+                  ('run-b', X'01', 2, 'agent', 1, 1, 1, 1);
+                INSERT INTO runtime_outbox(
+                    outbox_id, run_id, task_id, publisher_id, destination_ref,
+                    message_kind, idempotency_key, payload_ciphertext, state,
+                    available_at_ms, attempt_count, max_attempts, created_at_ms, updated_at_ms
+                ) VALUES
+                  ('out-a', 'run-a', 'task-a', 'feishu-im.reply', 'message-a',
+                   'completed', 'out-a-key', X'01', 'pending', 1, 0, 3, 1, 1),
+                  ('out-b', 'run-b', 'task-b', 'feishu-im.reply', 'message-b',
+                   'completed', 'out-b-key', X'01', 'pending', 1, 0, 3, 1, 1);
+                INSERT INTO runtime_graphs VALUES
+                  ('graph-a', 'run-a', 'root-a', 'tenant-a', 'app-a', 'im.thread',
+                   'chat-a', 'agent', 1, 'active', 3, 8, 3, 1, 1),
+                  ('graph-b', 'run-b', 'root-b', 'tenant-b', 'app-b', 'im.thread',
+                   'chat-b', 'agent', 1, 'active', 3, 8, 3, 1, 1);
+                """
+            )
+        )
+    finally:
+        await database.close()
+
+    tenant_result = StorageMaintenance(data_dir).purge_tenant(tenant_key="tenant-a")
+
+    assert tenant_result.target_kind == "tenant"
+    assert tenant_result.messages_deleted == 1
+    assert tenant_result.blobs_deleted == 0
+    assert blob.exists()
+    with sqlite3.connect(data_dir / "runtime.db") as connection:
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM im_chats WHERE tenant_key = 'tenant-a'"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM im_chats WHERE tenant_key = 'tenant-b'"
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM runtime_graphs WHERE tenant_key = 'tenant-a'"
+            ).fetchone()[0]
+            == 0
+        )
+        audit = connection.execute(
+            "SELECT target_kind, target_digest, result_counts FROM runtime_admin_audit"
+        ).fetchone()
+    assert audit[0] == "tenant"
+    assert "tenant-a" not in "".join(str(item) for item in audit)
+
+    all_result = StorageMaintenance(data_dir).purge_all()
+
+    assert all_result.target_kind == "all"
+    assert all_result.messages_deleted == 1
+    assert all_result.blobs_deleted == 1
+    assert not blob.exists()
+    with sqlite3.connect(data_dir / "runtime.db") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM runtime_migrations").fetchone()[0] == 10
+        assert connection.execute("SELECT COUNT(*) FROM runtime_admin_audit").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM runtime_graphs").fetchone()[0] == 0
+        assert (
+            connection.execute("SELECT target_kind FROM runtime_admin_audit").fetchone()[0] == "all"
+        )
+
+
 def test_cli_gc_requires_explicit_confirmation(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     monkeypatch.setenv("CODEX2LARK_DATA_DIR", str(tmp_path))
 
     assert cli.main(["storage", "gc"]) == 1
+    assert "requires explicit --yes" in capsys.readouterr().out
+    assert cli.main(["storage", "purge-tenant", "--tenant-key", "tenant"]) == 1
+    assert "requires explicit --yes" in capsys.readouterr().out
+    assert cli.main(["storage", "purge-all"]) == 1
     assert "requires explicit --yes" in capsys.readouterr().out
     assert (
         cli.main(

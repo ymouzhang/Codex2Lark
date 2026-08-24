@@ -484,11 +484,13 @@ Destructive commands resolve exact targets, show counts and byte estimates, and
 require explicit confirmation. Purge writes a content-free audit record but does
 not retain deleted business content.
 
-The first targeted purge commands are:
+The supported targeted purge commands are:
 
 ```text
 codex2lark storage purge-message --tenant-key T --app-id A --message-id M --yes
 codex2lark storage purge-chat --tenant-key T --app-id A --chat-id C --yes
+codex2lark storage purge-tenant --tenant-key T --yes
+codex2lark storage purge-all --yes
 ```
 
 They require the Gateway to be stopped, take the data-directory lock, remove IM
@@ -496,9 +498,16 @@ content, parser results, source-indexed checkpoints, related queued/run/outbox
 payloads, and unreferenced encrypted blobs, then return content-free row and byte
 counts. Message purge leaves the chat policy intact. Chat purge removes the
 local chat row; a later live event may recreate it unless persistence for that
-chat is separately disabled by policy. Unknown exact targets fail without
-changing storage. Broad tenant/all-business-data purge remains unavailable
-until its audit and identity-retention contract is implemented.
+chat is separately disabled by policy. Unknown exact message, chat, or tenant
+targets fail without changing storage. Tenant purge spans every app row and
+derived run/graph/task/outbox record bound to that tenant. All-business-data
+purge deletes every runtime event, task, run, checkpoint, graph, mailbox,
+artifact, approval, IM mirror row, idempotency claim, and encrypted blob. It
+preserves only schema migration records and appends one content-free
+administrative audit row after deleting earlier audit history. The audit keeps
+target kind, a fixed or one-way target digest, row counts, and time; it keeps no
+tenant key, app ID, business identifier, filename, content, or credential.
+Neither operation deletes upstream Feishu data.
 
 ## 15. Failure guarantees
 
