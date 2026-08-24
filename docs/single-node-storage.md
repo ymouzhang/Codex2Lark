@@ -107,7 +107,11 @@ updated_at
 Allowed states are `pending`, `leased`, `succeeded`, `blocked`, `failed`, and
 `cancelled`. A transaction selects eligible work, assigns a lease, and records
 the attempt. Startup recovery returns expired leases to `pending` unless the
-retry budget is exhausted.
+retry budget is exhausted. An exhausted execution lease also returns to
+`pending`, tagged for terminal finalization; it is never changed directly to
+`failed`. A finalization lease does not consume another business-execution
+attempt and may only render and atomically commit the handler's failure outcome
+and terminal outbox intent.
 
 ### `runtime_runs` and `runtime_run_events`
 

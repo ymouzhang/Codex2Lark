@@ -105,6 +105,7 @@ class LeasedTask:
     attempt_count: int
     max_attempts: int
     lease_expires_at_ms: int
+    recovery_error_code: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

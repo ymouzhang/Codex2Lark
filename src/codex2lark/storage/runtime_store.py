@@ -151,7 +151,7 @@ class RuntimeStore:
             connection.execute(
                 """
                 UPDATE runtime_tasks
-                SET state = 'failed', last_error_code = 'retry_exhausted',
+                SET state = 'pending', last_error_code = 'lease_retry_exhausted',
                     lease_owner = NULL, lease_expires_at_ms = NULL, updated_at_ms = ?
                 WHERE state = 'leased' AND lease_expires_at_ms <= ?
                   AND attempt_count >= max_attempts
@@ -168,7 +168,12 @@ class RuntimeStore:
                            ) AS session_rank
                     FROM runtime_tasks t
                     WHERE t.state = 'pending' AND t.available_at_ms <= ?
-                      AND t.attempt_count < t.max_attempts
+                      AND (
+                          t.attempt_count < t.max_attempts
+                          OR t.last_error_code IN (
+                              'retry_exhausted', 'lease_retry_exhausted'
+                          )
+                      )
                       AND NOT EXISTS (
                           SELECT 1 FROM runtime_tasks active
                           WHERE active.session_key = t.session_key
@@ -188,7 +193,13 @@ class RuntimeStore:
                     """
                     UPDATE runtime_tasks
                     SET state = 'leased', lease_owner = ?, lease_expires_at_ms = ?,
-                        attempt_count = attempt_count + 1, updated_at_ms = ?
+                        attempt_count = CASE
+                            WHEN last_error_code IN (
+                                'retry_exhausted', 'lease_retry_exhausted'
+                            ) THEN attempt_count
+                            ELSE attempt_count + 1
+                        END,
+                        updated_at_ms = ?
                     WHERE task_id = ? AND state = 'pending'
                     """,
                     (worker_id, lease_expires, now_ms, task_id),
@@ -263,12 +274,13 @@ class RuntimeStore:
             cursor = connection.execute(
                 """
                 UPDATE runtime_tasks
-                SET state = CASE
-                        WHEN attempt_count >= max_attempts THEN 'failed'
-                        ELSE 'pending'
-                    END,
+                SET state = 'pending',
                     available_at_ms = ?, lease_owner = NULL, lease_expires_at_ms = NULL,
-                    last_error_code = ?, updated_at_ms = ?
+                    last_error_code = CASE
+                        WHEN attempt_count >= max_attempts THEN 'retry_exhausted'
+                        ELSE ?
+                    END,
+                    updated_at_ms = ?
                 WHERE task_id = ? AND state = 'leased' AND lease_owner = ?
                 """,
                 (available_at_ms, error_code, now_ms, task_id, worker_id),
@@ -544,6 +556,11 @@ class RuntimeStore:
             attempt_count=row["attempt_count"],
             max_attempts=row["max_attempts"],
             lease_expires_at_ms=row["lease_expires_at_ms"],
+            recovery_error_code=(
+                row["last_error_code"]
+                if row["last_error_code"] in {"retry_exhausted", "lease_retry_exhausted"}
+                else None
+            ),
         )
 
     def _leased_outbox(self, row: sqlite3.Row) -> LeasedOutboxMessage:

@@ -155,3 +155,38 @@ async def test_task_worker_commits_terminal_failure_when_retries_are_exhausted(
         assert states == ("failed", "failed")
     finally:
         await database.close()
+
+
+async def test_expired_final_lease_is_terminalized_without_reexecution(
+    tmp_path: Path,
+) -> None:
+    database, store = await setup(tmp_path)
+    try:
+        await store.admit(event(1), command("session-a", max_attempts=1), now_ms=1)
+        abandoned = await store.lease_tasks(worker_id="crashed-worker", now_ms=2, lease_ms=10)
+        assert abandoned[0].attempt_count == 1
+        handler = ConcurrentHandler(1)
+        worker = DurableTaskWorker(
+            store,
+            {"im.handle_mention": handler},
+            worker_id="recovery-worker",
+        )
+
+        batch = await worker.run_once(now_ms=12)
+
+        assert len(batch.terminal_task_ids) == 1
+        assert handler.maximum_active == 0
+        state = await database.call(
+            lambda connection: connection.execute(
+                "SELECT state, attempt_count, last_error_code FROM runtime_tasks"
+            ).fetchone()
+        )
+        assert tuple(state) == ("failed", 1, "provider_failed")
+        outbox = await database.call(
+            lambda connection: connection.execute(
+                "SELECT message_kind FROM runtime_outbox"
+            ).fetchone()[0]
+        )
+        assert outbox == "failed"
+    finally:
+        await database.close()

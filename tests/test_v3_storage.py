@@ -240,7 +240,7 @@ async def test_acknowledgement_is_leased_before_same_timestamp_terminal(
         await database.close()
 
 
-async def test_retry_budget_becomes_failed(tmp_path: Path) -> None:
+async def test_retry_budget_becomes_pending_finalization(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "runtime.db")
     await database.open()
     store = RuntimeStore(database, cipher())
@@ -259,7 +259,10 @@ async def test_retry_budget_becomes_failed(tmp_path: Path) -> None:
                 "SELECT state, last_error_code FROM runtime_tasks"
             ).fetchone()
         )
-        assert tuple(state) == ("failed", "upstream_error")
+        assert tuple(state) == ("pending", "retry_exhausted")
+        finalizer = await store.lease_tasks(worker_id="finalizer", now_ms=200, lease_ms=10)
+        assert finalizer[0].attempt_count == 1
+        assert finalizer[0].recovery_error_code == "retry_exhausted"
     finally:
         await database.close()
 

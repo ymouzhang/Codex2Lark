@@ -3,6 +3,11 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined crash-safe retry exhaustion for durable tasks: an expired final lease
+  now enters a repeatable terminal-finalization step instead of becoming a
+  silent failed row. Implementation area: task leasing and durable worker
+  failure rendering.
+
 ## 2026-08-24
 
 - Defined production attachment-context composition before implementation:

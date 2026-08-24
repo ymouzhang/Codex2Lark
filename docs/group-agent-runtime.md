@@ -351,6 +351,11 @@ SessionKeys concurrently. A handler returns a typed terminal task result and
 its terminal reply intent commits in the same transaction. Transient provider
 failures return the task to pending with bounded delay; retry exhaustion commits
 a failed terminal reply rather than leaving an acknowledged request silent.
+If a worker process dies while holding the final execution lease, lease recovery
+does not mark the task failed directly. It schedules a durable finalization
+lease. The next worker skips business execution, asks the registered handler to
+render the typed failure outcome, and atomically commits that terminal state and
+reply intent. Finalization itself is repeatable until that transaction commits.
 
 ## 11. Single-node failure model
 

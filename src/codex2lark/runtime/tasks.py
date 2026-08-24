@@ -104,6 +104,8 @@ class DurableTaskWorker:
         try:
             if handler is None:
                 raise RuntimeError(f"task handler is unavailable: {task.command_type}")
+            if task.recovery_error_code is not None:
+                raise PermanentTaskError(task.recovery_error_code)
             result = await handler.execute(task, now_ms=now_ms)
         except Exception as exc:
             if not isinstance(exc, PermanentTaskError) and task.attempt_count < task.max_attempts:
