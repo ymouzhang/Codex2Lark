@@ -13,7 +13,8 @@ import pytest
 from codex2lark.bootstrap.config import GatewayConfig
 from codex2lark.bootstrap.gateway import V3Gateway, create_v3_gateway
 from codex2lark.capabilities.im.live_reader import WireMessagePage
-from codex2lark.runtime.types import ModelRequest, ModelResponse, ModelUsage
+from codex2lark.core.models import CreateDocumentRequest, Identity
+from codex2lark.runtime.types import ModelRequest, ModelResponse, ModelUsage, ToolCall
 from codex2lark.storage.crypto import MasterKey
 
 
@@ -186,6 +187,9 @@ class FakeChannel:
 
 
 class E2EMessageAPI:
+    def __init__(self, text: str = "summarize this") -> None:
+        self.text = text
+
     async def get(self, message_id: str) -> object:
         return SimpleNamespace(
             message_id=message_id,
@@ -195,7 +199,7 @@ class E2EMessageAPI:
             update_time=101,
             deleted=False,
             sender=SimpleNamespace(id="ou_user", sender_type="user", tenant_key="tenant-1"),
-            body=SimpleNamespace(content='{"text":"@_user_1 summarize this"}'),
+            body=SimpleNamespace(content=json.dumps({"text": f"@_user_1 {self.text}"})),
             mentions=(SimpleNamespace(id="ou_bot", name="Agent", key="@_user_1"),),
             thread_id=None,
             root_id=None,
@@ -223,6 +227,120 @@ class BlockingE2EModel:
         self.started.set()
         await self.release.wait()
         return ModelResponse("This answer must be cancelled.")
+
+
+class ProfessionalDocumentService:
+    def __init__(self) -> None:
+        self.created: list[CreateDocumentRequest] = []
+
+    async def search(self, request: object) -> dict[str, object]:
+        del request
+        return {"ok": True, "scope": "managed_folder", "matches": []}
+
+    async def inspect(self, request: object) -> dict[str, object]:
+        del request
+        return {
+            "ok": True,
+            "resource": {"url": "https://example.feishu.cn/docx/professional_v3"},
+            "data": {"content": "verified live document"},
+            "revision": 1,
+        }
+
+    async def create(self, request: object) -> dict[str, object]:
+        assert isinstance(request, CreateDocumentRequest)
+        assert request.identity is Identity.USER
+        assert "<table>" in request.content and "</table>" in request.content
+        assert '<whiteboard type="mermaid">' in request.content
+        assert "flowchart LR" in request.content
+        self.created.append(request)
+        return {
+            "ok": True,
+            "resource": {
+                "title": request.title,
+                "url": "https://example.feishu.cn/docx/professional_v3",
+            },
+            "managed_folder": {"name": "Codex2Lark", "token": "fld_managed"},
+            "verification": {"status": "passed", "checks": ["live_read_back"]},
+        }
+
+    async def edit(self, request: object) -> dict[str, object]:
+        del request
+        raise AssertionError("professional-document fixture must create, not edit")
+
+
+class UnusedArtifactService:
+    async def render_whiteboard(self, request: object) -> dict[str, object]:
+        del request
+        raise AssertionError("diagram must be embedded in the document create")
+
+    async def create_workbook(self, request: object) -> dict[str, object]:
+        del request
+        raise AssertionError("unexpected artifact call")
+
+    async def write_sheet(self, request: object) -> dict[str, object]:
+        del request
+        raise AssertionError("unexpected artifact call")
+
+    async def create_base(self, request: object) -> dict[str, object]:
+        del request
+        raise AssertionError("unexpected artifact call")
+
+    async def upsert_base_records(self, request: object) -> dict[str, object]:
+        del request
+        raise AssertionError("unexpected artifact call")
+
+
+class UnusedMembershipService:
+    async def ensure_current_user(
+        self, *, chat_id: str, chat_identity: Identity
+    ) -> dict[str, object]:
+        del chat_id, chat_identity
+        return {"ok": True}
+
+
+class AuthoringFixture:
+    def __init__(self) -> None:
+        self.docs = ProfessionalDocumentService()
+        self.artifacts = UnusedArtifactService()
+        self.membership = UnusedMembershipService()
+
+
+class ProfessionalDocumentModel:
+    content_marker = "runtime-professional-body-must-not-persist"
+
+    def __init__(self) -> None:
+        self.turn = 0
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.turn += 1
+        if self.turn == 1:
+            assert request.messages[-1].content == "create the professional architecture document"
+            return ModelResponse(
+                "",
+                (
+                    ToolCall(
+                        "create-professional-doc",
+                        "feishu.docs.create",
+                        {
+                            "title": "Codex2Lark V3 Architecture",
+                            "content_xml": (
+                                "<h1>Codex2Lark V3 Architecture</h1>"
+                                "<table><tr><th>Component</th><th>Responsibility</th></tr>"
+                                f"<tr><td>Harness</td><td>{self.content_marker}</td></tr></table>"
+                                '<whiteboard type="mermaid">flowchart LR; IM--&gt;Harness; '
+                                "Harness--&gt;Docs</whiteboard>"
+                            ),
+                            "required_text": ["Codex2Lark V3 Architecture", "Harness"],
+                        },
+                    ),
+                ),
+            )
+        tool_results = [message for message in request.messages if message.tool_call_id]
+        assert tool_results and '"state": "verified"' in tool_results[-1].content
+        return ModelResponse(
+            "《Codex2Lark V3 Architecture》已创建并完成回读验证: "
+            "https://example.feishu.cn/docx/professional_v3"
+        )
 
 
 def e2e_config(path: Path) -> GatewayConfig:
@@ -262,6 +380,42 @@ async def test_composed_gateway_admits_executes_and_sends_one_terminal_reply(
     with sqlite3.connect(tmp_path / "runtime.db") as connection:
         graph = connection.execute("SELECT status FROM runtime_graphs").fetchone()
     assert graph == ("completed",)
+
+
+async def test_group_request_creates_and_verifies_professional_document(
+    tmp_path: Path,
+) -> None:
+    channel = FakeChannel()
+    authoring = AuthoringFixture()
+    service = create_v3_gateway(
+        e2e_config(tmp_path),
+        channel=channel,  # type: ignore[arg-type]
+        model=ProfessionalDocumentModel(),
+        im_api=E2EMessageAPI("create the professional architecture document"),
+        authoring=authoring,  # type: ignore[arg-type]
+    )
+    await service.start()
+    try:
+        await channel.emit_mention(text="create the professional architecture document")
+
+        async def terminal_was_sent() -> None:
+            while len(channel.sent) < 3:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(terminal_was_sent(), timeout=1)
+    finally:
+        await service.stop()
+
+    assert len(authoring.docs.created) == 1
+    assert len(channel.sent) == 3
+    assert "开始处理" in str(channel.sent[1]["message"])
+    assert "Codex2Lark V3 Architecture" in str(channel.sent[2]["message"])
+    assert "https://example.feishu.cn/docx/professional_v3" in str(channel.sent[2]["message"])
+    assert "已经处理完成" in str(channel.sent[2]["message"])
+    assert (
+        ProfessionalDocumentModel.content_marker.encode()
+        not in (tmp_path / "runtime.db").read_bytes()
+    )
 
 
 async def test_composed_gateway_routes_same_requester_cancel_to_active_root(

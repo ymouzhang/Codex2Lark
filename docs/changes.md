@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined the group-to-professional-document vertical acceptance before
+  implementation. The production Gateway composition may receive a narrow
+  authoring service bundle for deterministic testing, while the full mention,
+  Harness, semantic-tool, verification, and IM outbox path remains unchanged.
+  The fixture requires a native table, Mermaid whiteboard, managed-folder
+  evidence, verified URL, and one explicit terminal reply. Implementation area:
+  Gateway composition boundary and end-to-end acceptance test.
+
 - Defined the production root-to-child mailbox surface before implementation.
   `agent.message` durably and idempotently sends bounded message/steer/follow-up
   updates to not-yet-running direct children, the delegation barrier delivers

@@ -14,6 +14,14 @@ ship two selectable group-runtime semantics. Historical research may describe
 V2 decisions, but executable imports and operator commands resolve only to the
 V3 durable composition root in `bootstrap.gateway`.
 
+The production composition root owns construction, but depends on a narrow
+authoring service bundle: document, artifact, and membership ports. Normal
+startup constructs the trusted Feishu implementations. Contract and live-test
+harnesses may inject another implementation of the same ports; this is a
+composition boundary, not a model-visible plugin or arbitrary adapter surface.
+All injected implementations remain subject to the same semantic-tool schemas,
+policy gates, target locks, verification contract, and outbox terminal rules.
+
 The `gateway` executable now uses the V3 durable kernel, service-native Feishu
 IM transport, live context reconciliation, model Harness, bounded multi-Agent
 delegation, semantic authoring capabilities, task worker, and outbox delivery

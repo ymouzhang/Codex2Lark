@@ -278,6 +278,17 @@ V3 is complete only when automated or explicitly opt-in live tests demonstrate:
     result.
 15. External writes become `completed` only after capability-specific read-back
     verification; unverifiable outcomes are explicit.
+
+Acceptance criterion 8 is exercised through the production composition path,
+not by calling the document service directly. Its deterministic fixture admits
+an exact bot mention, observes acknowledgement and progress, lets the Harness
+invoke `feishu.docs.create`, and supplies Feishu XML containing both a native
+`<table>` and a Mermaid `<whiteboard>`. The capability double must inspect the
+typed create request, emulate a managed-folder write plus live read-back, and
+return a verified document URL. The root then emits exactly one terminal reply
+that names the completed document and includes the verified URL. Persisted run
+events may contain tool identity and verification state, but never the document
+body.
 16. Backup/restore returns a compatible encrypted runtime to a recoverable state.
 17. The default deployment passes readiness without RabbitMQ, Redis, PostgreSQL,
     public Webhook, or a running Codex task.

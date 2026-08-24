@@ -5,10 +5,13 @@ import logging
 import time
 from collections.abc import Callable
 from contextlib import suppress
+from typing import Protocol
 
 from codex2lark.adapters.openai_responses import OpenAIResponsesModel
 from codex2lark.capabilities.artifacts.plugin import FeishuArtifactsPlugin
+from codex2lark.capabilities.artifacts.tools import ArtifactService
 from codex2lark.capabilities.docs.plugin import FeishuDocsPlugin
+from codex2lark.capabilities.docs.tools import DocumentService
 from codex2lark.capabilities.im.admission import IMAdmissionService
 from codex2lark.capabilities.im.attachments import AttachmentService, SafeAttachmentParser
 from codex2lark.capabilities.im.channel_adapter import (
@@ -28,6 +31,7 @@ from codex2lark.capabilities.im.live_reader import (
 )
 from codex2lark.capabilities.im.membership import (
     BotAddedAdmissionService,
+    MembershipService,
     MembershipTaskHandler,
 )
 from codex2lark.capabilities.im.plugin import create_plugin as create_im_plugin
@@ -73,6 +77,17 @@ from codex2lark.storage.session_store import SQLiteSessionStore
 from .config import GatewayConfig
 
 logger = logging.getLogger(__name__)
+
+
+class AuthoringServices(Protocol):
+    @property
+    def docs(self) -> DocumentService: ...
+
+    @property
+    def artifacts(self) -> ArtifactService: ...
+
+    @property
+    def membership(self) -> MembershipService: ...
 
 
 class AllowConfiguredTools(ToolPolicy):
@@ -194,6 +209,7 @@ def create_v3_gateway(
     channel: ChannelPort | None = None,
     model: ModelProvider | None = None,
     im_api: IMMessageAPI | None = None,
+    authoring: AuthoringServices | None = None,
 ) -> V3Gateway:
     database = SQLiteDatabase(config.data_dir / "runtime.db")
     cipher = EnvelopeCipher(config.master_key)
@@ -266,9 +282,9 @@ def create_v3_gateway(
         ),
         clock_ms=lambda: int(time.time() * 1000),
     )
-    authoring = create_application()
-    docs_plugin = FeishuDocsPlugin(authoring.docs, config.authoring_identity)
-    artifacts_plugin = FeishuArtifactsPlugin(authoring.artifacts, config.authoring_identity)
+    active_authoring = authoring or create_application()
+    docs_plugin = FeishuDocsPlugin(active_authoring.docs, config.authoring_identity)
+    artifacts_plugin = FeishuArtifactsPlugin(active_authoring.artifacts, config.authoring_identity)
     plugins = PluginManager(
         runtime_api=1,
         allowlist={"feishu-im", "feishu-docs", "feishu-artifacts"},
@@ -359,7 +375,7 @@ def create_v3_gateway(
         {
             "im.handle_mention": handler,
             "im.ensure_owner_membership": MembershipTaskHandler(
-                authoring.membership,
+                active_authoring.membership,
                 bot_identity=Identity.BOT,
                 access_repository=im_repository,
             ),
