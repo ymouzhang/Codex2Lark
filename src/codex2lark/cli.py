@@ -8,9 +8,10 @@ from collections.abc import Sequence
 
 from . import __version__
 from .adapters.lark_cli import SUPPORTED_LARK_CLI_VERSION, safe_tool_call_error
+from .bootstrap.config import GatewayConfig
+from .bootstrap.gateway import create_v3_gateway
 from .interfaces.application import create_application
 from .interfaces.mcp import run_stdio
-from .realtime.application import create_gateway
 
 
 async def _doctor() -> int:
@@ -106,7 +107,7 @@ async def _doctor() -> int:
 
 
 async def _gateway() -> int:
-    gateway = create_gateway()
+    gateway = create_v3_gateway(GatewayConfig.from_environment())
     await gateway.start()
     try:
         await asyncio.Event().wait()
@@ -136,6 +137,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
         try:
             return asyncio.run(_gateway())
+        except ValueError as exc:
+            logging.error("Gateway configuration is invalid: %s", exc)
+            return 2
         except KeyboardInterrupt:
             return 130
     return 2

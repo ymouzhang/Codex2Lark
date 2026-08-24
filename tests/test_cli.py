@@ -30,6 +30,20 @@ def test_parser_exposes_independent_gateway_command() -> None:
     assert cli._parser().parse_args(["gateway"]).command == "gateway"
 
 
+def test_gateway_reports_invalid_configuration_without_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        cli.GatewayConfig,
+        "from_environment",
+        lambda: (_ for _ in ()).throw(ValueError("missing gateway secret")),
+    )
+
+    assert cli.main(["gateway"]) == 2
+    assert "missing gateway secret" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_doctor_accepts_available_active_identity(
     monkeypatch: pytest.MonkeyPatch,

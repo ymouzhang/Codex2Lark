@@ -8,9 +8,12 @@ and Gateway scheduling contracts may be replaced. Compatibility with the V2
 implementation is not a design constraint. Migration is required only for
 operator configuration and business data explicitly selected for retention.
 
-The current executable does not yet implement this architecture. The delivery
-sequence is defined in [roadmap.md](roadmap.md), and current commands remain
-documented in [usage.md](usage.md).
+The `gateway` executable now uses the V3 durable kernel, service-native Feishu
+IM transport, live context reconciliation, model Harness, task worker, and
+outbox delivery path. Authoring capability plugins, full multi-Agent graph
+composition, and operations hardening remain tracked in
+[roadmap.md](roadmap.md). Current commands are documented in
+[usage.md](usage.md).
 
 ## 2. Architectural decision
 

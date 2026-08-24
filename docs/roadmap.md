@@ -4,6 +4,11 @@ V3 is a clean redesign. Existing code is evidence and may be reused when it fits
 the new boundaries, but it is not a compatibility constraint. Each phase starts
 with contract/eval changes and ends with an executable vertical slice.
 
+Implementation status: the durable kernel, Harness, supervisor primitives,
+service-native IM admission/context/attachment path, model task worker, outbox,
+and production Gateway composition root are implemented. Remaining exit
+criteria are intentionally left open below until their acceptance tests exist.
+
 ## Design gate: accepted before implementation
 
 - Approve [architecture.md](architecture.md),

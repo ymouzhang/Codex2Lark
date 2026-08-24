@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the V3 production composition-root contract before implementation:
+  explicit secret/config validation, one official Feishu long connection,
+  durable task and outbox loops, live context reconciliation, restart recovery,
+  and a draining shutdown with no Codex/MCP dependency.
+
 - Defined the V3 model/task execution recovery boundary before implementation:
   local stateless Responses API usage, stable run continuation before or after
   the first checkpoint, one leased task per SessionKey, concurrent independent

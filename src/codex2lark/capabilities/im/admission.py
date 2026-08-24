@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Protocol
 
 from codex2lark.core.events import NormalizedEvent, OutboxDraft, TaskCommand
@@ -20,7 +21,7 @@ class IMAdmissionService:
         runtime_store: RuntimeStore,
         message_mirror: MessageMirror,
         *,
-        bot_open_id: str,
+        bot_open_id: str | Callable[[], str | None],
         acknowledgement_text: str,
     ) -> None:
         if not bot_open_id:
@@ -29,7 +30,7 @@ class IMAdmissionService:
             raise ValueError("acknowledgement_text is required")
         self._runtime_store = runtime_store
         self._message_mirror = message_mirror
-        self._bot_open_id = bot_open_id
+        self._bot_open_id = (lambda: bot_open_id) if isinstance(bot_open_id, str) else bot_open_id
         self._acknowledgement_text = acknowledgement_text
 
     async def admit(self, message: IncomingMessage) -> IMAdmissionDecision:
@@ -109,7 +110,8 @@ class IMAdmissionService:
             return IMAdmissionReason.NOT_GROUP
         if message.sender_type in {"bot", "app", "system"}:
             return IMAdmissionReason.BOT_SENDER
-        if not message.explicitly_mentions(self._bot_open_id):
+        bot_open_id = self._bot_open_id()
+        if not bot_open_id or not message.explicitly_mentions(bot_open_id):
             return IMAdmissionReason.BOT_NOT_MENTIONED
         if not message.body_text.strip():
             return IMAdmissionReason.EMPTY_REQUEST

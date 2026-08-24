@@ -4,9 +4,8 @@ This guide explains how to use Codex2Lark from Codex after installation. For
 first-time installation and Feishu permission setup, see
 [Installation and configuration](operations.md).
 
-This guide describes the currently implemented V2 commands. The durable V3
-multi-Agent Runtime is an approved design, not a shipped command yet; see
-[V3 architecture](architecture.md) and [delivery roadmap](roadmap.md).
+The Gateway is the durable V3 runtime. MCP remains the Codex-facing interactive
+surface and is not required for group-triggered Agent execution.
 
 Run every command in this guide from the Codex2Lark repository root, except for
 `/mcp`, which runs inside Codex.
@@ -16,7 +15,7 @@ Run every command in this guide from the Codex2Lark repository root, except for
 | Process | Purpose | Started by | Must remain running? |
 |---|---|---|---|
 | `codex2lark mcp` | Allows Codex to create, query, and edit Feishu content | Codex automatically | No manual process required |
-| `codex2lark gateway` | Receives the currently implemented deterministic real-time events | User or process manager | Yes, when real-time events are enabled |
+| `codex2lark gateway` | Runs the persistent Feishu event, Agent-task, and result-delivery loops | User or process manager | Yes, for group-triggered work |
 
 Routine Feishu document editing requires only MCP, not the Gateway.
 
@@ -101,8 +100,9 @@ folder by default.
 
 ### 3.2 Enable real-time Feishu events
 
-Start the Gateway separately only for real-time behavior such as running an
-action immediately after the bot is added to a group:
+After configuring the environment in
+[Installation and configuration](operations.md#5-configure-and-start-the-v3-gateway),
+start the Gateway for mention-driven group work:
 
 ```bash
 uv run codex2lark gateway
@@ -111,16 +111,16 @@ uv run codex2lark gateway
 The following log indicates that the long connection is ready:
 
 ```text
-INFO event gateway ready
+INFO V3 gateway ready
 ```
 
-The current Gateway is independent of Codex and MCP. Closing Codex does not stop
-it. It does not yet run the V3 mention-driven, persistent multi-Agent workflow.
-In production, run this command with systemd, Docker, or another process manager.
+The Gateway is independent of Codex and MCP. Closing Codex does not stop it. In
+production, run this command with systemd, Docker, or another process manager.
 
 The Gateway uses a Feishu long connection and requires no public IP address,
-Webhook, RabbitMQ, or database. Unprocessed in-memory tasks are not recovered
-after the Gateway exits.
+Webhook, RabbitMQ, Redis, or external database. It persists recoverable state in
+local SQLite and stores attachment bytes encrypted under the configured master
+key.
 
 ## 4. Stop the processes
 
@@ -147,7 +147,7 @@ When the Gateway runs in the foreground, press `Ctrl+C` in its terminal. The
 following log confirms that it stopped:
 
 ```text
-INFO event gateway stopped
+INFO V3 gateway stopped
 ```
 
 When systemd or Docker manages it, use the corresponding service stop command.
@@ -202,19 +202,10 @@ uv run codex2lark doctor
 
 ### The Gateway fails to start
 
-First confirm that the Feishu event and permissions were published, then run the
-connection probe:
-
-```bash
-lark-cli event consume im.chat.member.bot.added_v1 --as bot --timeout 2s
-```
-
-A healthy result includes:
-
-```text
-[event] ready event_key=im.chat.member.bot.added_v1
-[source] feishu-websocket: connected
-```
+Confirm all required environment variables, the published Feishu event
+subscriptions, application availability, and outbound connectivity. Startup
+fails before accepting events if secrets, encryption key, database, model
+profile, or bot identity cannot be validated.
 
 For detailed Feishu console configuration, see
 [Installation and configuration](operations.md#5-configure-and-start-the-gateway).

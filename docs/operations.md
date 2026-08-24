@@ -4,10 +4,8 @@ This guide covers first-time installation, Feishu authorization, and Gateway
 configuration. For routine startup and shutdown after installation, see
 [Usage and shutdown](usage.md).
 
-This guide covers the currently implemented V2 executable. The approved V3
-single-node persistent multi-Agent service has separate design and delivery
-contracts in [architecture.md](architecture.md) and [roadmap.md](roadmap.md); do
-not infer that those future storage or Agent features are already available.
+The `gateway` command is the V3 single-node service composition root. The MCP
+command remains an independent interactive interface.
 
 Run every command in this guide from the Codex2Lark repository root, except for
 the lark-cli installation command.
@@ -75,12 +73,19 @@ The plugin includes `.mcp.json`, so Codex starts MCP automatically. Restart
 Codex after installing or updating the plugin, then inspect the tools with
 `/mcp`. Do not add a manual MCP registration with the same name.
 
-## 5. Configure and start the Gateway
+## 5. Configure and start the V3 Gateway
 
 Skip this section if you only create and edit Feishu content from Codex.
 
-To run automation immediately after the bot joins a group, complete the
-following configuration in the Feishu developer console:
+Create a custom Feishu application and configure its bot, then publish these
+events in the Feishu developer console:
+
+- `im.message.receive_v1` for mention-driven work;
+- `im.chat.member.bot.added_v1` for immediate group-membership automation.
+
+Grant the least permissions needed for enabled capabilities. The IM runtime
+requires message read/history, reply-as-bot, chat metadata, and message-resource
+read permissions. Group-member automation additionally requires:
 
 1. Grant the bot these permissions:
    - `im:chat.members:bot_access`
@@ -93,32 +98,47 @@ following configuration in the Feishu developer console:
 4. Confirm that the current lark-cli user is within the application's
    availability scope.
 
-First run a two-second connection probe:
+Provide runtime secrets through the service environment or an external secret
+provider. They are never written into the database:
+
+Generate the 32-byte encryption key once and retain it in the secret provider:
 
 ```bash
-lark-cli event consume im.chat.member.bot.added_v1 --as bot --timeout 2s
+openssl rand -base64 32
 ```
 
-A healthy result includes:
-
-```text
-[event] ready event_key=im.chat.member.bot.added_v1
-[source] feishu-websocket: connected
+```bash
+export CODEX2LARK_FEISHU_APP_ID='cli_xxx'
+export CODEX2LARK_FEISHU_APP_SECRET='...'
+export OPENAI_API_KEY='...'
+export CODEX2LARK_MODEL='gpt-5'
+export CODEX2LARK_MASTER_KEY_ID='local-v1'
+export CODEX2LARK_MASTER_KEY_BASE64='a-base64-encoded-32-byte-key'
 ```
 
-Stop the probe, then start the Gateway:
+`CODEX2LARK_DATA_DIR` optionally selects the state directory. Its default is
+the platform user-state directory. The directory contains SQLite state and
+encrypted attachment blobs; losing the master key makes encrypted state
+unreadable. Do not rotate or delete it without the documented backup/key
+procedure.
+
+Start the Gateway:
 
 ```bash
 uv run codex2lark gateway
 ```
 
-After `INFO event gateway ready` appears, add the bot to a test group. A bot
-that is already in the group does not produce a new join event; remove it and
-add it again.
+A healthy startup includes:
 
-The Gateway needs outbound internet access but does not need a public IP address
-or domain. The default in-memory queue does not replay events received while the
-Gateway is stopped or unfinished tasks left when it exits.
+```text
+INFO V3 gateway ready
+```
+
+The Gateway needs outbound internet access but no public IP, Webhook, RabbitMQ,
+or Redis. Admission, tasks, run checkpoints, and reply intents are durable.
+Expired leases are recovered after restart. Press `Ctrl+C` for a draining stop;
+the service stops event intake, completes its bounded drain, checkpoints SQLite,
+and then exits.
 
 ## 6. Stop and uninstall
 

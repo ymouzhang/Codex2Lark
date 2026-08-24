@@ -2,9 +2,9 @@
 
 `Codex2Lark` is a Harness-centered Feishu AI Agent platform. Its current local
 plugin combines a focused authoring Skill with semantic MCP tools and uses
-`lark-cli` as the Feishu execution backend. The approved V3 target is a
-single-node, durable, multi-Agent Runtime with trusted Feishu capability
-plugins, serving many users and groups independently of Codex or MCP uptime.
+`lark-cli` as the interactive Feishu execution backend. The V3 Gateway is a
+single-node durable Agent Runtime with a service-native Feishu IM connection,
+serving many users and groups independently of Codex or MCP uptime.
 
 Feishu remains the upstream source of truth. Interactive authoring keeps plans
 and document-derived state ephemeral. The V3 group Runtime may retain authorized
@@ -46,9 +46,10 @@ ChatGPT / Codex
   -> Feishu Docs, Whiteboard, Sheets, Base, and Drive
 ```
 
-The currently shipped deliverable is a local stdio MCP server plus the V2
-Gateway. V3 is documented but not implemented yet; current commands below do
-not provide the durable multi-Agent behavior described in the design docs.
+The shipped runtime includes the local stdio MCP server and the V3 Gateway's
+durable mention-to-model-to-reply path. The roadmap explicitly tracks the
+remaining authoring capability plugins, complete multi-Agent orchestration,
+and release-hardening work.
 
 ## Quick start
 
@@ -71,14 +72,16 @@ Restart Codex, open a new task, and use `/mcp` to confirm `codex2lark`. Codex
 starts and stops the MCP child process automatically; do not manually keep
 `uv run codex2lark mcp` running.
 
-For the currently implemented real-time Feishu event bridge, run the independent
+After configuring the V3 secrets and state directory described in
+[Installation and configuration](docs/operations.md), run the independent
 Gateway:
 
 ```bash
 uv run codex2lark gateway
 ```
 
-The current Gateway uses an outbound long connection and requires neither a
-public IP nor RabbitMQ. It does not yet execute V3 mention-driven Agent graphs.
+The Gateway uses an outbound long connection and requires neither a public IP
+nor RabbitMQ. It durably acknowledges and executes mention-driven root-Agent
+tasks; unsupported business actions are not exposed as tools.
 See [Usage and shutdown](docs/usage.md) for daily operation and
 [Installation and configuration](docs/operations.md) for first-time setup.
