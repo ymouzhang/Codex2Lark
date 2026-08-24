@@ -296,6 +296,60 @@ Large artifact payloads use the encrypted blob store. Graph rows contain no
 hidden reasoning. Retention follows the root run unless a referenced Feishu
 resource or explicit policy requires a shorter TTL.
 
+### Runtime API 1 transactional fields
+
+The first implementation persists these typed identities and states:
+
+```text
+runtime_graphs
+  graph_id, root_run_id, source tenant/app/resource, AgentDefinition,
+  status, maximum depth/nodes/concurrency, created/updated
+
+runtime_agent_nodes
+  node_id, graph_id, parent_id, canonical path, name, role, task brief,
+  expected output type, context mode, tool allowlist, budget/deadline,
+  status, lease owner/expiry, attempt count, checkpoint, created/updated
+
+runtime_agent_edges
+  graph_id, predecessor node, dependent node, edge kind
+
+runtime_mailbox
+  item_id, graph_id, sender/recipient, kind, correlation, sequence,
+  encrypted typed payload, state, created/delivered/acknowledged
+
+runtime_artifacts
+  artifact_id, graph/node, type, encrypted payload, source versions,
+  verification state, sensitivity/retention, created/expiry
+
+runtime_agent_checkpoints
+  checkpoint_id, graph/node, monotonic sequence, encrypted complete-turn state,
+  created timestamp
+
+runtime_resource_locks
+  graph/node, tenant, resource type/id, optional revision, lease expiry
+
+runtime_budget_ledger
+  graph/node, budget kind, reserved, consumed, maximum
+```
+
+Graph creation and root-node creation are atomic. Spawning a child atomically
+checks graph limits, parent authority, sibling-name uniqueness, dependencies,
+and budget reservation. Node completion and artifact publication commit
+together. Cancellation marks the selected node and every open descendant in one
+transaction. A resource lock is unique by tenant/resource identity and is
+released only by its owning node, cancellation cleanup, or expired-lease
+recovery.
+
+Agent checkpoints contain only complete-turn, resumable state and replace no
+mailbox or artifact record. Saving a checkpoint atomically allocates the next
+sequence for that node. Recovery reads only the latest successfully committed
+checkpoint; partial model streams and hidden reasoning are never checkpointed.
+
+Mailbox delivery is durable at-least-once. Sequence is monotonic per recipient.
+Acknowledgement is idempotent. `wait` uses an in-process condition for prompt
+wakeup and always re-queries SQLite after wake or restart, so the condition is
+an optimization rather than durable state.
+
 ## 13. Evals and acceptance
 
 The collaboration layer is not releasable until deterministic tests prove:

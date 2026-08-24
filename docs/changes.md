@@ -5,6 +5,12 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the Runtime API 1 multi-Agent persistence and transaction boundaries
+  before implementation: atomic graph/root creation and child spawn, scoped
+  tools/budgets/context, acyclic dependencies, durable mailboxes and artifacts,
+  resource write locks, lease recovery, cancellation cascade, and root-only
+  terminal publication.
+
 - Defined the Runtime API 1 one-node Harness values before implementation:
   immutable model/tool/result/outcome boundaries, monotonic encrypted RunEvents,
   complete-turn checkpoints, hard budgets, semantic tool policy, and verified

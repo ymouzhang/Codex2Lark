@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -140,7 +140,144 @@ CREATE TABLE IF NOT EXISTS runtime_checkpoints (
 );
 """
 
+MULTI_AGENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS runtime_graphs (
+    graph_id TEXT PRIMARY KEY,
+    root_run_id TEXT NOT NULL UNIQUE,
+    root_node_id TEXT NOT NULL UNIQUE,
+    tenant_key TEXT NOT NULL,
+    app_id TEXT NOT NULL,
+    source_resource_kind TEXT NOT NULL,
+    source_resource_id TEXT NOT NULL,
+    agent_definition_id TEXT NOT NULL,
+    agent_definition_version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    max_depth INTEGER NOT NULL,
+    max_nodes INTEGER NOT NULL,
+    max_concurrency INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runtime_agent_nodes (
+    node_id TEXT PRIMARY KEY,
+    graph_id TEXT NOT NULL,
+    parent_node_id TEXT,
+    canonical_path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    task_brief_ciphertext BLOB NOT NULL,
+    expected_output_type TEXT NOT NULL,
+    context_mode TEXT NOT NULL,
+    tool_ids_ciphertext BLOB NOT NULL,
+    budget_ciphertext BLOB NOT NULL,
+    deadline_ms INTEGER,
+    depth INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    lease_owner TEXT,
+    lease_expires_at_ms INTEGER,
+    attempt_count INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    UNIQUE (graph_id, canonical_path),
+    UNIQUE (graph_id, parent_node_id, name),
+    FOREIGN KEY (graph_id) REFERENCES runtime_graphs(graph_id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_node_id) REFERENCES runtime_agent_nodes(node_id)
+);
+
+CREATE INDEX IF NOT EXISTS runtime_agent_nodes_ready_idx
+ON runtime_agent_nodes(graph_id, status, depth, created_at_ms);
+
+CREATE TABLE IF NOT EXISTS runtime_agent_edges (
+    graph_id TEXT NOT NULL,
+    predecessor_node_id TEXT NOT NULL,
+    dependent_node_id TEXT NOT NULL,
+    edge_kind TEXT NOT NULL,
+    PRIMARY KEY (graph_id, predecessor_node_id, dependent_node_id, edge_kind),
+    FOREIGN KEY (graph_id) REFERENCES runtime_graphs(graph_id) ON DELETE CASCADE,
+    FOREIGN KEY (predecessor_node_id) REFERENCES runtime_agent_nodes(node_id),
+    FOREIGN KEY (dependent_node_id) REFERENCES runtime_agent_nodes(node_id)
+);
+
+CREATE TABLE IF NOT EXISTS runtime_mailbox (
+    item_id TEXT PRIMARY KEY,
+    graph_id TEXT NOT NULL,
+    sender_node_id TEXT NOT NULL,
+    recipient_node_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    correlation_id TEXT,
+    sequence INTEGER NOT NULL,
+    payload_ciphertext BLOB NOT NULL,
+    state TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    delivered_at_ms INTEGER,
+    acknowledged_at_ms INTEGER,
+    UNIQUE (recipient_node_id, sequence),
+    FOREIGN KEY (graph_id) REFERENCES runtime_graphs(graph_id) ON DELETE CASCADE,
+    FOREIGN KEY (sender_node_id) REFERENCES runtime_agent_nodes(node_id),
+    FOREIGN KEY (recipient_node_id) REFERENCES runtime_agent_nodes(node_id)
+);
+
+CREATE INDEX IF NOT EXISTS runtime_mailbox_recipient_idx
+ON runtime_mailbox(recipient_node_id, state, sequence);
+
+CREATE TABLE IF NOT EXISTS runtime_artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    graph_id TEXT NOT NULL,
+    producer_node_id TEXT NOT NULL,
+    artifact_type TEXT NOT NULL,
+    payload_ciphertext BLOB NOT NULL,
+    source_versions_ciphertext BLOB NOT NULL,
+    verification_state TEXT NOT NULL,
+    sensitivity TEXT NOT NULL,
+    expires_at_ms INTEGER,
+    created_at_ms INTEGER NOT NULL,
+    FOREIGN KEY (graph_id) REFERENCES runtime_graphs(graph_id) ON DELETE CASCADE,
+    FOREIGN KEY (producer_node_id) REFERENCES runtime_agent_nodes(node_id)
+);
+
+CREATE TABLE IF NOT EXISTS runtime_agent_checkpoints (
+    checkpoint_id TEXT PRIMARY KEY,
+    graph_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    state_ciphertext BLOB NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE (node_id, sequence),
+    FOREIGN KEY (graph_id) REFERENCES runtime_graphs(graph_id) ON DELETE CASCADE,
+    FOREIGN KEY (node_id) REFERENCES runtime_agent_nodes(node_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS runtime_resource_locks (
+    tenant_key TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    graph_id TEXT NOT NULL,
+    owner_node_id TEXT NOT NULL,
+    expected_revision TEXT,
+    lease_expires_at_ms INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (tenant_key, resource_type, resource_id),
+    FOREIGN KEY (graph_id) REFERENCES runtime_graphs(graph_id) ON DELETE CASCADE,
+    FOREIGN KEY (owner_node_id) REFERENCES runtime_agent_nodes(node_id)
+);
+
+CREATE TABLE IF NOT EXISTS runtime_budget_ledger (
+    graph_id TEXT NOT NULL,
+    node_id TEXT NOT NULL,
+    budget_kind TEXT NOT NULL,
+    maximum INTEGER NOT NULL,
+    reserved INTEGER NOT NULL,
+    consumed INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (graph_id, node_id, budget_kind),
+    FOREIGN KEY (graph_id) REFERENCES runtime_graphs(graph_id) ON DELETE CASCADE,
+    FOREIGN KEY (node_id) REFERENCES runtime_agent_nodes(node_id)
+);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
+    (3, MULTI_AGENT_SCHEMA),
 )
