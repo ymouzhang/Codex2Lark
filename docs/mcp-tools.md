@@ -104,6 +104,12 @@ Inputs:
 The destination is not caller-selectable: the server resolves or creates the
 managed `Codex2Lark` Drive folder and passes its live token to lark-cli.
 
+Immediately before upload, creation refuses an exact title already present in
+that managed folder. It never chooses one duplicate or creates another; use the
+edit workflow with a live URL/token for the existing document, or choose a
+unique title. Same-title resources outside the managed folder do not block the
+operation.
+
 The implementation writes content through an ephemeral `@file` rather than a
 shell argument.
 

@@ -75,6 +75,15 @@ class DocsService:
     async def create(self, request: CreateDocumentRequest) -> dict[str, Any]:
         preflight_content(request.content, request.format)
         managed_folder = await self.drive.ensure_managed_folder(request.identity)
+        existing = await self.drive.search_managed_documents(
+            request.title, request.identity, managed_folder
+        )
+        matches = existing.get("matches")
+        if existing.get("scope") == "managed_folder" and isinstance(matches, list) and matches:
+            raise ConflictError(
+                "a document with the exact title already exists in the managed folder",
+                details={"title": request.title, "match_count": len(matches)},
+            )
         verification_policy = request.verification.model_copy(
             update={"expected_title": request.verification.expected_title or request.title}
         )

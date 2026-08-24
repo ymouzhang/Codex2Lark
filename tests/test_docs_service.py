@@ -22,8 +22,9 @@ from codex2lark.services.docs import DocsService
 
 
 class StubDrive:
-    def __init__(self) -> None:
+    def __init__(self, *, existing: bool = False) -> None:
         self.resolved_titles: list[str] = []
+        self.existing = existing
 
     async def ensure_managed_folder(self, identity: object) -> dict[str, object]:
         return {
@@ -34,6 +35,17 @@ class StubDrive:
 
     async def search_documents(self, title: str, identity: object) -> dict[str, object]:
         return {"ok": True, "query": title, "scope": "drive", "matches": []}
+
+    async def search_managed_documents(
+        self, title: str, identity: object, folder: dict[str, object]
+    ) -> dict[str, object]:
+        del identity, folder
+        return {
+            "ok": True,
+            "query": title,
+            "scope": "managed_folder",
+            "matches": ([{"title": title, "token": "docx_existing"}] if self.existing else []),
+        }
 
     async def resolve_document(self, title: str, identity: object) -> dict[str, object]:
         self.resolved_titles.append(title)
@@ -117,6 +129,29 @@ async def test_publish_compiles_creates_and_reads_back() -> None:
     assert lark.calls[0][0][:2] == ("docs", "+create")
     assert lark.calls[0][0][-2:] == ("--parent-token", "fld_managed")
     assert lark.calls[1][0][:2] == ("docs", "+fetch")
+
+
+@pytest.mark.asyncio
+async def test_create_refuses_existing_exact_title_before_upload() -> None:
+    lark = RecordingLarkCli()
+    docs = DocsService(lark, StubDrive(existing=True), StubNotifier())
+
+    with pytest.raises(ConflictError, match="exact title"):
+        await docs.publish(
+            PublishDocumentRequest(
+                document=DocumentSpec(
+                    title="Test",
+                    blocks=[
+                        ParagraphBlock(
+                            type="paragraph",
+                            content=[RichTextSpan(text="Expected text")],
+                        )
+                    ],
+                )
+            )
+        )
+
+    assert lark.calls == []
 
 
 @pytest.mark.asyncio

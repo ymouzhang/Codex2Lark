@@ -148,6 +148,27 @@ class DriveService:
             ),
         }
 
+    async def search_managed_documents(
+        self, title: str, identity: Identity, folder: dict[str, Any]
+    ) -> dict[str, Any]:
+        token = folder.get("token")
+        if not isinstance(token, str) or not token:
+            raise ValueError("managed folder requires a token")
+        matches = await self._find_exact(
+            title=title,
+            doc_type="docx",
+            identity=identity,
+            folder_token=token,
+        )
+        return {
+            "ok": True,
+            "query": title,
+            "scope": "managed_folder",
+            "managed_folder": folder,
+            "matches": matches,
+            "warnings": [],
+        }
+
     async def resolve_document(self, title: str, identity: Identity) -> dict[str, Any]:
         result = await self.search_documents(title, identity)
         matches: list[dict[str, Any]] = result["matches"]

@@ -73,11 +73,18 @@ blocks, but callers then own the structure inside the documented allowlist.
 5. Preflight syntax and request size.
 6. Resolve the live managed Drive folder named `Codex2Lark`; create it at the
    root if absent and stop if duplicate exact-name folders make it ambiguous.
-7. Create the document in that folder using user identity unless explicitly
+7. Search that folder for the exact normalized document title and stop with a
+   conflict if any match already exists. Matches elsewhere in visible Drive do
+   not block creation.
+8. Create the document in that folder using user identity unless explicitly
    overridden.
-8. Read the document back and verify required structure.
-9. Return the live URL, resource tokens needed in the current conversation, and
+9. Read the document back and verify required structure.
+10. Return the live URL, resource tokens needed in the current conversation, and
    any warnings.
+
+This uniqueness policy prevents Codex2Lark from creating an ambiguous target
+for a later “modify document X” request. Externally introduced duplicates still
+resolve as an ambiguity and require an explicit URL/token.
 
 ## 5. Edit workflow
 

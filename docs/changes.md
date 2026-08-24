@@ -3,6 +3,11 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined managed-folder document-title uniqueness at create time: an exact
+  existing managed match is a pre-write conflict, while same titles elsewhere
+  in Drive do not block creation. Implementation area: DocsService create
+  preflight and contract tests.
+
 - Narrowed parallel delegation to children whose selected capabilities are all
   read-only. Writer children now execute serially until delegation includes
   trusted explicit targets and obtains durable resource locks; free-form task
