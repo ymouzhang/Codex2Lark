@@ -10,6 +10,7 @@ dependencies = [
     "defusedxml>=0.7,<1",
     "lark-channel-sdk==1.0.0",
     "mcp>=1.0,<2",
+    "openai>=2.15,<3",
     "pydantic>=2.10,<3",
     "pypdf>=6,<7",
 ]

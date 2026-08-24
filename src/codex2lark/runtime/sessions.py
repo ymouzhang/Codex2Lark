@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Protocol
 
-from .types import RunCheckpoint, RunEvent, RunStatus
+from .types import AgentOutcome, RunCheckpoint, RunEvent, RunStatus
 
 
 class SessionStore(Protocol):
@@ -31,6 +31,10 @@ class SessionStore(Protocol):
     async def save_checkpoint(self, checkpoint: RunCheckpoint, *, now_ms: int) -> None: ...
 
     async def load_checkpoint(self, run_id: str) -> RunCheckpoint | None: ...
+
+    async def run_status(self, run_id: str) -> RunStatus | None: ...
+
+    async def load_outcome(self, run_id: str) -> AgentOutcome | None: ...
 
     async def finish_run(self, run_id: str, status: RunStatus, *, now_ms: int) -> None: ...
 
@@ -83,6 +87,27 @@ class InMemorySessionStore:
 
     async def load_checkpoint(self, run_id: str) -> RunCheckpoint | None:
         return self.checkpoints.get(run_id)
+
+    async def run_status(self, run_id: str) -> RunStatus | None:
+        return self.runs.get(run_id)
+
+    async def load_outcome(self, run_id: str) -> AgentOutcome | None:
+        terminal = next(
+            (
+                event
+                for event in reversed(self.events.get(run_id, []))
+                if event.event_type == "run_terminal"
+            ),
+            None,
+        )
+        if terminal is None:
+            return None
+        return AgentOutcome(
+            status=RunStatus(str(terminal.payload["status"])),
+            summary=str(terminal.payload["summary"]),
+            resource_refs=tuple(str(item) for item in terminal.payload["resource_refs"]),
+            warnings=tuple(str(item) for item in terminal.payload["warnings"]),
+        )
 
     async def finish_run(self, run_id: str, status: RunStatus, *, now_ms: int) -> None:
         del now_ms

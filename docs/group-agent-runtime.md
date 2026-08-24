@@ -323,6 +323,13 @@ Follow-up messages in the same Feishu thread reuse the durable session identity,
 but the runtime still reconciles live Feishu messages before using local content.
 No context crosses a chat or tenant boundary.
 
+The durable task scheduler leases at most one task per SessionKey and excludes
+any SessionKey that already has a live lease. A batch may execute independent
+SessionKeys concurrently. A handler returns a typed terminal task result and
+its terminal reply intent commits in the same transaction. Transient provider
+failures return the task to pending with bounded delay; retry exhaustion commits
+a failed terminal reply rather than leaving an acknowledged request silent.
+
 ## 11. Single-node failure model
 
 The single machine is one failure domain. SQLite and the encrypted attachment

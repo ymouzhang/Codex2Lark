@@ -103,6 +103,7 @@ class LeasedTask:
     session_key: str
     payload: dict[str, Any]
     attempt_count: int
+    max_attempts: int
     lease_expires_at_ms: int
 
 

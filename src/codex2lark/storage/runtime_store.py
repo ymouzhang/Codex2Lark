@@ -160,13 +160,26 @@ class RuntimeStore:
             )
             rows = connection.execute(
                 """
-                SELECT task_id FROM runtime_tasks
-                WHERE state = 'pending' AND available_at_ms <= ?
-                  AND attempt_count < max_attempts
-                ORDER BY priority DESC, created_at_ms, task_id
-                LIMIT ?
+                WITH ranked AS (
+                    SELECT t.task_id, t.priority, t.created_at_ms,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY t.session_key
+                               ORDER BY t.priority DESC, t.created_at_ms, t.task_id
+                           ) AS session_rank
+                    FROM runtime_tasks t
+                    WHERE t.state = 'pending' AND t.available_at_ms <= ?
+                      AND t.attempt_count < t.max_attempts
+                      AND NOT EXISTS (
+                          SELECT 1 FROM runtime_tasks active
+                          WHERE active.session_key = t.session_key
+                            AND active.state = 'leased'
+                            AND active.lease_expires_at_ms > ?
+                      )
+                )
+                SELECT task_id FROM ranked WHERE session_rank = 1
+                ORDER BY priority DESC, created_at_ms, task_id LIMIT ?
                 """,
-                (now_ms, limit),
+                (now_ms, now_ms, limit),
             ).fetchall()
             task_ids = [row["task_id"] for row in rows]
             lease_expires = now_ms + lease_ms
@@ -493,6 +506,7 @@ class RuntimeStore:
                 row["payload_ciphertext"], associated_data=self._task_aad(task_id)
             ),
             attempt_count=row["attempt_count"],
+            max_attempts=row["max_attempts"],
             lease_expires_at_ms=row["lease_expires_at_ms"],
         )
 

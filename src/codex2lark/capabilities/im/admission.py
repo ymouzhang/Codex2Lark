@@ -73,6 +73,8 @@ class IMAdmissionService:
                 "chat_id": message.chat_id,
                 "message_id": message.message_id,
                 "thread_id": message.thread_id,
+                "root_id": message.root_id,
+                "sender_id": message.sender_id,
                 "request": message.body_text.strip(),
             },
             available_at_ms=message.received_at_ms,

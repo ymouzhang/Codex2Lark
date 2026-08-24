@@ -5,6 +5,11 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the V3 model/task execution recovery boundary before implementation:
+  local stateless Responses API usage, stable run continuation before or after
+  the first checkpoint, one leased task per SessionKey, concurrent independent
+  sessions, and a terminal failure reply on retry exhaustion.
+
 - Defined the V3 attachment ingest and bounded parser contract before code:
   trusted source-reference authorization, encrypted content-addressed blobs,
   crash-safe reference commits, strict byte/ZIP/output ceilings, inert Office

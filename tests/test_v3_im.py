@@ -32,8 +32,14 @@ from codex2lark.capabilities.im.models import (
 from codex2lark.capabilities.im.plugin import create_plugin
 from codex2lark.capabilities.im.publisher import IMOutboxPublisher
 from codex2lark.capabilities.im.repository import SQLiteIMRepository
-from codex2lark.core.events import LeasedOutboxMessage
+from codex2lark.capabilities.im.task_handler import (
+    IMMentionTaskHandler,
+    IMResponseTemplates,
+)
+from codex2lark.core.events import LeasedOutboxMessage, LeasedTask
 from codex2lark.runtime.outbox import OutboxDispatcher
+from codex2lark.runtime.sessions import InMemorySessionStore
+from codex2lark.runtime.types import AgentDefinition, AgentOutcome, RunStatus
 from codex2lark.storage.blobs import EncryptedBlobStore
 from codex2lark.storage.crypto import EnvelopeCipher, MasterKey
 from codex2lark.storage.database import SQLiteDatabase
@@ -589,5 +595,113 @@ async def test_attachment_service_rejects_unreferenced_and_oversized_downloads(
             assert "actual size" in str(exc)
         else:
             raise AssertionError("oversized attachment must be rejected")
+    finally:
+        await database.close()
+
+
+class FakeHarnessRunner:
+    def __init__(self, outcome: AgentOutcome) -> None:
+        self.outcome = outcome
+        self.calls = 0
+
+    async def run(self, *args: Any, **kwargs: Any) -> AgentOutcome:
+        self.calls += 1
+        return self.outcome
+
+
+def mention_task(task_id: str = "task-1") -> LeasedTask:
+    return LeasedTask(
+        task_id=task_id,
+        event_id="event-1",
+        plugin_id="feishu-im",
+        command_type="im.handle_mention",
+        session_key="tenant-1/app-1/oc_group/omt_thread",
+        payload={
+            "tenant_key": "tenant-1",
+            "app_id": "app-1",
+            "chat_id": "oc_group",
+            "message_id": "om_request",
+            "sender_id": "ou_user",
+            "thread_id": "omt_thread",
+        },
+        attempt_count=1,
+        max_attempts=3,
+        lease_expires_at_ms=1000,
+    )
+
+
+def response_templates() -> IMResponseTemplates:
+    return IMResponseTemplates(
+        completed_suffix="Completed. Ask me if anything is unclear.",
+        blocked_suffix="I need more information before continuing.",
+        failed_suffix="I could not finish this request.",
+        cancelled_suffix="This request was cancelled.",
+    )
+
+
+async def test_im_task_handler_renders_verified_terminal_reply_and_reuses_terminal_run(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    trigger = message()
+    context = IMContextProvider(FakeLiveIMReader(trigger, ()), repository)
+    sessions = InMemorySessionStore()
+    harness = FakeHarnessRunner(
+        AgentOutcome(
+            RunStatus.COMPLETED,
+            "The architecture document was created and verified.",
+            ("https://example.feishu.cn/docx/docx_1",),
+        )
+    )
+    definition = AgentDefinition(
+        "default",
+        1,
+        "Complete the verified task.",
+        "configured-model",
+        (),
+    )
+    handler = IMMentionTaskHandler(
+        context=context,
+        harness=harness,  # type: ignore[arg-type]
+        sessions=sessions,
+        definition=definition,
+        templates=response_templates(),
+        identity_ref="bot-default",
+    )
+    try:
+        result = await handler.execute(mention_task(), now_ms=100)
+        assert result.state.value == "succeeded"
+        assert result.terminal_message is not None
+        assert result.terminal_message.message_kind == "completed"
+        assert "created and verified" in str(result.terminal_message.payload["text"])
+        assert "https://example.feishu.cn/docx/docx_1" in str(
+            result.terminal_message.payload["text"]
+        )
+
+        run_id = handler.run_id_for_task("task-recovered")
+        await sessions.start_run(
+            run_id=run_id,
+            task_id="task-recovered",
+            session_key="session",
+            agent_id="default",
+            agent_version=1,
+            policy_version=1,
+            now_ms=1,
+        )
+        await sessions.append_event(
+            run_id=run_id,
+            event_type="run_terminal",
+            payload={
+                "status": "completed",
+                "summary": "Recovered verified outcome.",
+                "resource_refs": [],
+                "warnings": [],
+            },
+            now_ms=2,
+        )
+        await sessions.finish_run(run_id, RunStatus.COMPLETED, now_ms=2)
+        recovered = await handler.execute(mention_task("task-recovered"), now_ms=200)
+        assert "Recovered verified outcome" in str(recovered.terminal_message.payload["text"])
+        assert harness.calls == 1
     finally:
         await database.close()

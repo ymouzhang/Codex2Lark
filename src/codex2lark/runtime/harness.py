@@ -79,16 +79,18 @@ class AgentHarness:
 
         if resume:
             checkpoint = await self._sessions.load_checkpoint(request.run_id)
-            if checkpoint is None:
-                raise LookupError(f"run checkpoint is unavailable: {request.run_id}")
-            self._validate_checkpoint(checkpoint, definition, loaded.versions, source_versions)
-            journal = checkpoint.messages
-            verified = checkpoint.verified_effects
-            first_turn = checkpoint.next_turn
-            for key, amount in checkpoint.consumed_budget.items():
-                kind = BudgetKind(key)
-                if kind in ledger.limits:
-                    ledger.consumed[kind] = amount
+            status = await self._sessions.run_status(request.run_id)
+            if status is not RunStatus.RUNNING:
+                raise LookupError(f"running run is unavailable: {request.run_id}")
+            if checkpoint is not None:
+                self._validate_checkpoint(checkpoint, definition, loaded.versions, source_versions)
+                journal = checkpoint.messages
+                verified = checkpoint.verified_effects
+                first_turn = checkpoint.next_turn
+                for key, amount in checkpoint.consumed_budget.items():
+                    kind = BudgetKind(key)
+                    if kind in ledger.limits:
+                        ledger.consumed[kind] = amount
         else:
             await self._sessions.start_run(
                 run_id=request.run_id,

@@ -298,6 +298,27 @@ async def test_harness_recovers_from_complete_turn_checkpoint() -> None:
     assert outcome.resource_refs == ("https://feishu.cn/docx/docx_123",)
 
 
+async def test_harness_recovers_before_first_checkpoint_without_duplicate_run() -> None:
+    sessions = InMemorySessionStore()
+    first, _ = build_harness(
+        FakeModel([ConnectionError("provider disconnected")]), sessions=sessions
+    )
+    with pytest.raises(ConnectionError, match="provider disconnected"):
+        await first.run(request(), definition(require_verified=False), now_ms=100)
+
+    assert await sessions.run_status("run-1") is RunStatus.RUNNING
+    assert await sessions.load_checkpoint("run-1") is None
+    recovered, _ = build_harness(
+        FakeModel([ModelResponse("Recovered from turn one.")]), sessions=sessions
+    )
+    outcome = await recovered.run(
+        request(), definition(require_verified=False), resume=True, now_ms=200
+    )
+
+    assert outcome.status is RunStatus.COMPLETED
+    assert [event.event_type for event in sessions.events["run-1"]].count("run_started") == 1
+
+
 def test_context_engine_drops_optional_evidence_before_required_content() -> None:
     engine = ContextEngine()
     narrow = AgentDefinition(

@@ -5,6 +5,7 @@ import sqlite3
 from typing import Any
 
 from codex2lark.runtime.types import (
+    AgentOutcome,
     MessageRole,
     ModelMessage,
     RunCheckpoint,
@@ -137,6 +138,37 @@ class SQLiteSessionStore:
             return None
         payload = self._decrypt_json(row["payload_ciphertext"], aad=self._checkpoint_aad(run_id))
         return self._checkpoint_from_dict(payload)
+
+    async def run_status(self, run_id: str) -> RunStatus | None:
+        row = await self._database.call(
+            lambda connection: connection.execute(
+                "SELECT status FROM runtime_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        )
+        return None if row is None else RunStatus(row["status"])
+
+    async def load_outcome(self, run_id: str) -> AgentOutcome | None:
+        row = await self._database.call(
+            lambda connection: connection.execute(
+                """
+                SELECT sequence, payload_ciphertext FROM runtime_run_events
+                WHERE run_id = ? AND event_type = 'run_terminal'
+                ORDER BY sequence DESC LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+        )
+        if row is None:
+            return None
+        payload = self._decrypt_json(
+            row["payload_ciphertext"], aad=self._event_aad(run_id, row["sequence"])
+        )
+        return AgentOutcome(
+            status=RunStatus(str(payload["status"])),
+            summary=str(payload["summary"]),
+            resource_refs=tuple(str(item) for item in payload["resource_refs"]),
+            warnings=tuple(str(item) for item in payload["warnings"]),
+        )
 
     async def finish_run(self, run_id: str, status: RunStatus, *, now_ms: int) -> None:
         if status in (RunStatus.RUNNING, RunStatus.WAITING):

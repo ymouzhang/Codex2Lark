@@ -320,6 +320,13 @@ and all of that turn's tool results. Recovery rejects a checkpoint when its
 AgentDefinition, resource package, policy, tool schema, source version, or
 compactor version is incompatible.
 
+If a process stops after `runtime_runs` commits but before the first complete
+turn checkpoint, the same stable `run_id` resumes from turn one without
+inserting a second run or replaying a `run_started` transition. If a complete
+checkpoint exists, resume starts at its `next_turn`. A terminal run is never
+resumed. Provider response IDs are diagnostics, not permission to trust a
+partially observed model response or skip deterministic tool idempotency.
+
 ## 9. Model provider boundary
 
 The Harness uses a provider-neutral interface:
@@ -338,6 +345,11 @@ behavior must be documented and accepted before enablement.
 
 Model choice is policy, not group message input. A group may select among
 administrator-approved profiles but cannot name an arbitrary endpoint or key.
+
+The default adapter uses local complete-turn context, strict custom function
+tools, and explicit run/node metadata. It does not create a provider
+Conversation, expose hosted shell, or delegate business-state recovery to the
+provider. Tool calls and results preserve stable call IDs in local continuation.
 
 ## 10. Harness resources
 
