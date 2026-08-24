@@ -15,11 +15,12 @@ V2 decisions, but executable imports and operator commands resolve only to the
 V3 durable composition root in `bootstrap.gateway`.
 
 The `gateway` executable now uses the V3 durable kernel, service-native Feishu
-IM transport, live context reconciliation, model Harness, task worker, and
-outbox delivery path. Authoring capability plugins, full multi-Agent graph
-composition, and operations hardening remain tracked in
-[roadmap.md](roadmap.md). Current commands are documented in
-[usage.md](usage.md).
+IM transport, live context reconciliation, model Harness, bounded multi-Agent
+delegation, semantic authoring capabilities, task worker, and outbox delivery
+path. This document describes the normative target; it does not imply that
+every target behavior is shipped. The authoritative implementation matrix and
+open acceptance work are in [roadmap.md](roadmap.md). Current commands are
+documented in [usage.md](usage.md).
 
 ## 2. Architectural decision
 

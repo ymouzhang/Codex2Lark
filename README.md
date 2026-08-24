@@ -47,9 +47,11 @@ ChatGPT / Codex
 ```
 
 The shipped runtime includes the local stdio MCP server and the V3 Gateway's
-durable mention-to-model-to-reply path. The roadmap explicitly tracks the
-remaining authoring capability plugins, complete multi-Agent orchestration,
-and release-hardening work.
+durable mention-to-model-to-reply path, bounded multi-Agent delegation, and
+verified semantic authoring tools. It is a production baseline rather than the
+completed V3 acceptance envelope. The [delivery roadmap](docs/roadmap.md)
+distinguishes shipped behavior from open steering, approval, storage-pressure,
+live-acceptance, and release-hardening work.
 
 ## Quick start
 

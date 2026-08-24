@@ -22,6 +22,8 @@ from .storage.maintenance import (
     StorageStatus,
 )
 
+_DOCTOR_DEADLINE_SECONDS = 20.0
+
 
 async def _doctor() -> int:
     application = create_application()
@@ -43,35 +45,51 @@ async def _doctor() -> int:
         )
         return 1
     try:
-        installed_version = await application.lark.version()
-    except Exception as exc:
-        print(json.dumps(safe_tool_call_error(exc), ensure_ascii=False))
-        return 1
-    if installed_version != SUPPORTED_LARK_CLI_VERSION:
+        async with asyncio.timeout(_DOCTOR_DEADLINE_SECONDS):
+            installed_version = await application.lark.version()
+            if installed_version != SUPPORTED_LARK_CLI_VERSION:
+                print(
+                    json.dumps(
+                        {
+                            "ok": False,
+                            "checks": {
+                                "lark_cli": "available",
+                                "lark_cli_version": {
+                                    "installed": installed_version,
+                                    "required": SUPPORTED_LARK_CLI_VERSION,
+                                },
+                                "interactive_authoring": "unavailable",
+                                "interactive_document_persistence": "disabled",
+                            },
+                            "next_action": (
+                                f"install the pinned CLI with "
+                                f"npx @larksuite/cli@{SUPPORTED_LARK_CLI_VERSION} install"
+                            ),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                return 1
+            status = await application.lark.auth_status(verify=True)
+    except TimeoutError:
         print(
             json.dumps(
                 {
                     "ok": False,
-                    "checks": {
-                        "lark_cli": "available",
-                        "lark_cli_version": {
-                            "installed": installed_version,
-                            "required": SUPPORTED_LARK_CLI_VERSION,
-                        },
-                        "interactive_authoring": "unavailable",
-                        "interactive_document_persistence": "disabled",
+                    "error": {
+                        "category": "timeout",
+                        "message": "interactive lark-cli diagnostic timed out",
+                        "details": {"deadline_seconds": _DOCTOR_DEADLINE_SECONDS},
                     },
                     "next_action": (
-                        f"install the pinned CLI with "
-                        f"npx @larksuite/cli@{SUPPORTED_LARK_CLI_VERSION} install"
+                        "run `lark-cli auth status --json --verify` directly and check "
+                        "network connectivity before retrying"
                     ),
                 },
                 ensure_ascii=False,
             )
         )
         return 1
-    try:
-        status = await application.lark.auth_status(verify=True)
     except Exception as exc:
         print(json.dumps(safe_tool_call_error(exc), ensure_ascii=False))
         return 1

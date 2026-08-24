@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from types import SimpleNamespace
@@ -142,3 +143,29 @@ async def test_doctor_rejects_unpinned_lark_cli_version(
         "required": "1.0.89",
     }
     assert "@larksuite/cli@1.0.89" in output["next_action"]
+
+
+@pytest.mark.asyncio
+async def test_doctor_has_one_bounded_lark_cli_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class HangingLark(FakeLark):
+        async def version(self) -> str:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    monkeypatch.setattr(cli, "_DOCTOR_DEADLINE_SECONDS", 0.001)
+    monkeypatch.setattr(
+        cli,
+        "create_application",
+        lambda: SimpleNamespace(lark=HangingLark({})),
+    )
+
+    result = await cli._doctor()
+    output = json.loads(capsys.readouterr().out)
+
+    assert result == 1
+    assert output["error"]["category"] == "timeout"
+    assert output["error"]["details"]["deadline_seconds"] == 0.001
+    assert "auth status" in output["next_action"]

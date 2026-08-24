@@ -57,6 +57,13 @@ A healthy result includes:
 If `ok` is `false`, follow the returned `next_action`, fix the issue, and run the
 command again.
 
+The interactive diagnostic has a 20-second total deadline for its lark-cli
+version and verified-authentication probes. If lark-cli or its upstream
+authentication check does not answer in that interval, `doctor` exits non-zero
+with a `timeout` category and recommends checking lark-cli directly. This short
+diagnostic deadline does not reduce the separate execution timeout used by
+normal authoring operations.
+
 This default check covers Codex/MCP interactive authoring. It does not imply
 that the independent V3 group Runtime is stateless. After exporting the Gateway
 environment, validate its local configuration separately:

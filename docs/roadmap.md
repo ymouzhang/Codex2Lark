@@ -4,10 +4,26 @@ V3 is a clean redesign. Existing code is evidence and may be reused when it fits
 the new boundaries, but it is not a compatibility constraint. Each phase starts
 with contract/eval changes and ends with an executable vertical slice.
 
-Implementation status: the durable kernel, Harness, supervisor primitives,
-service-native IM admission/context/attachment path, model task worker, outbox,
-and production Gateway composition root are implemented. Remaining exit
-criteria are intentionally left open below until their acceptance tests exist.
+This roadmap separates the normative target from shipped behavior. A phase is
+`delivered` only when every exit criterion has an executable acceptance test;
+having types or isolated primitives is not enough.
+
+## Current delivery status
+
+| Area | Status | Shipped production path | Open contract work |
+| --- | --- | --- | --- |
+| Kernel and storage | partial | SQLite admission, leases, encrypted blobs, idempotency, outbox, retention GC, backup/verify/restore, and one-process data-directory locking | key rotation, disk high-water admission control, targeted operator purge, and storage readiness metrics |
+| Agent Harness | partial | versioned resources, model/tool loop, checkpoints, budgets, policy gate, write verification, and deterministic recovery | durable steering/follow-up/interrupt routing, interactive approval resolution, and complete-turn compaction evals |
+| Multi-Agent supervisor | partial | durable rooted graph, bounded delegation, child Harnesses, typed artifacts, cancellation primitives, read-only parallel children, and root-only completion | production mailbox commands, user cancellation routing, trusted target locks for parallel writers, fairness/load evidence, and three-worker restart acceptance |
+| Feishu IM | partial | service-native long connection, durable pre-ACK admission, exact mentions, immediate bot-added membership, live context, encrypted attachments, acknowledgement, and terminal outbox replies | edit/recall/access-loss event invalidation, progress/approval cards, disk-pressure behavior, and opt-in live multi-group acceptance |
+| Feishu authoring | partial | managed-folder Drive/Docs/Whiteboard/Sheets/Base semantic tools, deterministic write claims, and live read-back verification | richer capability-specific editing, complete group-to-professional-document acceptance, and service-native replacement of remaining lark-cli authoring adapters |
+| Operations and release | partial | `doctor --gateway`, graceful process lifecycle, status, retention GC, backup, verification, restore, and packaged resources | daemon status/stop interface, metrics, key rotation, load/soak/chaos suites, canary rollout, and rehearsed live recovery |
+
+Therefore the repository currently provides a usable **V3 production
+baseline**, not the completed V3 acceptance envelope in
+[requirements.md](requirements.md). Operator documentation must describe only
+the shipped column. Design documents may describe target behavior, but must not
+present open work as executable.
 
 ## Design gate: accepted before implementation
 

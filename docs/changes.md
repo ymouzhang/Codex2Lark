@@ -3,6 +3,17 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Bounded the interactive `doctor` version/authentication probe by one
+  20-second deadline and defined a content-safe timeout result with an operator
+  next action. Implementation area: CLI diagnostics only; authoring-operation
+  timeouts are unchanged.
+
+- Separated the normative V3 target from the shipped production baseline and
+  recorded an explicit delivered/partial/open matrix. README and architecture
+  claims now point to that matrix instead of implying that isolated primitives
+  satisfy end-to-end acceptance. Implementation area: documentation and package
+  identity only; no runtime behavior changed.
+
 - Defined managed-folder document-title uniqueness at create time: an exact
   existing managed match is a pre-write conflict, while same titles elsewhere
   in Drive do not block creation. Implementation area: DocsService create
