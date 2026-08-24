@@ -3,6 +3,13 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined deterministic single-node root-Agent canary rollout before
+  implementation. Trusted group bindings select a stable or canary definition
+  at durable admission; retry/restart preserve the stored version, and zero
+  percent rolls new work back without changing in-flight tasks. Implementation
+  area: Gateway configuration/readiness, rollout selector, IM admission task
+  binding, definition dispatch, and restart/stickiness tests.
+
 - Defined the content-safe single-node metrics snapshot before implementation.
   `storage status` adds lifecycle state counts, aggregate retries, and oldest
   pending queue ages without decrypting any business payload. Implementation

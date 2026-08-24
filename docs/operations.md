@@ -184,6 +184,25 @@ it and waits up to the bounded shutdown deadline. A stale or mismatched PID is
 reported and never signaled. Use this controller only for direct single-node
 operation; systemd/Docker deployments continue to own their process lifecycle.
 
+### Canary root-Agent rollout
+
+The default is stable definition version `1` with no canary. After deterministic
+eval comparison, configure a canary for newly admitted group work:
+
+```bash
+export CODEX2LARK_CANARY_AGENT_VERSION='2'
+export CODEX2LARK_CANARY_PERCENT='5'
+export CODEX2LARK_ROLLOUT_SALT='operator-managed-non-secret-salt'
+export CODEX2LARK_CANARY_MODEL='candidate-model-profile'
+```
+
+Restart the Gateway after configuration changes. Selection is sticky per group
+and stored on admission, so retries and restart do not move a task between
+versions. Roll back new work by setting `CODEX2LARK_CANARY_PERCENT=0` and
+restarting. Keep the canary version/model configured until previously admitted
+canary tasks have drained, then remove them. The salt is not a credential, but
+changing it reshuffles groups and therefore requires the same eval/review gate.
+
 ### Disk capacity settings
 
 The Gateway blocks only new attachment downloads at hard storage pressure;

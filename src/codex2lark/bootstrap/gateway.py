@@ -56,6 +56,7 @@ from codex2lark.runtime.multi_agent import MultiAgentSupervisor
 from codex2lark.runtime.outbox import OutboxDispatcher
 from codex2lark.runtime.plugins import PluginManager
 from codex2lark.runtime.resources import ResourceLoader
+from codex2lark.runtime.rollout import RootAgentRollout
 from codex2lark.runtime.sessions import SessionStore
 from codex2lark.runtime.tasks import DurableTaskWorker
 from codex2lark.runtime.tools import (
@@ -227,6 +228,12 @@ def create_v3_gateway(
     )
     resource_loader = ResourceLoader.from_package("codex2lark.bundled_resources")
     im_templates = ResourceLoader.load_im_templates("codex2lark.bundled_resources", "zh-CN")
+    rollout = RootAgentRollout(
+        stable_version=1,
+        canary_version=config.canary_agent_version,
+        canary_percent=config.canary_percent,
+        salt=config.rollout_salt,
+    )
 
     def bot_open_id() -> str | None:
         value = getattr(active_channel.bot_identity, "open_id", None)
@@ -244,6 +251,9 @@ def create_v3_gateway(
         im_repository,
         bot_open_id=bot_open_id,
         acknowledgement_text=im_templates.acknowledgement,
+        agent_definition_version=lambda message: rollout.select(
+            message.tenant_key, message.app_id, message.chat_id
+        ),
     )
     membership_admission = BotAddedAdmissionService(
         runtime_store,
@@ -362,22 +372,33 @@ def create_v3_gateway(
         sessions=sessions,
         controls=runtime_store,
     )
-    definition = AgentDefinition(
-        agent_id="feishu-group-root",
-        version=1,
-        instructions="Follow the selected trusted Codex2Lark resource packages.",
-        model_profile=config.model,
-        tool_ids=tuple(tool.definition.tool_id for tool in enabled_tools),
-        resource_packages=("group-agent-core",),
-        budget_limits=(
-            BudgetLimit(BudgetKind.MODEL_TOKENS, 32_000),
-            BudgetLimit(BudgetKind.TOOL_CALLS, 16),
-            BudgetLimit(BudgetKind.EXTERNAL_WRITES, 6),
-            BudgetLimit(BudgetKind.AGENT_NODES, 8),
-        ),
-        max_turns=8,
-        max_context_tokens=32_000,
-    )
+
+    def root_definition(version: int, model_profile: str) -> AgentDefinition:
+        return AgentDefinition(
+            agent_id="feishu-group-root",
+            version=version,
+            instructions="Follow the selected trusted Codex2Lark resource packages.",
+            model_profile=model_profile,
+            tool_ids=tuple(tool.definition.tool_id for tool in enabled_tools),
+            resource_packages=("group-agent-core",),
+            budget_limits=(
+                BudgetLimit(BudgetKind.MODEL_TOKENS, 32_000),
+                BudgetLimit(BudgetKind.TOOL_CALLS, 16),
+                BudgetLimit(BudgetKind.EXTERNAL_WRITES, 6),
+                BudgetLimit(BudgetKind.AGENT_NODES, 8),
+            ),
+            max_turns=8,
+            max_context_tokens=32_000,
+        )
+
+    definition = root_definition(1, config.model)
+    definitions = {definition.version: definition}
+    if config.canary_agent_version is not None:
+        canary = root_definition(
+            config.canary_agent_version,
+            config.canary_model or config.model,
+        )
+        definitions[canary.version] = canary
     handler = IMMentionTaskHandler(
         context=live_context,
         harness=harness,
@@ -387,6 +408,7 @@ def create_v3_gateway(
         identity_ref=f"bot:{config.feishu_app_id}",
         task_outbox=runtime_store,
         graph_lifecycle=coordinator,
+        definitions=definitions,
     )
     task_worker = DurableTaskWorker(
         runtime_store,

@@ -336,6 +336,17 @@ The control plane binds a Feishu group, user, or workflow to one exact
 AgentDefinition version. Updating a plugin or resource package does not silently
 change an existing AgentDefinition; rollout is explicit and evaluable.
 
+The single-node Gateway supports one stable root definition and at most one
+canary root definition. Admission deterministically hashes trusted tenant, app,
+and chat identifiers with an operator salt into 100 buckets, stores the selected
+definition version in the encrypted task payload, and never reselects it during
+retry or restart. The rollout percentage controls only newly admitted tasks.
+Setting it to zero is immediate rollback for new work; the canary definition
+must remain configured until its already-admitted tasks drain. Canary and stable
+definitions use the same policy/tool boundary but may select different model
+profiles and immutable definition versions. A canary percentage above zero
+without a distinct positive version and non-empty salt fails readiness.
+
 Production AgentDefinitions do not assemble policy and tone from ad hoc strings
 in the composition root. Codex2Lark ships immutable JSON resource packages
 inside the Python distribution. Startup strictly validates package ID, semantic

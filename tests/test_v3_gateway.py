@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -93,6 +94,23 @@ def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_pa
         GatewayConfig.from_environment(values)
     with pytest.raises(ValueError, match="CODEX2LARK_FEISHU_APP_ID"):
         GatewayConfig.from_environment({})
+
+    (tmp_path / "key-rotation.json").unlink()
+    values.update(
+        {
+            "CODEX2LARK_CANARY_AGENT_VERSION": "2",
+            "CODEX2LARK_CANARY_PERCENT": "5",
+            "CODEX2LARK_ROLLOUT_SALT": "test-salt",
+            "CODEX2LARK_CANARY_MODEL": "candidate-model",
+        }
+    )
+    canary = GatewayConfig.from_environment(values)
+    assert canary.canary_agent_version == 2
+    assert canary.canary_percent == 5
+    assert canary.canary_model == "candidate-model"
+    values["CODEX2LARK_ROLLOUT_SALT"] = ""
+    with pytest.raises(ValueError, match="enabled canary"):
+        GatewayConfig.from_environment(values)
 
 
 async def test_v3_gateway_runs_workers_and_drains_on_stop() -> None:
@@ -228,6 +246,15 @@ class BlockingE2EModel:
         self.started.set()
         await self.release.wait()
         return ModelResponse("This answer must be cancelled.")
+
+
+class CanaryE2EModel:
+    def __init__(self) -> None:
+        self.model_profiles: list[str] = []
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.model_profiles.append(request.model_profile)
+        return ModelResponse("Canary request completed.")
 
 
 class ProfessionalDocumentService:
@@ -424,6 +451,45 @@ async def test_group_request_creates_and_verifies_professional_document(
         ProfessionalDocumentModel.content_marker.encode()
         not in (tmp_path / "runtime.db").read_bytes()
     )
+
+
+async def test_canary_definition_is_bound_at_admission_and_used_by_harness(
+    tmp_path: Path,
+) -> None:
+    channel = FakeChannel()
+    model = CanaryE2EModel()
+    config = replace(
+        e2e_config(tmp_path),
+        canary_agent_version=2,
+        canary_percent=100,
+        rollout_salt="test-salt",
+        canary_model="candidate-model",
+    )
+    service = create_v3_gateway(
+        config,
+        channel=channel,  # type: ignore[arg-type]
+        model=model,
+        im_api=E2EMessageAPI(),
+        authoring=AuthoringFixture(),  # type: ignore[arg-type]
+    )
+    await service.start()
+    try:
+        await channel.emit_mention()
+
+        async def terminal_was_sent() -> None:
+            while len(channel.sent) < 3:
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(terminal_was_sent(), timeout=1)
+    finally:
+        await service.stop()
+
+    assert model.model_profiles == ["candidate-model"]
+    with sqlite3.connect(tmp_path / "runtime.db") as connection:
+        graph = connection.execute(
+            "SELECT agent_definition_version, status FROM runtime_graphs"
+        ).fetchone()
+    assert graph == (2, "completed")
 
 
 async def test_composed_gateway_routes_same_requester_cancel_to_active_root(

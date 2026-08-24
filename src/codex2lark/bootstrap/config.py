@@ -34,6 +34,10 @@ class GatewayConfig:
     task_concurrency: int = 4
     storage_capacity: StorageCapacityPolicy = field(default_factory=StorageCapacityPolicy)
     max_attachment_bytes: int = 20 * 1024 * 1024
+    canary_agent_version: int | None = None
+    canary_percent: int = 0
+    rollout_salt: str = field(default="", repr=False)
+    canary_model: str | None = None
 
     def __post_init__(self) -> None:
         required = (
@@ -48,6 +52,18 @@ class GatewayConfig:
             raise ValueError("Gateway worker configuration is invalid")
         if not self.data_dir.is_absolute():
             raise ValueError("CODEX2LARK_DATA_DIR must be an absolute path")
+        if self.canary_percent < 0 or self.canary_percent > 100:
+            raise ValueError("CODEX2LARK_CANARY_PERCENT must be between 0 and 100")
+        if self.canary_percent and (
+            self.canary_agent_version is None
+            or self.canary_agent_version < 2
+            or not self.rollout_salt.strip()
+        ):
+            raise ValueError(
+                "enabled canary requires a distinct version and CODEX2LARK_ROLLOUT_SALT"
+            )
+        if self.canary_model is not None and not self.canary_model.strip():
+            raise ValueError("CODEX2LARK_CANARY_MODEL cannot be empty")
         if (self.data_dir / "key-rotation.json").exists():
             raise ValueError(
                 "storage has an incomplete key rotation; rerun storage rotate-key first"
@@ -75,6 +91,10 @@ class GatewayConfig:
             max_attachment_bytes=cls._integer(
                 values, "CODEX2LARK_MAX_ATTACHMENT_BYTES", 20 * 1024 * 1024
             ),
+            canary_agent_version=cls._optional_integer(values, "CODEX2LARK_CANARY_AGENT_VERSION"),
+            canary_percent=cls._integer(values, "CODEX2LARK_CANARY_PERCENT", 0),
+            rollout_salt=values.get("CODEX2LARK_ROLLOUT_SALT", ""),
+            canary_model=values.get("CODEX2LARK_CANARY_MODEL") or None,
         )
 
     @staticmethod
@@ -93,3 +113,8 @@ class GatewayConfig:
             return int(raw)
         except ValueError as exc:
             raise ValueError(f"environment variable must be an integer: {name}") from exc
+
+    @classmethod
+    def _optional_integer(cls, values: Mapping[str, str], name: str) -> int | None:
+        raw = values.get(name)
+        return None if raw is None or not raw.strip() else cls._integer(values, name, 0)

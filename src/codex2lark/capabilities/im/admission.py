@@ -24,6 +24,7 @@ class IMAdmissionService:
         *,
         bot_open_id: str | Callable[[], str | None],
         acknowledgement_text: str,
+        agent_definition_version: int | Callable[[IncomingMessage], int] = 1,
     ) -> None:
         if not bot_open_id:
             raise ValueError("bot_open_id is required")
@@ -33,6 +34,11 @@ class IMAdmissionService:
         self._message_mirror = message_mirror
         self._bot_open_id = (lambda: bot_open_id) if isinstance(bot_open_id, str) else bot_open_id
         self._acknowledgement_text = acknowledgement_text
+        self._agent_definition_version = (
+            (lambda _message: agent_definition_version)
+            if isinstance(agent_definition_version, int)
+            else agent_definition_version
+        )
 
     async def admit(self, message: IncomingMessage) -> IMAdmissionDecision:
         reason = self._evaluate(message)
@@ -79,6 +85,7 @@ class IMAdmissionService:
                 "root_id": message.root_id,
                 "sender_id": message.sender_id,
                 "request": message.body_text.strip(),
+                "agent_definition_version": self._selected_version(message),
             },
             available_at_ms=message.received_at_ms,
         )
@@ -123,6 +130,12 @@ class IMAdmissionService:
             task_id=admitted.task_id,
             created=admitted.created,
         )
+
+    def _selected_version(self, message: IncomingMessage) -> int:
+        version = self._agent_definition_version(message)
+        if version < 1:
+            raise ValueError("selected Agent definition version must be positive")
+        return version
 
     @staticmethod
     def _classify_control(body: str) -> tuple[RunControlKind, str]:

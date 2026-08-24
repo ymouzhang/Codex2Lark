@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
@@ -69,6 +70,7 @@ class IMMentionTaskHandler:
         identity_ref: str,
         task_outbox: TaskOutbox,
         graph_lifecycle: AgentGraphLifecycle | None = None,
+        definitions: Mapping[int, AgentDefinition] | None = None,
     ) -> None:
         if not identity_ref:
             raise ValueError("IM execution identity reference is required")
@@ -76,6 +78,9 @@ class IMMentionTaskHandler:
         self._harness = harness
         self._sessions = sessions
         self._definition = definition
+        self._definitions = dict(definitions or {definition.version: definition})
+        if definition.version not in self._definitions:
+            raise ValueError("default Agent definition must be registered")
         self._templates = templates
         self._identity_ref = identity_ref
         self._task_outbox = task_outbox
@@ -83,6 +88,7 @@ class IMMentionTaskHandler:
 
     async def execute(self, task: LeasedTask, *, now_ms: int) -> TaskExecutionResult:
         binding = self._binding(task)
+        definition = self._definition_for(task)
         run_id = self.run_id_for_task(task.task_id)
         await self._task_outbox.enqueue_task_outbox(
             task.task_id,
@@ -108,7 +114,7 @@ class IMMentionTaskHandler:
                 run_id=run_id,
                 task=task,
                 binding=binding,
-                definition=self._definition,
+                definition=definition,
                 now_ms=now_ms,
             )
         try:
@@ -139,7 +145,7 @@ class IMMentionTaskHandler:
                             actor_id=binding["sender_id"],
                             session_key=task.session_key,
                             identity_ref=self._identity_ref,
-                            policy_version=self._definition.policy_version,
+                            policy_version=definition.policy_version,
                             task_id=task.task_id,
                             chat_id=binding["chat_id"],
                             source_message_id=binding["message_id"],
@@ -154,7 +160,7 @@ class IMMentionTaskHandler:
                             *context.evidence,
                         ),
                     ),
-                    self._definition,
+                    definition,
                     resume=status is RunStatus.RUNNING,
                     now_ms=now_ms,
                 )
@@ -184,6 +190,15 @@ class IMMentionTaskHandler:
             warnings=(type(error).__name__,),
         )
         return self._result(task, binding, outcome)
+
+    def _definition_for(self, task: LeasedTask) -> AgentDefinition:
+        raw = task.payload.get("agent_definition_version", self._definition.version)
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            raise ValueError("IM mention task has invalid Agent definition version")
+        definition = self._definitions.get(raw)
+        if definition is None:
+            raise RuntimeError(f"Agent definition version is not configured: {raw}")
+        return definition
 
     def _result(
         self, task: LeasedTask, binding: dict[str, str], outcome: AgentOutcome
