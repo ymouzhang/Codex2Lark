@@ -74,6 +74,7 @@ class AgentHarness:
         ledger = BudgetLedger.from_limits(list(definition.budget_limits))
         journal: tuple[ModelMessage, ...] = ()
         verified: tuple[VerificationRecord, ...] = ()
+        nonpersistable_calls: set[str] = set()
         source_versions = {item.source_ref: item.source_version for item in request.evidence}
         first_turn = 1
 
@@ -187,6 +188,8 @@ class AgentHarness:
                         self._consume_if_limited(ledger, BudgetKind.EXTERNAL_WRITES, 1)
                     if result.verification.state is VerificationState.VERIFIED:
                         verified = (*verified, result.verification)
+                    if not result.checkpoint_safe_observation:
+                        nonpersistable_calls.add(result.call_id)
                     journal = (
                         *journal,
                         ModelMessage(
@@ -226,7 +229,7 @@ class AgentHarness:
                     agent_version=definition.version,
                     resource_versions=loaded.versions,
                     next_turn=turn + 1,
-                    messages=journal,
+                    messages=self._checkpoint_messages(journal, nonpersistable_calls),
                     verified_effects=verified,
                     blockers=(),
                     source_versions=context.source_versions,
@@ -335,3 +338,24 @@ class AgentHarness:
             raise ValueError("checkpoint source evidence is stale")
         if checkpoint.compactor_version != definition.compactor_version:
             raise ValueError("checkpoint compactor is incompatible")
+
+    @staticmethod
+    def _checkpoint_messages(
+        journal: tuple[ModelMessage, ...], nonpersistable_calls: set[str]
+    ) -> tuple[ModelMessage, ...]:
+        return tuple(
+            ModelMessage(
+                role=message.role,
+                content=(
+                    '{"observation_redacted_refetch_required":true}'
+                    if message.role is MessageRole.TOOL
+                    and message.tool_call_id in nonpersistable_calls
+                    else message.content
+                ),
+                name=message.name,
+                tool_call_id=message.tool_call_id,
+                trusted=message.trusted,
+                tool_calls=message.tool_calls,
+            )
+            for message in journal
+        )

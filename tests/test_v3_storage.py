@@ -200,6 +200,46 @@ async def test_task_lease_recovery_retry_and_terminal_outbox(tmp_path: Path) -> 
         await database.close()
 
 
+async def test_acknowledgement_is_leased_before_same_timestamp_terminal(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "runtime.db")
+    await database.open()
+    store = RuntimeStore(database, cipher())
+    try:
+        admitted = await store.admit(
+            event(), command(), acknowledgement=acknowledgement(), now_ms=100
+        )
+        leased = await store.lease_tasks(worker_id="worker", now_ms=100, lease_ms=50)
+        assert leased[0].task_id == admitted.task_id
+        await store.finish_task(
+            admitted.task_id,
+            worker_id="worker",
+            state=TaskState.SUCCEEDED,
+            now_ms=100,
+            terminal_message=OutboxDraft(
+                publisher_id="feishu-im.reply",
+                destination_ref="message-1",
+                message_kind="completed",
+                idempotency_key="message-1:terminal",
+                payload={"text": "Done"},
+            ),
+        )
+
+        first = await store.lease_outbox(worker_id="publisher", now_ms=100, lease_ms=100, limit=10)
+        assert [item.message_kind for item in first] == ["acknowledgement"]
+        await store.mark_outbox_sent(
+            first[0].outbox_id,
+            worker_id="publisher",
+            upstream_ref="om_ack",
+            now_ms=101,
+        )
+        second = await store.lease_outbox(worker_id="publisher", now_ms=101, lease_ms=100, limit=10)
+        assert [item.message_kind for item in second] == ["completed"]
+    finally:
+        await database.close()
+
+
 async def test_retry_budget_becomes_failed(tmp_path: Path) -> None:
     database = SQLiteDatabase(tmp_path / "runtime.db")
     await database.open()

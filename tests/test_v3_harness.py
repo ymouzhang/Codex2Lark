@@ -22,6 +22,7 @@ from codex2lark.runtime.types import (
     AgentDefinition,
     MessageRole,
     ModelMessage,
+    ModelRequest,
     ModelResponse,
     ModelUsage,
     RunCheckpoint,
@@ -77,6 +78,7 @@ class FakeApprovals:
 
 
 class FakeWriteTool:
+    checkpoint_safe_observation = True
     definition = ToolDefinition(
         tool_id="docs.create",
         version=1,
@@ -296,6 +298,26 @@ async def test_harness_recovers_from_complete_turn_checkpoint() -> None:
 
     assert outcome.status is RunStatus.COMPLETED
     assert outcome.resource_refs == ("https://feishu.cn/docx/docx_123",)
+
+
+async def test_harness_redacts_nonpersistable_tool_observation_only_in_checkpoint() -> None:
+    tool = FakeWriteTool()
+    tool.checkpoint_safe_observation = False
+    model = FakeModel(
+        [
+            ModelResponse("", (ToolCall("call-1", "docs.create", {"title": "A"}),)),
+            ModelResponse("Completed"),
+        ]
+    )
+    harness, sessions = build_harness(model, tool=tool)
+
+    await harness.run(request(), definition(), now_ms=100)
+
+    second_request = model.requests[1]
+    assert isinstance(second_request, ModelRequest)
+    assert "docx_123" in second_request.messages[-1].content
+    checkpoint = sessions.checkpoints["run-1"]
+    assert checkpoint.messages[-1].content == ('{"observation_redacted_refetch_required":true}')
 
 
 async def test_harness_recovers_before_first_checkpoint_without_duplicate_run() -> None:

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from contextlib import suppress
 
 from codex2lark.adapters.openai_responses import OpenAIResponsesModel
+from codex2lark.capabilities.docs.plugin import FeishuDocsPlugin
 from codex2lark.capabilities.im.admission import IMAdmissionService
 from codex2lark.capabilities.im.channel_adapter import (
     ChannelPort,
@@ -19,13 +20,16 @@ from codex2lark.capabilities.im.live_reader import (
     OfficialIMMessageAPI,
     OfficialLiveIMReader,
 )
+from codex2lark.capabilities.im.plugin import create_plugin as create_im_plugin
 from codex2lark.capabilities.im.publisher import IMOutboxPublisher
 from codex2lark.capabilities.im.repository import SQLiteIMRepository
 from codex2lark.capabilities.im.task_handler import IMMentionTaskHandler, IMResponseTemplates
 from codex2lark.core.budgets import BudgetKind, BudgetLimit
+from codex2lark.interfaces.application import create_application
 from codex2lark.runtime.context import ContextEngine
 from codex2lark.runtime.harness import AgentHarness, ModelProvider
 from codex2lark.runtime.outbox import OutboxDispatcher
+from codex2lark.runtime.plugins import PluginManager
 from codex2lark.runtime.resources import ResourceLoader
 from codex2lark.runtime.sessions import SessionStore
 from codex2lark.runtime.tasks import DurableTaskWorker
@@ -48,12 +52,21 @@ from .config import GatewayConfig
 logger = logging.getLogger(__name__)
 
 
-class DenyUnconfiguredTools(ToolPolicy):
+class AllowConfiguredTools(ToolPolicy):
     async def authorize(
         self, definition: ToolDefinition, call: ToolCall, context: ToolContext
     ) -> PolicyDecision:
-        del definition, call, context
-        return PolicyDecision(False, "tool is not enabled by the production capability profile")
+        del definition, call
+        if not all(
+            (
+                context.tenant_key,
+                context.app_id,
+                context.actor_id,
+                context.identity_ref,
+            )
+        ):
+            return PolicyDecision(False, "trusted Feishu execution bindings are incomplete")
+        return PolicyDecision(True, "tool is enabled by the production capability profile")
 
 
 class DenyUnconfiguredApprovals(ApprovalBroker):
@@ -69,6 +82,7 @@ class V3Gateway:
         self,
         *,
         database: SQLiteDatabase,
+        plugins: PluginManager,
         source: OfficialChannelEventSource,
         tasks: DurableTaskWorker,
         outbox: OutboxDispatcher,
@@ -76,6 +90,7 @@ class V3Gateway:
         clock_ms: Callable[[], int] | None = None,
     ) -> None:
         self._database = database
+        self._plugins = plugins
         self._source = source
         self._tasks = tasks
         self._outbox = outbox
@@ -89,7 +104,12 @@ class V3Gateway:
             raise RuntimeError("V3 gateway is already running")
         await self._database.open()
         try:
-            await self._source.start()
+            await self._plugins.start()
+            try:
+                await self._source.start()
+            except BaseException:
+                await self._plugins.stop()
+                raise
         except BaseException:
             await self._database.close()
             raise
@@ -111,7 +131,10 @@ class V3Gateway:
             await worker
             await self._drain_once()
         finally:
-            await self._database.close()
+            try:
+                await self._plugins.stop()
+            finally:
+                await self._database.close()
             self._worker = None
             logger.info("V3 gateway stopped")
         if source_failure is not None:
@@ -179,7 +202,13 @@ def create_v3_gateway(
         OfficialLiveIMReader(api, bot_open_id=bot_open_id),
         im_repository,
     )
-    registry = ToolRegistry([])
+    authoring = create_application()
+    docs_plugin = FeishuDocsPlugin(authoring.docs, config.authoring_identity)
+    plugins = PluginManager(runtime_api=1, allowlist={"feishu-im", "feishu-docs"})
+    plugins.register(create_im_plugin())
+    plugins.register(docs_plugin)
+    enabled_tools = list(docs_plugin.tools)
+    registry = ToolRegistry(enabled_tools)
     harness = AgentHarness(
         model=model
         or OpenAIResponsesModel.from_api_key(
@@ -189,7 +218,7 @@ def create_v3_gateway(
         tools=registry,
         tool_executor=ToolExecutor(
             registry,
-            DenyUnconfiguredTools(),
+            AllowConfiguredTools(),
             DenyUnconfiguredApprovals(),
         ),
         resources=ResourceLoader([]),
@@ -206,7 +235,7 @@ def create_v3_gateway(
             "state clearly what was or was not completed."
         ),
         model_profile=config.model,
-        tool_ids=(),
+        tool_ids=tuple(tool.definition.tool_id for tool in enabled_tools),
         budget_limits=(BudgetLimit(BudgetKind.MODEL_TOKENS, 32_000),),
         max_turns=8,
         max_context_tokens=32_000,
@@ -232,6 +261,7 @@ def create_v3_gateway(
     )
     return V3Gateway(
         database=database,
+        plugins=plugins,
         source=source,
         tasks=task_worker,
         outbox=outbox,

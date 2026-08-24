@@ -129,6 +129,7 @@ class ToolExecutor:
             observation=observation,
             effect=definition.effect,
             verification=verification,
+            checkpoint_safe_observation=getattr(tool, "checkpoint_safe_observation", True),
         )
 
     @staticmethod

@@ -312,10 +312,39 @@ class RuntimeStore:
             )
             rows = connection.execute(
                 """
-                SELECT outbox_id FROM runtime_outbox
-                WHERE state = 'pending' AND available_at_ms <= ?
-                  AND attempt_count < max_attempts
-                ORDER BY created_at_ms, outbox_id LIMIT ?
+                SELECT o.outbox_id FROM runtime_outbox o
+                WHERE o.state = 'pending' AND o.available_at_ms <= ?
+                  AND o.attempt_count < o.max_attempts
+                  AND NOT EXISTS (
+                      SELECT 1 FROM runtime_outbox prior
+                      WHERE prior.task_id = o.task_id
+                        AND prior.state != 'sent'
+                        AND (
+                            prior.created_at_ms < o.created_at_ms
+                            OR (
+                                prior.created_at_ms = o.created_at_ms
+                                AND CASE prior.message_kind
+                                    WHEN 'acknowledgement' THEN 0
+                                    WHEN 'progress' THEN 1
+                                    WHEN 'approval' THEN 2
+                                    ELSE 3
+                                END < CASE o.message_kind
+                                    WHEN 'acknowledgement' THEN 0
+                                    WHEN 'progress' THEN 1
+                                    WHEN 'approval' THEN 2
+                                    ELSE 3
+                                END
+                            )
+                        )
+                  )
+                ORDER BY o.created_at_ms,
+                    CASE o.message_kind
+                        WHEN 'acknowledgement' THEN 0
+                        WHEN 'progress' THEN 1
+                        WHEN 'approval' THEN 2
+                        ELSE 3
+                    END,
+                    o.outbox_id LIMIT ?
                 """,
                 (now_ms, limit),
             ).fetchall()
@@ -338,7 +367,14 @@ class RuntimeStore:
                 f"""
                 SELECT * FROM runtime_outbox
                 WHERE outbox_id IN ({placeholders}) AND lease_owner = ?
-                ORDER BY created_at_ms, outbox_id
+                ORDER BY created_at_ms,
+                    CASE message_kind
+                        WHEN 'acknowledgement' THEN 0
+                        WHEN 'progress' THEN 1
+                        WHEN 'approval' THEN 2
+                        ELSE 3
+                    END,
+                    outbox_id
                 """,
                 (*ids, worker_id),
             ).fetchall()

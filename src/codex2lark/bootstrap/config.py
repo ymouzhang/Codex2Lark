@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from codex2lark.core.models import Identity
 from codex2lark.storage.crypto import MasterKey
 
 
@@ -16,6 +17,7 @@ class GatewayConfig:
     model: str
     master_key: MasterKey = field(repr=False)
     data_dir: Path
+    authoring_identity: Identity = Identity.USER
     openai_base_url: str | None = None
     poll_interval_ms: int = 200
     task_concurrency: int = 4
@@ -54,6 +56,7 @@ class GatewayConfig:
                 encoded_key=cls._required(values, "CODEX2LARK_MASTER_KEY_BASE64"),
             ),
             data_dir=data_dir,
+            authoring_identity=Identity(values.get("CODEX2LARK_AUTHORING_IDENTITY", "user")),
             openai_base_url=values.get("OPENAI_BASE_URL") or None,
             poll_interval_ms=cls._integer(values, "CODEX2LARK_POLL_INTERVAL_MS", 200),
             task_concurrency=cls._integer(values, "CODEX2LARK_TASK_CONCURRENCY", 4),

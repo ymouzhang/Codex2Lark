@@ -128,6 +128,11 @@ evidence of completion.
 Acknowledgement and terminal replies use deterministic idempotency keys derived
 from the source `message_id` and reply kind.
 
+For one admitted request, the acknowledgement intent is always leased before
+progress, approval, or terminal intents, including when their timestamps are
+identical after a fast model response. Delivery retry preserves this causal
+order so the user never sees “completed” before “received.”
+
 ## 5. Message collection
 
 The receive event is a wake-up signal and routing reference. Before inference,

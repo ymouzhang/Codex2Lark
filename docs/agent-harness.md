@@ -351,6 +351,13 @@ tools, and explicit run/node metadata. It does not create a provider
 Conversation, expose hosted shell, or delegate business-state recovery to the
 provider. Tool calls and results preserve stable call IDs in local continuation.
 
+Semantic tools classify whether their observation is checkpoint-safe. Live
+document bodies and other non-persistable business content remain available to
+the next in-process model turn but are replaced in durable checkpoints by a
+typed `observation_redacted_refetch_required` marker that preserves the tool
+call/result pair. After restart the Agent must inspect the live Feishu resource
+again; a checkpoint never becomes a document-content cache.
+
 ## 10. Harness resources
 
 Version-controlled Harness resources are the executable specification:

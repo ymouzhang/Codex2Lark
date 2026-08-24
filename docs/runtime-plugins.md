@@ -259,6 +259,20 @@ validate
 No plugin exposes arbitrary shell execution, unrestricted SQL, raw lark-cli,
 or a generic OpenAPI path to the model.
 
+The first authoring profile exposes these bounded semantic document tools:
+
+| Tool | Effect | Contract |
+|---|---|---|
+| `feishu.docs.search` | Read | Resolve exact titles in the managed folder and reject ambiguity before mutation |
+| `feishu.docs.inspect` | Read | Fetch live XML and revision; its body is non-persistable Harness evidence |
+| `feishu.docs.create` | Write | Create XML in the managed folder and read it back against required text/title |
+| `feishu.docs.edit` | Write | Resolve one URL/token or exact title, apply one bounded edit, read back, and notify |
+
+These tools may use the existing argument-array `lark-cli` adapter internally
+as a transitional trusted adapter. The model sees only strict schemas and
+semantic results. The adapter identity is configured by the operator, is bound
+outside model input, and cannot be overridden in tool arguments.
+
 ## 10. Result publishers
 
 Result publishers render Harness events and terminal outcomes into a channel.

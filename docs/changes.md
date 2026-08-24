@@ -5,6 +5,12 @@ it. It is not a release changelog.
 
 ## 2026-08-24
 
+- Defined the first V3 authoring-plugin tool profile before implementation:
+  bounded search/inspect/create/edit operations, operator-bound delegated
+  identity, live read-back verification, and checkpoint redaction of document
+  bodies with mandatory refetch after recovery. Clarified causal result
+  delivery: acknowledgement precedes terminal output at equal timestamps.
+
 - Defined the V3 production composition-root contract before implementation:
   explicit secret/config validation, one official Feishu long connection,
   durable task and outbox loops, live context reconciliation, restart recovery,

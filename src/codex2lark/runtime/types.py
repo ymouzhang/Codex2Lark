@@ -103,6 +103,7 @@ class ToolResult:
     effect: ToolEffect
     verification: VerificationRecord
     error_code: str | None = None
+    checkpoint_safe_observation: bool = True
 
     @property
     def succeeded(self) -> bool:

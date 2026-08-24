@@ -114,7 +114,13 @@ export OPENAI_API_KEY='...'
 export CODEX2LARK_MODEL='gpt-5'
 export CODEX2LARK_MASTER_KEY_ID='local-v1'
 export CODEX2LARK_MASTER_KEY_BASE64='a-base64-encoded-32-byte-key'
+export CODEX2LARK_AUTHORING_IDENTITY='user'
 ```
+
+`CODEX2LARK_AUTHORING_IDENTITY` is `user` or `bot` and selects the trusted
+lark-cli identity used by authoring tools. Group text cannot override it. The
+selected lark-cli identity must be authenticated and have the document/Drive
+permissions listed below.
 
 `CODEX2LARK_DATA_DIR` optionally selects the state directory. Its default is
 the platform user-state directory. The directory contains SQLite state and

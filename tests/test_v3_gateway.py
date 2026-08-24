@@ -53,6 +53,7 @@ def gateway(database: LifecycleDouble, source: LifecycleDouble) -> tuple[V3Gatew
     outbox = WorkerDouble()
     value = V3Gateway(
         database=database,  # type: ignore[arg-type]
+        plugins=LifecycleDouble(),  # type: ignore[arg-type]
         source=source,  # type: ignore[arg-type]
         tasks=tasks,  # type: ignore[arg-type]
         outbox=outbox,  # type: ignore[arg-type]
