@@ -41,9 +41,94 @@ async def test_status_reports_integrity_without_business_content(tmp_path: Path)
     assert status.integrity == "ok"
     assert status.schema_version > 0
     assert status.task_states == {}
+    assert status.run_states == {}
+    assert status.graph_states == {}
+    assert status.agent_node_states == {}
+    assert status.approval_states == {}
+    assert status.task_retry_count == 0
+    assert status.oldest_pending_task_age_ms == 0
     assert status.pressure in {"normal", "warning", "hard"}
     assert status.managed_bytes >= status.database_bytes
     assert "content" not in StorageMaintenance.as_json(status)
+
+
+async def test_status_reports_content_safe_lifecycle_metrics(tmp_path: Path) -> None:
+    data_dir = (tmp_path / "state").resolve()
+    await create_database(data_dir)
+    with sqlite3.connect(data_dir / "runtime.db") as connection:
+        connection.execute(
+            """
+            INSERT INTO runtime_tasks(
+                task_id, plugin_id, command_type, session_key, priority,
+                payload_ciphertext, state, available_at_ms, attempt_count,
+                max_attempts, created_at_ms, updated_at_ms
+            ) VALUES ('task', 'im', 'handle', 'session', 0, X'01', 'pending', 100, 2, 5, 100, 100)
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_runs VALUES (
+                'run', 'task', 'session', 'root', 1, 1, 'running', 100, 100
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_outbox(
+                outbox_id, run_id, task_id, publisher_id, destination_ref,
+                message_kind, idempotency_key, payload_ciphertext, state,
+                available_at_ms, attempt_count, max_attempts, created_at_ms, updated_at_ms
+            ) VALUES (
+                'outbox', 'run', 'task', 'im', 'message', 'terminal', 'key', X'02',
+                'pending', 200, 3, 8, 200, 200
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_graphs VALUES (
+                'graph', 'run', 'node', 'tenant', 'app', 'im.chat', 'chat',
+                'root', 1, 'active', 3, 8, 4, 100, 100
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_agent_nodes(
+                node_id, graph_id, canonical_path, name, role,
+                task_brief_ciphertext, expected_output_type, context_mode,
+                tool_ids_ciphertext, budget_ciphertext, depth, status,
+                attempt_count, created_at_ms, updated_at_ms
+            ) VALUES (
+                'node', 'graph', '/root', 'root', 'coordinator', X'01', 'summary',
+                'scoped', X'01', X'01', 0, 'running', 1, 100, 100
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_approvals VALUES (
+                'approval', 'task', 'run', 'tenant', 'app', 'session', 'actor',
+                'tool', 'digest', 'pending', 2000, 100, NULL
+            )
+            """
+        )
+        connection.commit()
+
+    status = StorageMaintenance(data_dir).status(now_ms=1_000)
+    encoded = StorageMaintenance.as_json(status)
+
+    assert status.task_states == {"pending": 1}
+    assert status.outbox_states == {"pending": 1}
+    assert status.run_states == {"running": 1}
+    assert status.graph_states == {"active": 1}
+    assert status.agent_node_states == {"running": 1}
+    assert status.approval_states == {"pending": 1}
+    assert status.task_retry_count == 2
+    assert status.outbox_retry_count == 3
+    assert status.oldest_pending_task_age_ms == 900
+    assert status.oldest_pending_outbox_age_ms == 800
+    assert "payload" not in encoded and "session" not in encoded
 
 
 def test_capacity_monitor_reports_warning_and_reserved_space_hard_stop(tmp_path: Path) -> None:

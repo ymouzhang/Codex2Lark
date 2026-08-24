@@ -440,9 +440,14 @@ configuration. A hard denial becomes attributed attachment evidence with the
 
 `storage status` reports `pressure`, `managed_bytes`, `maximum_managed_bytes`,
 and `filesystem_free_bytes` without inspecting or decrypting business content.
-The warning level is an operator signal in the first implementation; stopped-
-Gateway `storage gc` remains the only deletion path and is never raced against
-the live Gateway lock.
+It is also the content-safe single-node metrics snapshot: grouped task, outbox,
+run, Agent-graph, Agent-node, and approval states; aggregate task/outbox retry
+counts; and the age in milliseconds of the oldest pending task and outbox item.
+The query uses lifecycle columns only and never decrypts payloads, messages,
+prompts, tool arguments, document bodies, filenames, or errors. Empty stores
+return the same schema with empty counts and zero ages. The warning level is an
+operator signal in the first implementation; stopped-Gateway `storage gc`
+remains the only deletion path and is never raced against the live Gateway lock.
 
 ## 13. Backup and restore
 

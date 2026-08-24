@@ -28,6 +28,14 @@ class StorageStatus:
     blob_bytes: int
     task_states: dict[str, int]
     outbox_states: dict[str, int]
+    run_states: dict[str, int]
+    graph_states: dict[str, int]
+    agent_node_states: dict[str, int]
+    approval_states: dict[str, int]
+    task_retry_count: int
+    outbox_retry_count: int
+    oldest_pending_task_age_ms: int
+    oldest_pending_outbox_age_ms: int
     pressure: str
     managed_bytes: int
     maximum_managed_bytes: int
@@ -82,8 +90,9 @@ class StorageMaintenance:
             self.data_dir, capacity_policy or StorageCapacityPolicy.from_environment()
         )
 
-    def status(self) -> StorageStatus:
+    def status(self, *, now_ms: int | None = None) -> StorageStatus:
         capacity = self._capacity.snapshot()
+        observed_at_ms = int(time.time() * 1000) if now_ms is None else now_ms
         if not self.database_path.is_file():
             return StorageStatus(
                 False,
@@ -94,6 +103,14 @@ class StorageMaintenance:
                 0,
                 {},
                 {},
+                {},
+                {},
+                {},
+                {},
+                0,
+                0,
+                0,
+                0,
                 capacity.pressure.value,
                 capacity.managed_bytes,
                 capacity.maximum_managed_bytes,
@@ -104,6 +121,18 @@ class StorageMaintenance:
             schema_version = self._schema_version(connection)
             task_states = self._state_counts(connection, "runtime_tasks")
             outbox_states = self._state_counts(connection, "runtime_outbox")
+            run_states = self._state_counts(connection, "runtime_runs")
+            graph_states = self._state_counts(connection, "runtime_graphs")
+            agent_node_states = self._state_counts(connection, "runtime_agent_nodes")
+            approval_states = self._state_counts(connection, "runtime_approvals")
+            task_retry_count = self._sum_attempts(connection, "runtime_tasks")
+            outbox_retry_count = self._sum_attempts(connection, "runtime_outbox")
+            oldest_pending_task_age_ms = self._oldest_pending_age(
+                connection, "runtime_tasks", observed_at_ms
+            )
+            oldest_pending_outbox_age_ms = self._oldest_pending_age(
+                connection, "runtime_outbox", observed_at_ms
+            )
             blob_ids = self._referenced_blob_ids(connection)
         blob_paths = [self._blob_path(self.blob_root, blob_id) for blob_id in blob_ids]
         present = [path for path in blob_paths if path.is_file()]
@@ -117,6 +146,14 @@ class StorageMaintenance:
             blob_bytes=sum(path.stat().st_size for path in present),
             task_states=task_states,
             outbox_states=outbox_states,
+            run_states=run_states,
+            graph_states=graph_states,
+            agent_node_states=agent_node_states,
+            approval_states=approval_states,
+            task_retry_count=task_retry_count,
+            outbox_retry_count=outbox_retry_count,
+            oldest_pending_task_age_ms=oldest_pending_task_age_ms,
+            oldest_pending_outbox_age_ms=oldest_pending_outbox_age_ms,
             pressure=capacity.pressure.value,
             managed_bytes=capacity.managed_bytes,
             maximum_managed_bytes=capacity.maximum_managed_bytes,
@@ -908,14 +945,41 @@ class StorageMaintenance:
 
     @staticmethod
     def _state_counts(connection: sqlite3.Connection, table: str) -> dict[str, int]:
-        if table not in {"runtime_tasks", "runtime_outbox"}:
+        state_columns = {
+            "runtime_tasks": "state",
+            "runtime_outbox": "state",
+            "runtime_runs": "status",
+            "runtime_graphs": "status",
+            "runtime_agent_nodes": "status",
+            "runtime_approvals": "state",
+        }
+        column = state_columns.get(table)
+        if column is None:
             raise ValueError("unsupported state table")
         return {
-            str(row["state"]): int(row["count"])
+            str(row["lifecycle_state"]): int(row["count"])
             for row in connection.execute(
-                f"SELECT state, COUNT(*) AS count FROM {table} GROUP BY state"
+                f"SELECT {column} AS lifecycle_state, COUNT(*) AS count "
+                f"FROM {table} GROUP BY {column}"
             )
         }
+
+    @staticmethod
+    def _sum_attempts(connection: sqlite3.Connection, table: str) -> int:
+        if table not in {"runtime_tasks", "runtime_outbox"}:
+            raise ValueError("unsupported retry table")
+        row = connection.execute(f"SELECT COALESCE(SUM(attempt_count), 0) FROM {table}").fetchone()
+        return int(row[0])
+
+    @staticmethod
+    def _oldest_pending_age(connection: sqlite3.Connection, table: str, now_ms: int) -> int:
+        if table not in {"runtime_tasks", "runtime_outbox"}:
+            raise ValueError("unsupported pending-age table")
+        row = connection.execute(
+            f"SELECT MIN(created_at_ms) FROM {table} WHERE state = 'pending'"
+        ).fetchone()
+        created_at_ms = row[0]
+        return max(0, now_ms - int(created_at_ms)) if created_at_ms is not None else 0
 
     @staticmethod
     def _referenced_blob_ids(connection: sqlite3.Connection) -> tuple[str, ...]:

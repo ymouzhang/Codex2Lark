@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined the content-safe single-node metrics snapshot before implementation.
+  `storage status` adds lifecycle state counts, aggregate retries, and oldest
+  pending queue ages without decrypting any business payload. Implementation
+  area: storage status model/query, CLI JSON contract, and empty/populated-store
+  tests.
+
 - Defined durable group-history publishing before implementation. The V3 root
   Harness receives a strict `feishu.chat.digest.publish` workflow tool backed by
   the existing chronological chat service, trusted identity binding, logical

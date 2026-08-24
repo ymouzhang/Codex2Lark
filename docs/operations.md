@@ -206,8 +206,10 @@ uv run codex2lark storage status
 ```
 
 The JSON result reports SQLite integrity, schema version, database/blob byte
-counts, filesystem free bytes, storage-pressure state, and task/outbox states. A
-non-`ok` integrity result exits non-zero. Stop the Gateway before running
+counts, filesystem free bytes, storage-pressure state, task/outbox/run/graph/
+node/approval state counts, aggregate retries, and oldest pending queue ages.
+It contains no business content and may be sampled by a local supervisor while
+the Gateway is running. A non-`ok` integrity result exits non-zero. Stop the Gateway before running
 `storage gc` or a targeted purge.
 
 Remove one exact message or chat and its local derived state:
