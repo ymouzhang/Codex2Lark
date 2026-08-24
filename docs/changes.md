@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Restricted durable child artifacts with any Feishu business-data capability
+  to content-free completion/verification/resource references; document,
+  Sheet, Base, Whiteboard, and Drive-derived summaries and claims must be
+  refetched live instead of being persisted locally. Implementation area:
+  delegated Harness artifact projection.
+
 - Defined production semantic-write idempotency using deterministic operation
   keys, durable pre-write claims, completed-reference replay, and mandatory
   live reconciliation after ambiguous interruption; inconclusive effects block

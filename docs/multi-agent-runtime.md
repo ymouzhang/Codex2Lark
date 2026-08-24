@@ -232,6 +232,18 @@ Artifact
 Examples include `ResearchBundle`, `DocumentPlan`, `DocumentResult`,
 `TableAnalysis`, `OperationResult`, and `VerificationReport`.
 
+Local artifact persistence follows the source contract, not the worker's prose.
+Group-message/file-derived artifacts may be encrypted locally under the chat
+retention policy because the operator explicitly enabled that mirror. Any child
+with a Feishu Docs, Sheets, Base, Whiteboard, or Drive capability is treated as
+potentially document-derived: its durable artifact stores only typed completion
+status, verified resource references, warning codes, source versions, and
+verification state. It never stores the child's generated summary, extracted
+document text, table cells, or document-derived claims. A parent needing those
+facts refetches the live Feishu resource through a read capability in its own
+turn. This conservative rule applies even when a child did not actually call
+the enabled document tool, avoiding provenance guesses after recovery.
+
 The root merges artifacts deterministically by schema. Conflicting claims remain
 explicit; the root requests reconciliation or reports uncertainty. Two workers
 must not write the same mutable Feishu target concurrently. The supervisor uses

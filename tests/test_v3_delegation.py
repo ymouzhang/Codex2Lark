@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from codex2lark.core.budgets import BudgetKind, BudgetLimit
 from codex2lark.core.events import LeasedTask
 from codex2lark.runtime.context import ContextEngine
-from codex2lark.runtime.delegation import DelegateAgentTool, MultiAgentCoordinator
+from codex2lark.runtime.delegation import (
+    DelegateAgentTool,
+    DelegatedHarnessWorker,
+    MultiAgentCoordinator,
+)
 from codex2lark.runtime.harness import AgentHarness
 from codex2lark.runtime.multi_agent import GraphStatus, MultiAgentSupervisor
 from codex2lark.runtime.resources import ResourceLoader
@@ -13,6 +18,7 @@ from codex2lark.runtime.sessions import InMemorySessionStore
 from codex2lark.runtime.tools import PolicyDecision, ToolContext, ToolExecutor, ToolRegistry
 from codex2lark.runtime.types import (
     AgentDefinition,
+    AgentOutcome,
     ModelRequest,
     ModelResponse,
     RunStatus,
@@ -206,5 +212,57 @@ async def test_prepare_and_finish_are_replay_safe(tmp_path: Path) -> None:
         graph = await store.find_graph_by_root_run("run-root")
         assert graph is not None
         assert len(await store.list_nodes(graph.graph_id)) == 1
+    finally:
+        await database.close()
+
+
+async def test_document_capable_child_artifact_does_not_persist_derived_summary(
+    tmp_path: Path,
+) -> None:
+    database = SQLiteDatabase(tmp_path / "runtime.db")
+    await database.open()
+    store = SQLiteAgentGraphStore(database, EnvelopeCipher(MasterKey("test", b"s" * 32)))
+    coordinator = MultiAgentCoordinator(
+        supervisor=MultiAgentSupervisor(store),
+        store=store,
+        child_harness=None,  # type: ignore[arg-type]
+        sessions=InMemorySessionStore(),
+        child_tools=ToolRegistry([]),
+        model_profile="test-model",
+    )
+    try:
+        await coordinator.prepare(
+            run_id="run-root",
+            task=leased_task(),
+            binding={
+                "tenant_key": "tenant",
+                "app_id": "app",
+                "chat_id": "chat",
+                "message_id": "message",
+                "sender_id": "user",
+            },
+            definition=root_definition(),
+            now_ms=1,
+        )
+        graph = await store.find_graph_by_root_run("run-root")
+        assert graph is not None
+        root = await store.get_node(graph.root_node_id)
+        document_node = replace(
+            root,
+            spec=replace(root.spec, name="author", tool_ids=("feishu.docs.inspect",)),
+        )
+
+        payload = DelegatedHarnessWorker._durable_payload(
+            document_node,
+            AgentOutcome(
+                RunStatus.COMPLETED,
+                "Sensitive document-derived summary",
+                ("https://example.feishu.cn/docx/docx_1",),
+            ),
+        )
+
+        assert "Sensitive document-derived summary" not in str(payload)
+        assert payload["content_refetch_required"] is True
+        assert payload["resource_refs"] == ["https://example.feishu.cn/docx/docx_1"]
     finally:
         await database.close()

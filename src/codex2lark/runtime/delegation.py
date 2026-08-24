@@ -25,6 +25,7 @@ from .sessions import SessionStore
 from .tools import ToolContext, ToolReconciliation, ToolRegistry
 from .types import (
     AgentDefinition,
+    AgentOutcome,
     RunStatus,
     ToolDefinition,
     ToolEffect,
@@ -113,12 +114,7 @@ class DelegatedHarnessWorker:
         return NodeExecutionResult(
             ArtifactDraft(
                 artifact_type=node.spec.expected_output_type,
-                payload={
-                    "claims": {node.spec.name: outcome.summary},
-                    "summary": outcome.summary,
-                    "resource_refs": list(outcome.resource_refs),
-                    "warnings": list(outcome.warnings),
-                },
+                payload=self._durable_payload(node, outcome),
                 source_versions={},
                 verification_state=(
                     VerificationState.VERIFIED
@@ -128,6 +124,28 @@ class DelegatedHarnessWorker:
             ),
             acknowledged_mail_ids=tuple(item.item_id for item in execution.mailbox),
         )
+
+    @staticmethod
+    def _durable_payload(node: AgentNode, outcome: AgentOutcome) -> dict[str, object]:
+        summary = outcome.summary
+        refs = list(outcome.resource_refs)
+        warnings = list(outcome.warnings)
+        has_feishu_business_access = any(
+            tool_id.startswith("feishu.") for tool_id in node.spec.tool_ids
+        )
+        if has_feishu_business_access:
+            return {
+                "claims": {node.spec.name: {"status": "completed"}},
+                "resource_refs": refs,
+                "warnings": warnings,
+                "content_refetch_required": True,
+            }
+        return {
+            "claims": {node.spec.name: summary},
+            "summary": summary,
+            "resource_refs": refs,
+            "warnings": warnings,
+        }
 
     @staticmethod
     def _instructions(node: AgentNode) -> str:
