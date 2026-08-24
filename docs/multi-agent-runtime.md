@@ -260,6 +260,15 @@ Parallel writes to overlapping document ranges, the same Sheet cells, or the
 same Base records are rejected unless the plugin provides a proven merge
 protocol.
 
+`agent.delegate` is a read-classified orchestration capability and explicitly
+declares itself parallel-safe. When one root model turn requests multiple
+independent, uniquely named delegations, the Harness starts those calls
+concurrently; the durable graph supervisor still enforces graph/node budgets,
+leases, and `max_concurrency`. Child Feishu writes are not made parallel-safe by
+this declaration: they remain subject to their own semantic-tool serialization,
+idempotency claims, target locks, and disjoint-target policy. Returned artifacts
+are placed back into the root journal in the model's original call order.
+
 ## 9. User interaction during a graph
 
 New messages are classified outside the model:

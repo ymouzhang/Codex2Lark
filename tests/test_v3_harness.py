@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -120,6 +121,46 @@ class FakeWriteTool:
         )
 
 
+class ParallelReadTool:
+    checkpoint_safe_observation = True
+    definition = ToolDefinition(
+        "agent.delegate",
+        1,
+        "run one independent worker",
+        {"type": "object", "required": ["name"]},
+        ToolEffect.READ,
+        parallel_safe=True,
+    )
+
+    def __init__(self) -> None:
+        self.active = 0
+        self.maximum_active = 0
+        self.both_started = asyncio.Event()
+
+    def validate(self, arguments: dict[str, object]) -> None:
+        if not isinstance(arguments.get("name"), str):
+            raise ValueError("name is required")
+
+    async def execute(self, arguments, context) -> dict[str, object]:
+        del context
+        self.active += 1
+        self.maximum_active = max(self.maximum_active, self.active)
+        if self.active == 2:
+            self.both_started.set()
+        await asyncio.wait_for(self.both_started.wait(), timeout=1)
+        self.active -= 1
+        return {"name": arguments["name"]}
+
+    async def verify(self, arguments, observation, context) -> VerificationRecord:
+        del arguments, observation, context
+        return VerificationRecord(
+            VerificationState.NOT_REQUIRED, "agent.delegate", "worker completed"
+        )
+
+    async def reconcile(self, arguments, context):
+        raise AssertionError("read tools do not reconcile writes")
+
+
 def definition(*, require_verified: bool = True, max_turns: int = 4) -> AgentDefinition:
     return AgentDefinition(
         agent_id="codex2lark-default",
@@ -227,6 +268,51 @@ async def test_harness_executes_tool_verifies_and_completes() -> None:
         "run_terminal",
     ]
     assert [event.sequence for event in sessions.events["run-1"]] == list(range(1, 10))
+
+
+async def test_harness_runs_parallel_safe_read_batch_concurrently_in_call_order() -> None:
+    tool = ParallelReadTool()
+    registry = ToolRegistry([tool])
+    model = FakeModel(
+        [
+            ModelResponse(
+                "",
+                (
+                    ToolCall("call-a", "agent.delegate", {"name": "a"}),
+                    ToolCall("call-b", "agent.delegate", {"name": "b"}),
+                ),
+            ),
+            ModelResponse("Both workers completed."),
+        ]
+    )
+    sessions = InMemorySessionStore()
+    harness = AgentHarness(
+        model=model,
+        tools=registry,
+        tool_executor=ToolExecutor(registry, AllowPolicy(), FakeApprovals()),
+        resources=ResourceLoader([]),
+        context=ContextEngine(),
+        sessions=sessions,
+    )
+    agent = AgentDefinition(
+        "parallel-root",
+        1,
+        "Delegate independent work.",
+        "test-model",
+        ("agent.delegate",),
+        max_turns=2,
+    )
+
+    outcome = await harness.run(request(), agent, now_ms=100)
+
+    assert outcome.status is RunStatus.COMPLETED
+    assert tool.maximum_active == 2
+    second_request = model.requests[1]
+    assert isinstance(second_request, ModelRequest)
+    assert [message.tool_call_id for message in second_request.messages[-2:]] == [
+        "call-a",
+        "call-b",
+    ]
 
 
 async def test_harness_refuses_unverified_completion() -> None:

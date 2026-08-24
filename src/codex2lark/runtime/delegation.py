@@ -343,6 +343,7 @@ class DelegateAgentTool:
                 "additionalProperties": False,
             },
             ToolEffect.READ,
+            parallel_safe=True,
         )
 
     def validate(self, arguments: dict[str, object]) -> None:

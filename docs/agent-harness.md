@@ -269,6 +269,14 @@ timeout, retry policy, idempotency policy,
 verification policy, redaction policy
 ```
 
+A tool definition also declares `parallel_safe`, defaulting to false. For one
+model turn, the Harness validates and journals every requested call in model
+order, then executes calls concurrently only when every call in that batch is
+read-only and explicitly `parallel_safe`. Results are reassembled in original
+call order before they enter model context and the checkpoint. A mixed batch,
+an ordinary Feishu mutation, or any undeclared tool executes serially. This
+keeps concurrency a trusted capability property rather than a model request.
+
 Tool execution passes through hooks inspired by Pi and Codex policy layers:
 
 1. `before_tool_call`: validate arguments, bind tenant/chat/identity, check

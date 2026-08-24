@@ -53,6 +53,7 @@ class ToolDefinition:
     description: str
     input_schema: dict[str, Any]
     effect: ToolEffect
+    parallel_safe: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -183,7 +184,20 @@ class AgentHarness:
                         {"call_id": call.call_id, "tool_id": call.tool_id},
                         clock_ms,
                     )
-                    result = await self._tool_executor.execute(call, request.tool_context)
+                if self._tools.batch_parallel_safe(response.tool_calls):
+                    results = await asyncio.gather(
+                        *(
+                            self._tool_executor.execute(call, request.tool_context)
+                            for call in response.tool_calls
+                        )
+                    )
+                else:
+                    results = []
+                    for call in response.tool_calls:
+                        results.append(
+                            await self._tool_executor.execute(call, request.tool_context)
+                        )
+                for result in results:
                     if result.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE):
                         self._consume_if_limited(ledger, BudgetKind.EXTERNAL_WRITES, 1)
                     if result.verification.state is VerificationState.VERIFIED:

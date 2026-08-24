@@ -3,6 +3,12 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined explicit `parallel_safe` tool metadata and deterministic concurrent
+  execution for all-read, all-safe call batches; enabled it for independent
+  `agent.delegate` calls while keeping Feishu mutation tools serial and
+  idempotent. Implementation area: ToolDefinition, Harness scheduling, and
+  delegation metadata.
+
 - Split diagnostics into an accurate interactive lark-cli/auth check and a
   secret-safe `doctor --gateway` local preflight for V3 configuration, bundled
   resources, key shape, and existing storage integrity; removed the obsolete

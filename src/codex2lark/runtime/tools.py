@@ -121,6 +121,15 @@ class ToolRegistry:
             raise LookupError(f"semantic tool is unavailable: {tool_id}")
         return tool
 
+    def batch_parallel_safe(self, calls: tuple[ToolCall, ...]) -> bool:
+        if len(calls) < 2:
+            return False
+        try:
+            definitions = tuple(self.require(call.tool_id).definition for call in calls)
+        except LookupError:
+            return False
+        return all(item.effect is ToolEffect.READ and item.parallel_safe for item in definitions)
+
 
 class ToolExecutor:
     def __init__(
