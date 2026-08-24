@@ -146,8 +146,6 @@ Expired leases are recovered after restart. Press `Ctrl+C` for a draining stop;
 the service stops event intake, completes its bounded drain, checkpoints SQLite,
 and then exits.
 
-## 7. Stop and uninstall
-
 ## 6. Runtime storage operations
 
 Routine diagnostics need only the configured data directory and never print
@@ -185,6 +183,24 @@ uv run codex2lark storage restore \
 Restore verifies every manifest hash and the SQLite integrity check before it
 publishes the recovered files. It rejects unexpected archive paths and never
 extracts the master key.
+
+Run one bounded retention pass only while the Gateway is stopped:
+
+```bash
+uv run codex2lark storage gc --yes --batch-size 500
+```
+
+`gc` considers only rows whose explicit `expires_at_ms` (or raw-event
+`payload_expires_at_ms`) is due at the command's current clock. It clears due
+raw event payloads and deletes due messages, attachments/parser output,
+artifacts, and idempotency records. It deletes an encrypted blob only after the
+same transaction has removed the expiring references and a second query proves
+that no retained attachment references it. One pass never processes more than
+`--batch-size` rows per category. The JSON result contains counts and reclaimed
+encrypted bytes, never deleted content. `--yes` is mandatory because local
+recovery context may be removed; create and verify a backup first when needed.
+
+## 7. Stop and uninstall
 
 ### Stop foreground processes
 

@@ -37,6 +37,18 @@ class BackupResult:
     total_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class GarbageCollectionResult:
+    ok: bool
+    event_payloads_cleared: int
+    messages_deleted: int
+    attachments_deleted: int
+    artifacts_deleted: int
+    idempotency_deleted: int
+    blobs_deleted: int
+    bytes_reclaimed: int
+
+
 class StorageMaintenance:
     def __init__(self, data_dir: Path) -> None:
         if not data_dir.is_absolute():
@@ -124,6 +136,118 @@ class StorageMaintenance:
             total_bytes,
         )
 
+    def garbage_collect(
+        self, *, now_ms: int | None = None, batch_size: int = 500
+    ) -> GarbageCollectionResult:
+        if batch_size < 1 or batch_size > 10_000:
+            raise ValueError("gc batch size must be between 1 and 10000")
+        if not self.database_path.is_file():
+            raise FileNotFoundError(f"runtime database does not exist: {self.database_path}")
+        due = int(time.time() * 1000) if now_ms is None else now_ms
+        with DataDirectoryLock(self.data_dir), sqlite3.connect(self.database_path) as connection:
+            connection.execute("PRAGMA foreign_keys=ON")
+            candidate_rows = connection.execute(
+                """
+                SELECT DISTINCT a.blob_id
+                FROM im_attachments a
+                LEFT JOIN im_messages m
+                  ON m.tenant_key = a.tenant_key
+                 AND m.app_id = a.app_id
+                 AND m.message_id = a.message_id
+                WHERE a.blob_id IS NOT NULL
+                  AND (
+                    (a.expires_at_ms IS NOT NULL AND a.expires_at_ms <= ?)
+                    OR (m.expires_at_ms IS NOT NULL AND m.expires_at_ms <= ?)
+                  )
+                LIMIT ?
+                """,
+                (due, due, batch_size * 2),
+            ).fetchall()
+            candidates = {str(row[0]) for row in candidate_rows}
+            connection.execute("BEGIN IMMEDIATE")
+            event_payloads = connection.execute(
+                """
+                UPDATE runtime_events SET payload_ciphertext = NULL
+                WHERE event_pk IN (
+                    SELECT event_pk FROM runtime_events
+                    WHERE payload_ciphertext IS NOT NULL
+                      AND payload_expires_at_ms IS NOT NULL
+                      AND payload_expires_at_ms <= ?
+                    ORDER BY event_pk LIMIT ?
+                )
+                """,
+                (due, batch_size),
+            ).rowcount
+            attachments = connection.execute(
+                """
+                DELETE FROM im_attachments WHERE rowid IN (
+                    SELECT rowid FROM im_attachments
+                    WHERE expires_at_ms IS NOT NULL AND expires_at_ms <= ?
+                    ORDER BY rowid LIMIT ?
+                )
+                """,
+                (due, batch_size),
+            ).rowcount
+            messages = connection.execute(
+                """
+                DELETE FROM im_messages WHERE rowid IN (
+                    SELECT rowid FROM im_messages
+                    WHERE expires_at_ms IS NOT NULL AND expires_at_ms <= ?
+                    ORDER BY rowid LIMIT ?
+                )
+                """,
+                (due, batch_size),
+            ).rowcount
+            artifacts = connection.execute(
+                """
+                DELETE FROM runtime_artifacts WHERE rowid IN (
+                    SELECT rowid FROM runtime_artifacts
+                    WHERE expires_at_ms IS NOT NULL AND expires_at_ms <= ?
+                    ORDER BY rowid LIMIT ?
+                )
+                """,
+                (due, batch_size),
+            ).rowcount
+            idempotency = connection.execute(
+                """
+                DELETE FROM runtime_idempotency WHERE rowid IN (
+                    SELECT rowid FROM runtime_idempotency
+                    WHERE expires_at_ms <= ? ORDER BY rowid LIMIT ?
+                )
+                """,
+                (due, batch_size),
+            ).rowcount
+            connection.commit()
+
+            for path in self._bounded_blob_files(batch_size):
+                candidates.add(path.stem)
+            deleted = 0
+            reclaimed = 0
+            for blob_id in sorted(candidates)[:batch_size]:
+                self._validate_blob_id(blob_id)
+                referenced = connection.execute(
+                    "SELECT 1 FROM im_attachments WHERE blob_id = ? LIMIT 1", (blob_id,)
+                ).fetchone()
+                if referenced is not None:
+                    continue
+                path = self._blob_path(self.blob_root, blob_id)
+                if path.is_file():
+                    reclaimed += path.stat().st_size
+                    path.unlink()
+                    deleted += 1
+                connection.execute("DELETE FROM im_file_blobs WHERE blob_id = ?", (blob_id,))
+            connection.commit()
+        return GarbageCollectionResult(
+            True,
+            event_payloads,
+            messages,
+            attachments,
+            artifacts,
+            idempotency,
+            deleted,
+            reclaimed,
+        )
+
     @classmethod
     def verify_backup(cls, archive: Path) -> BackupResult:
         archive = cls._absolute(archive, "backup archive")
@@ -176,7 +300,7 @@ class StorageMaintenance:
         )
 
     @staticmethod
-    def as_json(result: StorageStatus | BackupResult) -> str:
+    def as_json(result: StorageStatus | BackupResult | GarbageCollectionResult) -> str:
         return json.dumps(asdict(result), ensure_ascii=False, sort_keys=True)
 
     @staticmethod
@@ -221,6 +345,24 @@ class StorageMaintenance:
     @staticmethod
     def _blob_path(root: Path, blob_id: str) -> Path:
         return root / blob_id[:2] / f"{blob_id}.blob"
+
+    def _bounded_blob_files(self, limit: int) -> tuple[Path, ...]:
+        if not self.blob_root.is_dir():
+            return ()
+        values: list[Path] = []
+        for parent in sorted(self.blob_root.iterdir()):
+            if not parent.is_dir():
+                continue
+            for path in sorted(parent.glob("*.blob")):
+                values.append(path)
+                if len(values) >= limit:
+                    return tuple(values)
+        return tuple(values)
+
+    @staticmethod
+    def _validate_blob_id(blob_id: str) -> None:
+        if len(blob_id) != 64 or any(character not in "0123456789abcdef" for character in blob_id):
+            raise RuntimeError("database or blob directory contains an invalid blob identifier")
 
     @staticmethod
     def _digest(path: Path) -> str:

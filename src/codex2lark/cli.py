@@ -13,7 +13,12 @@ from .bootstrap.config import GatewayConfig, resolve_data_dir
 from .bootstrap.gateway import create_v3_gateway
 from .interfaces.application import create_application
 from .interfaces.mcp import run_stdio
-from .storage.maintenance import BackupResult, StorageMaintenance, StorageStatus
+from .storage.maintenance import (
+    BackupResult,
+    GarbageCollectionResult,
+    StorageMaintenance,
+    StorageStatus,
+)
 
 
 async def _doctor() -> int:
@@ -135,12 +140,15 @@ def _parser() -> argparse.ArgumentParser:
     restore = storage_commands.add_parser("restore", help="restore into a new data directory")
     restore.add_argument("archive", type=Path)
     restore.add_argument("--data-dir", required=True, type=Path)
+    gc = storage_commands.add_parser("gc", help="delete explicitly expired runtime content")
+    gc.add_argument("--batch-size", type=int, default=500)
+    gc.add_argument("--yes", action="store_true")
     return parser
 
 
 def _storage(arguments: argparse.Namespace) -> int:
     try:
-        result: StorageStatus | BackupResult
+        result: StorageStatus | BackupResult | GarbageCollectionResult
         if arguments.storage_command == "status":
             result = StorageMaintenance(resolve_data_dir()).status()
         elif arguments.storage_command == "backup":
@@ -149,6 +157,12 @@ def _storage(arguments: argparse.Namespace) -> int:
             result = StorageMaintenance.verify_backup(arguments.archive)
         elif arguments.storage_command == "restore":
             result = StorageMaintenance.restore(arguments.archive, arguments.data_dir)
+        elif arguments.storage_command == "gc":
+            if not arguments.yes:
+                raise ValueError("storage gc requires explicit --yes confirmation")
+            result = StorageMaintenance(resolve_data_dir()).garbage_collect(
+                batch_size=arguments.batch_size
+            )
         else:
             return 2
     except (FileNotFoundError, FileExistsError, RuntimeError, ValueError) as exc:

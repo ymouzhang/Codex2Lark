@@ -3,6 +3,11 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined an explicitly confirmed, stopped-Gateway, bounded retention pass for
+  due event payloads, IM mirrors and parser output, artifacts, idempotency rows,
+  and reference-safe encrypted blob reclamation. Implementation area: storage
+  maintenance and CLI administration.
+
 - Defined content-safe storage status and a stopped-Gateway backup,
   verification, and restore workflow with a hashed archive manifest, referenced
   encrypted blobs, no embedded key, and safe empty-directory restore.

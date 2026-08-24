@@ -324,6 +324,14 @@ Garbage collection runs in bounded batches and follows this order:
 5. checkpoint WAL when safe;
 6. emit content-free counts and bytes reclaimed.
 
+The first implementation operates only on explicit expiry columns and requires
+exclusive ownership of a stopped Gateway data directory. Each content category
+has an independent batch bound so one large chat cannot monopolize maintenance.
+Blob deletion is reference-aware: candidate IDs are collected before the row
+transaction, expired rows commit, and the file plus `im_file_blobs` metadata are
+removed only if no surviving attachment references that ID. An orphan-file
+sweep is likewise bounded.
+
 ## 10. Reconciliation
 
 Local data is never trusted solely because it exists. Before a sensitive read or
