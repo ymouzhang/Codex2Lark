@@ -17,6 +17,7 @@ class SessionStore(Protocol):
         agent_version: int,
         policy_version: int,
         now_ms: int,
+        trace_id: str = "",
     ) -> None: ...
 
     async def append_event(
@@ -66,8 +67,9 @@ class InMemorySessionStore:
         agent_version: int,
         policy_version: int,
         now_ms: int,
+        trace_id: str = "",
     ) -> None:
-        del task_id, session_key, agent_id, agent_version, policy_version, now_ms
+        del task_id, session_key, agent_id, agent_version, policy_version, now_ms, trace_id
         if run_id in self.runs:
             raise ValueError(f"run already exists: {run_id}")
         self.runs[run_id] = RunStatus.RUNNING

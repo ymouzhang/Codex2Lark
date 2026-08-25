@@ -35,15 +35,19 @@ class SQLiteSessionStore:
         agent_version: int,
         policy_version: int,
         now_ms: int,
+        trace_id: str = "",
     ) -> None:
+        if not trace_id:
+            trace_id = run_id
+
         def operation(connection: sqlite3.Connection) -> None:
             connection.execute(
                 """
                 INSERT INTO runtime_runs(
                     run_id, task_id, session_key, agent_definition_id,
                     agent_definition_version, policy_version, status,
-                    created_at_ms, updated_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)
+                    created_at_ms, updated_at_ms, trace_id
+                ) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -54,6 +58,7 @@ class SQLiteSessionStore:
                     policy_version,
                     now_ms,
                     now_ms,
+                    trace_id,
                 ),
             )
 

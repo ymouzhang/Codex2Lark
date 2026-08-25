@@ -449,7 +449,19 @@ return the same schema with empty counts and zero ages. The warning level is an
 operator signal in the first implementation; stopped-Gateway `storage gc`
 remains the only deletion path and is never raced against the live Gateway lock.
 
-## 13. Backup and restore
+## 13. Trace bindings
+
+`runtime_events.trace_id` is the canonical opaque trace identity. Tasks obtain
+it through their immutable event foreign key; leased task values expose it to
+the runtime. `runtime_runs`, `runtime_graphs`, and `runtime_approvals` store the
+same value for direct content-safe operational queries. Agent nodes inherit the
+graph trace, run/tool/verification events inherit the run trace, and outbox rows
+inherit the task/run relationship. Migration backfill derives these values only
+through existing foreign keys and never decrypts payloads. New production rows
+derive a non-empty trace from the admitted event; lower-level stores use the run
+identity only as a defensive fallback for non-production fixtures.
+
+## 14. Backup and restore
 
 A valid backup contains a consistent SQLite snapshot, every referenced encrypted
 blob, schema/plugin version manifest, and the corresponding external encryption

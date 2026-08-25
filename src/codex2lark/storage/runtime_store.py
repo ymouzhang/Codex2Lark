@@ -167,6 +167,7 @@ class RuntimeStore:
         actor_id: str,
         tool_id: str,
         argument_digest: str,
+        trace_id: str,
         expires_at_ms: int,
         card: OutboxDraft,
         now_ms: int,
@@ -198,8 +199,8 @@ class RuntimeStore:
                 INSERT INTO runtime_approvals(
                     approval_id, task_id, run_id, tenant_key, app_id, session_key,
                     actor_id, tool_id, argument_digest, state, expires_at_ms,
-                    created_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                    created_at_ms, trace_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
                 """,
                 (
                     approval_id,
@@ -213,6 +214,7 @@ class RuntimeStore:
                     argument_digest,
                     expires_at_ms,
                     now_ms,
+                    trace_id,
                 ),
             )
             self._insert_outbox(connection, card, task_id=task_id, now_ms=now_ms)
@@ -543,7 +545,7 @@ class RuntimeStore:
             placeholders = ",".join("?" for _ in task_ids)
             leased = connection.execute(
                 f"""
-                SELECT t.*, e.event_id
+                SELECT t.*, e.event_id, e.trace_id
                 FROM runtime_tasks t
                 LEFT JOIN runtime_events e ON e.event_pk = t.event_pk
                 WHERE t.task_id IN ({placeholders}) AND t.lease_owner = ?
@@ -941,6 +943,7 @@ class RuntimeStore:
             tenant_key=row["tenant_key"],
             app_id=row["app_id"],
             group_id=row["group_id"],
+            trace_id=row["trace_id"] or task_id,
         )
 
     def _select_task_ids(

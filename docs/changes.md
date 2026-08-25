@@ -3,6 +3,15 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined live startup readiness and end-to-end content-safe trace bindings
+  before implementation. Gateway readiness requires a metadata-only model probe
+  plus connected Feishu bot identity, while one event-generated opaque trace ID
+  is inherited by tasks, runs, Agent graphs/nodes, run/tool events, approvals,
+  and task-bound outbox metadata. Implementation area: provider adapter,
+  Gateway/process health, trace schema/backfill and runtime propagation, storage
+  queries, operations docs, and direct production-path tests. This closes the
+  final V3 completion-audit row and returns every roadmap area to `delivered`.
+
 - Defined independent Drive, Sheets, Base, and Whiteboard capability boundaries
   before implementation. The aggregate `feishu-artifacts` plugin is removed;
   each domain owns one manifest/lifecycle and narrow public service port, while

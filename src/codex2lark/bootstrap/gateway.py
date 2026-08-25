@@ -170,6 +170,7 @@ class V3Gateway:
         outbox: OutboxDispatcher,
         poll_interval_ms: int,
         shutdown_drain_ms: int = 30_000,
+        readiness_checks: tuple[Callable[[], Awaitable[None]], ...] = (),
         clock_ms: Callable[[], int] | None = None,
         data_lock: DataDirectoryLock | None = None,
     ) -> None:
@@ -184,6 +185,8 @@ class V3Gateway:
         self._shutdown_timeout = shutdown_drain_ms / 1000
         self._clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self._data_lock = data_lock
+        self._readiness_checks = readiness_checks
+        self._provider_state = "pending"
         self._stop = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
 
@@ -197,6 +200,10 @@ class V3Gateway:
             try:
                 await self._plugins.start()
                 try:
+                    async with asyncio.timeout(30):
+                        for check in self._readiness_checks:
+                            await check()
+                    self._provider_state = "ready"
                     await self._source.start()
                 except BaseException:
                     await self._plugins.stop()
@@ -261,6 +268,9 @@ class V3Gateway:
 
     async def wait_source_health_change(self, after_version: int) -> EventSourceHealth:
         return await self._source.wait_health_change(after_version)
+
+    def provider_state(self) -> str:
+        return self._provider_state
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -575,6 +585,14 @@ def create_v3_gateway(
         {"feishu-im.reply": IMOutboxPublisher(active_channel)},
         worker_id="v3-outbox-worker",
     )
+
+    async def provider_readiness() -> None:
+        checker = getattr(selected_model, "check_health", None)
+        if model is None:
+            if not callable(checker):
+                raise RuntimeError("production model provider has no readiness probe")
+            await checker(config.model)
+
     return V3Gateway(
         database=database,
         plugins=plugins,
@@ -583,5 +601,6 @@ def create_v3_gateway(
         outbox=outbox,
         poll_interval_ms=config.poll_interval_ms,
         shutdown_drain_ms=config.shutdown_drain_ms,
+        readiness_checks=(provider_readiness,),
         data_lock=DataDirectoryLock(config.data_dir),
     )

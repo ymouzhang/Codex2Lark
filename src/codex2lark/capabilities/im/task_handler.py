@@ -150,6 +150,7 @@ class IMMentionTaskHandler:
                             chat_id=binding["chat_id"],
                             source_message_id=binding["message_id"],
                             reply_in_thread=bool(task.payload.get("thread_id")),
+                            trace_id=task.trace_id or task.task_id,
                         ),
                         evidence=(
                             ContextEvidence(

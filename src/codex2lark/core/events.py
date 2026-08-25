@@ -112,6 +112,7 @@ class LeasedTask:
     tenant_key: str = ""
     app_id: str = ""
     group_id: str | None = None
+    trace_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)

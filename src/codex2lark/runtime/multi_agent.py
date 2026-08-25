@@ -113,6 +113,7 @@ class GraphRecord:
     agent_definition_version: int
     status: GraphStatus
     limits: GraphLimits
+    trace_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +227,7 @@ class AgentGraphStore(Protocol):
         root_spec: NodeSpec,
         limits: GraphLimits,
         now_ms: int,
+        trace_id: str = "",
     ) -> tuple[GraphRecord, AgentNode]: ...
 
     async def get_graph(self, graph_id: str) -> GraphRecord: ...
@@ -362,6 +364,7 @@ class MultiAgentSupervisor:
         root_spec: NodeSpec,
         limits: GraphLimits | None = None,
         now_ms: int,
+        trace_id: str | None = None,
     ) -> tuple[GraphRecord, AgentNode]:
         selected_limits = limits or GraphLimits()
         if root_spec.role is not AgentRole.ORCHESTRATOR:
@@ -380,6 +383,7 @@ class MultiAgentSupervisor:
             root_spec=root_spec,
             limits=selected_limits,
             now_ms=now_ms,
+            trace_id=trace_id or root_run_id,
         )
         await self._notify()
         return result

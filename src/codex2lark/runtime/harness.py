@@ -196,6 +196,7 @@ class AgentHarness:
                 agent_version=definition.version,
                 policy_version=definition.policy_version,
                 now_ms=clock_ms,
+                trace_id=request.tool_context.trace_id or request.run_id,
             )
             await self._event(
                 request.run_id,

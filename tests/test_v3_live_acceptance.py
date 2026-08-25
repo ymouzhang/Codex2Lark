@@ -50,17 +50,17 @@ def insert_group(
         (task_id, chat_id),
     )
     connection.execute(
-        "INSERT INTO runtime_runs VALUES (?, ?, ?, 'root', 1, 1, 'completed', 1000, 1000)",
-        (run_id, task_id, chat_id),
+        "INSERT INTO runtime_runs VALUES (?, ?, ?, 'root', 1, 1, 'completed', 1000, 1000, ?)",
+        (run_id, task_id, chat_id, f"trace-{suffix}"),
     )
     connection.execute(
         """
         INSERT INTO runtime_graphs VALUES (
             ?, ?, ?, 'tenant', 'app', 'im.message', ?, 'root', 1,
-            'completed', 3, 8, 4, 1000, 1000
+            'completed', 3, 8, 4, 1000, 1000, ?
         )
         """,
-        (f"graph-{suffix}", run_id, f"node-{suffix}", message_id),
+        (f"graph-{suffix}", run_id, f"node-{suffix}", message_id, f"trace-{suffix}"),
     )
 
     def outbox(kind: str, index: int) -> None:

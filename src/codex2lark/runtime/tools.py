@@ -35,6 +35,7 @@ class ToolContext:
     reply_in_thread: bool = False
     write_scope: tuple[WriteScopeTarget, ...] = ()
     write_scope_required: bool = False
+    trace_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

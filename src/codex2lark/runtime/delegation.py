@@ -141,6 +141,7 @@ class DelegatedHarnessWorker:
                             )
                         ),
                         write_scope_required=node.spec.requires_write_scope,
+                        trace_id=self._parent_context.trace_id,
                     ),
                 ),
                 definition,
@@ -258,6 +259,7 @@ class MultiAgentCoordinator:
             ),
             limits=GraphLimits(),
             now_ms=now_ms,
+            trace_id=task.trace_id or run_id,
         )
 
     async def finish(self, run_id: str, status: RunStatus, *, now_ms: int) -> None:

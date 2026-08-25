@@ -10,10 +10,13 @@ import pytest
 from cryptography.exceptions import InvalidTag
 
 from codex2lark.core.events import NormalizedEvent, OutboxDraft, TaskCommand, TaskState
+from codex2lark.runtime.multi_agent import AgentRole, GraphLimits, NodeSpec
+from codex2lark.storage.agent_store import SQLiteAgentGraphStore
 from codex2lark.storage.blobs import EncryptedBlobStore
 from codex2lark.storage.crypto import EnvelopeCipher, MasterKey
 from codex2lark.storage.database import SQLiteDatabase
 from codex2lark.storage.runtime_store import RuntimeStore
+from codex2lark.storage.session_store import SQLiteSessionStore
 
 
 def cipher() -> EnvelopeCipher:
@@ -132,7 +135,7 @@ async def test_database_creates_schema_wal_and_owner_only_file(tmp_path: Path) -
             ).fetchone()[0]
         )
         assert journal_mode == "wal"
-        assert migration_count == 12
+        assert migration_count == 13
         assert os.stat(path).st_mode & 0o777 == 0o600
     finally:
         await database.close()
@@ -164,6 +167,101 @@ async def test_admission_is_atomic_encrypted_and_deduplicated(tmp_path: Path) ->
             )
         )
         assert all(b"private" not in value for value in ciphertexts)
+    finally:
+        await database.close()
+
+
+async def test_trace_id_joins_event_task_run_graph_approval_and_outbox(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "runtime.db")
+    await database.open()
+    runtime = RuntimeStore(database, cipher())
+    sessions = SQLiteSessionStore(database, cipher())
+    graphs = SQLiteAgentGraphStore(database, cipher())
+    try:
+        admitted = await runtime.admit(event(), command(), now_ms=100)
+        leased = (await runtime.lease_tasks(worker_id="worker", now_ms=100, lease_ms=1000))[0]
+        assert leased.task_id == admitted.task_id
+        assert leased.trace_id == "trace-1"
+
+        await sessions.start_run(
+            run_id="run-1",
+            task_id=leased.task_id,
+            session_key=leased.session_key,
+            agent_id="root",
+            agent_version=1,
+            policy_version=1,
+            now_ms=101,
+            trace_id=leased.trace_id,
+        )
+        await sessions.append_event(
+            run_id="run-1",
+            event_type="tool_completed",
+            payload={"tool_id": "docs.read"},
+            now_ms=102,
+        )
+        await graphs.create_graph(
+            graph_id="graph-1",
+            root_run_id="run-1",
+            tenant_key="tenant-1",
+            app_id="app-1",
+            source_resource_kind="im.message",
+            source_resource_id="message-1",
+            agent_definition_id="root",
+            agent_definition_version=1,
+            root_spec=NodeSpec(
+                name="root",
+                role=AgentRole.ORCHESTRATOR,
+                task_brief="Handle the request.",
+                expected_output_type="AgentOutcome",
+                tool_ids=("docs.read",),
+                budgets={"model_tokens": 100, "tool_calls": 2, "external_writes": 1},
+            ),
+            limits=GraphLimits(),
+            now_ms=103,
+            trace_id=leased.trace_id,
+        )
+        await runtime.request_approval(
+            approval_id="approval-1",
+            task_id=leased.task_id,
+            run_id="run-1",
+            tenant_key="tenant-1",
+            app_id="app-1",
+            session_key=leased.session_key,
+            actor_id="user-1",
+            tool_id="docs.delete",
+            argument_digest="digest",
+            trace_id=leased.trace_id,
+            expires_at_ms=10_000,
+            card=OutboxDraft(
+                publisher_id="feishu-im.reply",
+                destination_ref="message-1",
+                message_kind="approval",
+                idempotency_key="approval-1",
+                payload={"card": "content is encrypted"},
+                available_at_ms=104,
+            ),
+            now_ms=104,
+        )
+
+        trace_rows = await database.call(
+            lambda connection: connection.execute(
+                """
+                SELECT e.trace_id, r.trace_id, g.trace_id, a.trace_id,
+                       re.event_type, o.message_kind
+                FROM runtime_events e
+                JOIN runtime_tasks t ON t.event_pk = e.event_pk
+                JOIN runtime_runs r ON r.task_id = t.task_id
+                JOIN runtime_run_events re ON re.run_id = r.run_id
+                JOIN runtime_graphs g ON g.root_run_id = r.run_id
+                JOIN runtime_approvals a ON a.run_id = r.run_id
+                JOIN runtime_outbox o ON o.task_id = t.task_id
+                WHERE e.event_id = 'event-1' AND o.message_kind = 'approval'
+                """
+            ).fetchall()
+        )
+        assert [tuple(row) for row in trace_rows] == [
+            ("trace-1", "trace-1", "trace-1", "trace-1", "tool_completed", "approval")
+        ]
     finally:
         await database.close()
 

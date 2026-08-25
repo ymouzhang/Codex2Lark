@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 INITIAL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS runtime_migrations (
@@ -472,6 +472,39 @@ CREATE TABLE runtime_scheduler_lanes (
 );
 """
 
+TRACE_BINDING_SCHEMA = """
+ALTER TABLE runtime_runs ADD COLUMN trace_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE runtime_graphs ADD COLUMN trace_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE runtime_approvals ADD COLUMN trace_id TEXT NOT NULL DEFAULT '';
+
+UPDATE runtime_runs
+SET trace_id = COALESCE(
+    (
+        SELECT e.trace_id
+        FROM runtime_tasks t
+        JOIN runtime_events e ON e.event_pk = t.event_pk
+        WHERE t.task_id = runtime_runs.task_id
+    ),
+    run_id
+);
+
+UPDATE runtime_graphs
+SET trace_id = COALESCE(
+    (SELECT r.trace_id FROM runtime_runs r WHERE r.run_id = runtime_graphs.root_run_id),
+    root_run_id
+);
+
+UPDATE runtime_approvals
+SET trace_id = COALESCE(
+    (SELECT r.trace_id FROM runtime_runs r WHERE r.run_id = runtime_approvals.run_id),
+    run_id
+);
+
+CREATE INDEX runtime_runs_trace_idx ON runtime_runs(trace_id, created_at_ms);
+CREATE INDEX runtime_graphs_trace_idx ON runtime_graphs(trace_id, created_at_ms);
+CREATE INDEX runtime_approvals_trace_idx ON runtime_approvals(trace_id, created_at_ms);
+"""
+
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, INITIAL_SCHEMA),
     (2, SESSION_SCHEMA),
@@ -485,4 +518,5 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (10, APPROVAL_SCHEMA),
     (11, MAILBOX_IDEMPOTENCY_SCHEMA),
     (12, TASK_SCHEDULING_SCHEMA),
+    (13, TRACE_BINDING_SCHEMA),
 )

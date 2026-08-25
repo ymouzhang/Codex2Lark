@@ -19,6 +19,7 @@ class GatewayProcessStatus:
     pid: int | None
     started_at_ms: int | None
     source_state: str | None = None
+    provider_state: str | None = None
     reconnect_attempts: int = 0
 
 
@@ -35,6 +36,7 @@ class GatewayStatusFiles:
         pid: int,
         started_at_ms: int,
         source_state: str | None = None,
+        provider_state: str | None = None,
         reconnect_attempts: int = 0,
     ) -> None:
         self.data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -47,6 +49,7 @@ class GatewayStatusFiles:
                     "pid": pid,
                     "started_at_ms": started_at_ms,
                     "source_state": source_state,
+                    "provider_state": provider_state,
                     "reconnect_attempts": reconnect_attempts,
                 },
                 separators=(",", ":"),
@@ -82,9 +85,13 @@ class GatewayStatusFiles:
         if state not in {"starting", "ready", "degraded", "stopping"}:
             return GatewayProcessStatus(False, "invalid", pid, None)
         source_state = payload.get("source_state")
+        provider_state = payload.get("provider_state")
         reconnect_attempts = payload.get("reconnect_attempts", 0)
         normalized_source = source_state if isinstance(source_state, str) else None
-        if state == "ready" and normalized_source != "connected":
+        normalized_provider = provider_state if isinstance(provider_state, str) else None
+        if state == "ready" and (
+            normalized_source != "connected" or normalized_provider != "ready"
+        ):
             return GatewayProcessStatus(False, "invalid", pid, None)
         if state == "degraded" and normalized_source not in {
             "starting",
@@ -98,6 +105,7 @@ class GatewayStatusFiles:
             pid,
             started_at_ms if isinstance(started_at_ms, int) else None,
             normalized_source,
+            normalized_provider,
             (
                 reconnect_attempts
                 if isinstance(reconnect_attempts, int)

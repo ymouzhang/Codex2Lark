@@ -23,6 +23,7 @@ def test_status_files_are_content_safe_and_owner_scoped(tmp_path: Path) -> None:
         pid=os.getpid(),
         started_at_ms=123,
         source_state="connected",
+        provider_state="ready",
     )
 
     status = files.read()
@@ -43,6 +44,7 @@ def test_status_files_publish_content_safe_source_degradation(tmp_path: Path) ->
         pid=os.getpid(),
         started_at_ms=123,
         source_state="reconnecting",
+        provider_state="ready",
         reconnect_attempts=3,
     )
 
@@ -79,6 +81,7 @@ def test_daemon_start_uses_argument_array_and_waits_for_ready(
                 pid=424242,
                 started_at_ms=100,
                 source_state="connected",
+                provider_state="ready",
             ),
         ).start()
         return FakeProcess()
@@ -102,7 +105,13 @@ def test_daemon_start_uses_argument_array_and_waits_for_ready(
 
 def test_stop_refuses_mismatched_pid_without_signaling(tmp_path: Path) -> None:
     controller = GatewayProcessController(tmp_path.resolve())
-    controller.files.publish("ready", pid=os.getpid(), started_at_ms=1, source_state="connected")
+    controller.files.publish(
+        "ready",
+        pid=os.getpid(),
+        started_at_ms=1,
+        source_state="connected",
+        provider_state="ready",
+    )
 
     with pytest.raises(RuntimeError, match="not a Codex2Lark Gateway"):
         controller.stop(timeout_seconds=0.1)
@@ -127,6 +136,7 @@ def test_stop_signals_validated_gateway_process_and_waits(tmp_path: Path) -> Non
         pid=process.pid,
         started_at_ms=int(time.time() * 1000),
         source_state="connected",
+        provider_state="ready",
     )
     try:
         status = controller.stop(timeout_seconds=2)

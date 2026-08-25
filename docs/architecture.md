@@ -346,10 +346,14 @@ key.
 
 ## 14. Observability and evaluation
 
-Every event, task, run, Agent node, tool call, approval, verification, outbox
-delivery, and plugin health change carries a trace ID and typed lifecycle event.
-Logs and metrics exclude message bodies, file contents, prompts, secrets, and
-hidden reasoning.
+Every admitted event creates one opaque trace ID. The durable task lease exposes
+that ID; the root run, Agent graph, node transitions, run/tool/verification
+events, approval, and task-bound outbox records inherit it rather than creating
+unrelated IDs. A trace lookup therefore follows metadata joins from event to
+task, run, graph/node, run event/tool call, approval, and outbox without
+decrypting payloads. Trace IDs grant no authority and are never model supplied.
+Logs and metrics exclude message bodies, tool arguments, file contents, prompts,
+secrets, document/resource content, upstream error text, and hidden reasoning.
 
 Release gates include deterministic scenarios for:
 
@@ -381,10 +385,13 @@ systemd or container supervisor
 ```
 
 The process starts in this order: configuration, key, storage integrity,
-migrations, plugins, policies/Agent definitions, recovery, event sources, then
-readiness. Shutdown stops admission, drains within a deadline, checkpoints or
-releases leases, flushes outbox state, closes sources, checkpoints SQLite, and
-exits.
+migrations, plugins, policies/Agent definitions, model-provider identity/model
+probe, event-source connection and bot-identity probe, recovery, then readiness.
+`ready` requires both live probes; a configured secret alone is not health.
+Provider readiness uses a metadata-only model lookup and never creates a model
+response or token charge. Shutdown stops admission, drains within a deadline,
+checkpoints or releases leases, flushes outbox state, closes sources, checkpoints
+SQLite, and exits.
 
 RabbitMQ is reconsidered only for multiple hosts, independent worker scaling,
 or a measured queue SLO that SQLite cannot meet. Webhook ingress is reconsidered

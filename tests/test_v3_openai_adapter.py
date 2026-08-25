@@ -37,6 +37,15 @@ class FakeResponses:
         )
 
 
+class FakeModels:
+    def __init__(self) -> None:
+        self.requested: list[str] = []
+
+    async def retrieve(self, model: str) -> object:
+        self.requested.append(model)
+        return SimpleNamespace(id=model)
+
+
 async def test_openai_responses_adapter_is_stateless_strict_and_preserves_calls() -> None:
     responses = FakeResponses()
     model = OpenAIResponsesModel(
@@ -93,6 +102,21 @@ async def test_openai_responses_adapter_is_stateless_strict_and_preserves_calls(
     assert responses.parameters["input"][1]["name"].startswith("c2l_")
     assert responses.parameters["input"][1]["call_id"] == "call_1"
     assert responses.parameters["input"][2]["type"] == "function_call_output"
+
+
+async def test_openai_provider_health_uses_metadata_without_creating_response() -> None:
+    responses = FakeResponses()
+    models = FakeModels()
+    model = OpenAIResponsesModel(
+        SimpleNamespace(responses=responses, models=models),
+        input_cost_micros_per_million_tokens=1,
+        output_cost_micros_per_million_tokens=1,
+    )
+
+    await model.check_health("configured-model")
+
+    assert models.requested == ["configured-model"]
+    assert responses.parameters == {}
 
 
 async def test_openai_responses_adapter_rejects_missing_billable_usage() -> None:

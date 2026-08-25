@@ -48,7 +48,9 @@ class SQLiteAgentGraphStore:
         root_spec: NodeSpec,
         limits: GraphLimits,
         now_ms: int,
+        trace_id: str = "",
     ) -> tuple[GraphRecord, AgentNode]:
+        trace_id = trace_id or root_run_id
         root_node_id = str(uuid4())
 
         def operation(connection: sqlite3.Connection) -> tuple[GraphRecord, AgentNode]:
@@ -58,8 +60,8 @@ class SQLiteAgentGraphStore:
                     graph_id, root_run_id, root_node_id, tenant_key, app_id,
                     source_resource_kind, source_resource_id, agent_definition_id,
                     agent_definition_version, status, max_depth, max_nodes,
-                    max_concurrency, created_at_ms, updated_at_ms
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)
+                    max_concurrency, created_at_ms, updated_at_ms, trace_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     graph_id,
@@ -76,6 +78,7 @@ class SQLiteAgentGraphStore:
                     limits.max_concurrency,
                     now_ms,
                     now_ms,
+                    trace_id,
                 ),
             )
             self._insert_node(
@@ -101,6 +104,7 @@ class SQLiteAgentGraphStore:
                 agent_definition_version=agent_definition_version,
                 status=GraphStatus.ACTIVE,
                 limits=limits,
+                trace_id=trace_id,
             )
             return graph, AgentNode(
                 root_node_id,
@@ -1206,6 +1210,7 @@ class SQLiteAgentGraphStore:
             agent_definition_version=row["agent_definition_version"],
             status=GraphStatus(row["status"]),
             limits=GraphLimits(row["max_depth"], row["max_nodes"], row["max_concurrency"]),
+            trace_id=row["trace_id"],
         )
 
     def _node(self, row: sqlite3.Row, dependency_node_ids: tuple[str, ...] = ()) -> AgentNode:

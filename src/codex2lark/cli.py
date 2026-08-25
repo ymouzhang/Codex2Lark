@@ -218,6 +218,7 @@ async def _gateway() -> int:
                 pid=pid,
                 started_at_ms=started_at_ms,
                 source_state=health.state,
+                provider_state=gateway.provider_state(),
                 reconnect_attempts=health.reconnect_attempts,
             )
             health = await gateway.wait_source_health_change(health.version)
@@ -239,6 +240,7 @@ async def _gateway() -> int:
             pid=pid,
             started_at_ms=started_at_ms,
             source_state=health.state,
+            provider_state=gateway.provider_state(),
             reconnect_attempts=health.reconnect_attempts,
         )
         try:

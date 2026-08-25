@@ -234,6 +234,30 @@ async def test_v3_gateway_closes_database_when_source_start_fails() -> None:
     assert database.closed is True
 
 
+async def test_v3_gateway_requires_provider_probe_before_source_start() -> None:
+    database = LifecycleDouble()
+    source = LifecycleDouble()
+
+    async def failed_provider() -> None:
+        raise ConnectionError("provider unavailable")
+
+    service = V3Gateway(
+        database=database,  # type: ignore[arg-type]
+        plugins=LifecycleDouble(),  # type: ignore[arg-type]
+        source=source,  # type: ignore[arg-type]
+        tasks=WorkerDouble(),  # type: ignore[arg-type]
+        outbox=WorkerDouble(),  # type: ignore[arg-type]
+        poll_interval_ms=10,
+        readiness_checks=(failed_provider,),
+    )
+
+    with pytest.raises(ConnectionError, match="provider unavailable"):
+        await service.start()
+
+    assert database.closed
+    assert not source.started
+
+
 async def test_tool_policy_isolates_unhealthy_plugin_and_allows_live_recovery() -> None:
     plugin = ToggleCapabilityPlugin(False)
     manager = PluginManager(

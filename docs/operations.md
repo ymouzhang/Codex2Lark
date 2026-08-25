@@ -77,8 +77,12 @@ This check parses all required secrets without printing them, validates the
 resources and IM templates, and—when `runtime.db` already exists—storage schema,
 referenced blobs, and SQLite integrity. A missing database is reported as
 `not_initialized` and is healthy before the first Gateway start. This is a
-local preflight; the actual `gateway` startup remains the live Feishu long-
-connection and bot-identity readiness check.
+local preflight; it deliberately performs no network call. Actual `gateway`
+startup performs a bounded metadata-only model lookup plus the live Feishu
+long-connection/bot-identity probe. `gateway status` is ready only when
+`"provider_state":"ready"` and `"source_state":"connected"`; a failed startup
+probe exits without accepting events. The provider check creates no response
+and consumes no model tokens.
 
 ## 4. Connect Codex
 

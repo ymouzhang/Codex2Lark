@@ -13,16 +13,16 @@ having types or isolated primitives is not enough.
 | Area | Status | Shipped production path | Open contract work |
 | --- | --- | --- | --- |
 | Kernel and storage | delivered | SQLite admission, leases, encrypted blobs, idempotency, outbox, retention GC, backup/verify/restore, resumable wrapping-key rotation, one-process data-directory locking, disk high-water attachment admission, message/chat/tenant/all-data purge, and content-safe pressure status | none for the V3 contract |
-| Agent Harness | partial | versioned resources, model/tool loop, checkpoints, token/tool/write/cost accounting, policy gate, write verification, deterministic recovery, durable controls/approvals, and compaction evals | wall-time enforcement, mandatory verification after attempted writes, and policy/tool-schema checkpoint binding |
-| Multi-Agent supervisor | partial | durable rooted graphs, bounded delegation, typed mailboxes/artifacts, child write locks, cancellation, 64-group fairness, and restart chaos | root/cross-graph write locking and hierarchical tenant/app/group/plugin/provider execution caps |
-| Feishu IM | partial | service-native long connection, durable pre-ACK admission, mentions, membership, encrypted context/attachments, replies, lifecycle invalidation, and live-gate observer | explicit enabled-group/actor admission policy plus bounded source supervision |
-| Feishu authoring | partial | managed-folder Docs/Whiteboard/Sheets/Base/group-digest tools, create/edit fixtures, and read-back verification | current-chat binding for group digest and separate Drive/Sheets/Base/Whiteboard plugin boundaries |
-| Operations and release | partial | process control, metrics, purge, backup/restore, key rotation, canary rollout, load/restart/recovery tests | bounded in-flight shutdown, complete live readiness/trace evidence, and closure of [the completion audit](v3-completion-audit.md) |
+| Agent Harness | delivered | versioned resources, model/tool loop, checkpoints, token/tool/write/wall-time/cost accounting, policy gate, mandatory write verification, deterministic recovery, durable controls/approvals, policy/tool-schema invalidation, and compaction evals | none for the V3 contract |
+| Multi-Agent supervisor | delivered | durable rooted graphs, bounded delegation, typed mailboxes/artifacts, root/child cross-graph write locks, cancellation, hierarchical fair capacity, 64-group fairness, and restart chaos | none for the V3 contract |
+| Feishu IM | delivered | service-native long connection, durable pre-ACK admission, exact policy-gated mentions, membership, encrypted context/attachments, replies, lifecycle invalidation, bounded source supervision, and reconnect health | none for the V3 contract |
+| Feishu authoring | delivered | managed-folder Docs and independent Drive/Whiteboard/Sheets/Base/group-digest plugins and tools, current-chat authority, create/edit fixtures, and read-back verification | none for the V3 contract |
+| Operations and release | delivered | process control, strict model/source readiness, common content-safe traces, metrics, purge, backup/restore, key rotation, bounded drain, canary rollout, and load/restart/recovery tests | deployment-specific credential-bound live qualification |
 
-The repository is a strong V3 implementation baseline, but the completion claim
-is withdrawn until every row in [the completion audit](v3-completion-audit.md)
-has production-path evidence. Deployment-specific live evidence remains a
-separate release qualification after implementation completion.
+The repository V3 implementation satisfies every row in
+[the completion audit](v3-completion-audit.md). Deployment-specific live
+evidence remains a separate release qualification because it depends on the
+operator's Feishu application, scopes, tenant, model account, and network.
 
 ## Design gate: accepted before implementation
 

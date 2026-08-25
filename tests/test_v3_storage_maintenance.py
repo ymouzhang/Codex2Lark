@@ -69,7 +69,7 @@ async def test_status_reports_content_safe_lifecycle_metrics(tmp_path: Path) -> 
         connection.execute(
             """
             INSERT INTO runtime_runs VALUES (
-                'run', 'task', 'session', 'root', 1, 1, 'running', 100, 100
+                'run', 'task', 'session', 'root', 1, 1, 'running', 100, 100, 'trace'
             )
             """
         )
@@ -89,7 +89,7 @@ async def test_status_reports_content_safe_lifecycle_metrics(tmp_path: Path) -> 
             """
             INSERT INTO runtime_graphs VALUES (
                 'graph', 'run', 'node', 'tenant', 'app', 'im.chat', 'chat',
-                'root', 1, 'active', 3, 8, 4, 100, 100
+                'root', 1, 'active', 3, 8, 4, 100, 100, 'trace'
             )
             """
         )
@@ -108,9 +108,9 @@ async def test_status_reports_content_safe_lifecycle_metrics(tmp_path: Path) -> 
         )
         connection.execute(
             """
-            INSERT INTO runtime_approvals VALUES (
-                'approval', 'task', 'run', 'tenant', 'app', 'session', 'actor',
-                'tool', 'digest', 'pending', 2000, 100, NULL
+                INSERT INTO runtime_approvals VALUES (
+                    'approval', 'task', 'run', 'tenant', 'app', 'session', 'actor',
+                    'tool', 'digest', 'pending', 2000, 100, NULL, 'trace'
             )
             """
         )
@@ -399,7 +399,7 @@ async def test_gc_deletes_due_content_but_preserves_shared_blob(tmp_path: Path) 
                   FROM runtime_events WHERE event_id = 'gc-event';
                 INSERT INTO runtime_runs VALUES (
                     'gc-run', 'gc-task', 'tenant/app/chat/root', 'agent', 1, 1,
-                    'running', 1, 1
+                    'running', 1, 1, 'gc-trace'
                 );
                 INSERT INTO runtime_checkpoints VALUES (
                     'gc-run', X'01', 2, 'agent', 1, 1, 1, 1
@@ -490,7 +490,7 @@ async def test_targeted_chat_purge_removes_derived_runtime_and_preserves_shared_
                   FROM runtime_events WHERE event_id = 'event-1';
                 INSERT INTO runtime_runs VALUES (
                     'run-1', 'task-1', 'tenant/app/chat-1/root', 'agent', 1, 1,
-                    'running', 1, 1
+                    'running', 1, 1, 'trace'
                 );
                 INSERT INTO runtime_checkpoints VALUES (
                     'run-1', X'01', 2, 'agent', 1, 1, 1, 1
@@ -592,9 +592,9 @@ async def test_tenant_and_all_purge_remove_exact_business_scopes_and_keep_audit(
                     FROM runtime_events WHERE event_id = 'event-b';
                 INSERT INTO runtime_runs VALUES
                   ('run-a', 'task-a', 'tenant-a/app-a/chat-a/root', 'agent', 1, 1,
-                   'running', 1, 1),
+                   'running', 1, 1, 'trace-a'),
                   ('run-b', 'task-b', 'tenant-b/app-b/chat-b/root', 'agent', 1, 1,
-                   'running', 1, 1);
+                   'running', 1, 1, 'trace-b');
                 INSERT INTO runtime_checkpoints VALUES
                   ('run-a', X'01', 2, 'agent', 1, 1, 1, 1),
                   ('run-b', X'01', 2, 'agent', 1, 1, 1, 1);
@@ -609,9 +609,9 @@ async def test_tenant_and_all_purge_remove_exact_business_scopes_and_keep_audit(
                    'completed', 'out-b-key', X'01', 'pending', 1, 0, 3, 1, 1);
                 INSERT INTO runtime_graphs VALUES
                   ('graph-a', 'run-a', 'root-a', 'tenant-a', 'app-a', 'im.thread',
-                   'chat-a', 'agent', 1, 'active', 3, 8, 3, 1, 1),
+                   'chat-a', 'agent', 1, 'active', 3, 8, 3, 1, 1, 'trace-a'),
                   ('graph-b', 'run-b', 'root-b', 'tenant-b', 'app-b', 'im.thread',
-                   'chat-b', 'agent', 1, 'active', 3, 8, 3, 1, 1);
+                   'chat-b', 'agent', 1, 'active', 3, 8, 3, 1, 1, 'trace-b');
                 """
             )
         )
@@ -656,7 +656,7 @@ async def test_tenant_and_all_purge_remove_exact_business_scopes_and_keep_audit(
     assert all_result.blobs_deleted == 1
     assert not blob.exists()
     with sqlite3.connect(data_dir / "runtime.db") as connection:
-        assert connection.execute("SELECT COUNT(*) FROM runtime_migrations").fetchone()[0] == 12
+        assert connection.execute("SELECT COUNT(*) FROM runtime_migrations").fetchone()[0] == 13
         assert connection.execute("SELECT COUNT(*) FROM runtime_admin_audit").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM runtime_events").fetchone()[0] == 0
         assert connection.execute("SELECT COUNT(*) FROM runtime_graphs").fetchone()[0] == 0

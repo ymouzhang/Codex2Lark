@@ -8,9 +8,11 @@ and a direct executable proof.
 ## Audit status
 
 The durable kernel, Harness loop, multi-Agent graph, IM transport, authoring
-tools, encrypted storage, and operator controls are substantial and tested.
-The repository is not yet eligible for a V3-complete declaration because the
-following normative gaps were found during the requirement-by-requirement audit.
+tools, encrypted storage, and operator controls satisfy the audited V3
+contracts. Every gap found by the requirement-by-requirement audit now has a
+production-path implementation and direct executable proof. Credential-bound
+live-environment qualification remains an operator release activity, not an
+unimplemented architecture contract.
 
 | Gap | Normative source | Current contradictory evidence | Required completion evidence |
 | --- | --- | --- | --- |
@@ -24,7 +26,7 @@ following normative gaps were found during the requirement-by-requirement audit.
 | Checkpoint invalidation contract — resolved | Requirements 4.5 and Harness contract | Encrypted checkpoints bind Agent/resource/source/compactor/policy versions and a canonical allowed-tool schema fingerprint; retention GC deletes checkpoints derived from expiring message/attachment sources in the same transaction | Direct policy/schema mismatch recovery and retention-expiry tests prove stale tool calls/context are discarded |
 | Bounded shutdown and source supervision — resolved | Requirements 4.1 and operability | Gateway stops intake first, bounds every lifecycle phase, and defers cancelled leases without retry cost; the Feishu source now observes the pinned transport's server-authoritative bounded reconnect lifecycle, gates all raw/normalized admissions while disconnected, and publishes dynamic content-safe health | Direct cancellation/drain, reconnect admission-gate, recovery, and `ready`/`degraded` process-status tests prove the lifecycle boundary |
 | Capability plugin boundaries — resolved | Product definition and maintainability | Drive, Sheets, Base, and Whiteboard now have independent manifests, scope sets, health lifecycles, narrow service ports, and trusted tool ownership; the aggregate `feishu-artifacts` policy/lifecycle no longer exists | Direct manifest/lifecycle, package-boundary, owner-isolation, and Drive-dependency recovery tests prove capability-local failure behavior |
-| Readiness and trace coverage | Non-functional operability/observability | Offline doctor does not prove provider/event-source identity health, and not every task/node/tool/approval transition exposes a common trace binding | Startup/live health and content-safe trace correlation have direct production-path tests |
+| Readiness and trace coverage — resolved | Non-functional operability/observability | Production startup performs a metadata-only model probe and requires the Feishu Channel to be connected with a resolved bot identity before publishing `ready`; one opaque event trace is inherited by the task lease, run, Agent graph/nodes, run/tool events, approvals, and task-bound outbox relations | Provider-probe failure-before-source, strict process-readiness, bot-identity startup, reconnect health, and end-to-end content-safe database-join tests prove the boundary |
 
 ## Already proven
 
@@ -38,8 +40,8 @@ selection, metrics, process control, and the opt-in live multi-group observer.
 ## Completion rule
 
 Each row above is implemented documentation-first and committed as a key
-feature. After all rows have direct tests, run the canonical validation, build
-the wheel/sdist, validate the Codex plugin bundle, run offline Gateway readiness,
-and record the unavoidable credential-dependent live checks separately. Only
-then may [roadmap.md](roadmap.md) return all areas to `delivered` and the active
-V3 goal be marked complete.
+feature. Repository completion additionally requires canonical validation,
+wheel/sdist construction, Codex plugin-bundle validation, and an offline
+Gateway composition check. Credential-dependent model/Feishu live checks are
+recorded separately in the release runbook and must pass in each deployment
+environment before rollout.

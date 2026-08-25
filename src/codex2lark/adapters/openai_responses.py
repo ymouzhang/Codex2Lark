@@ -18,8 +18,13 @@ class ResponsesAPI(Protocol):
     async def create(self, **parameters: Any) -> object: ...
 
 
+class ModelsAPI(Protocol):
+    async def retrieve(self, model: str) -> object: ...
+
+
 class OpenAIClientPort(Protocol):
     responses: ResponsesAPI
+    models: ModelsAPI
 
 
 class OpenAIResponsesModel:
@@ -131,6 +136,14 @@ class OpenAIResponsesModel:
             ),
             provider_response_id=self._optional_text(getattr(response, "id", None)),
         )
+
+    async def check_health(self, model: str) -> None:
+        if not model:
+            raise ValueError("model profile is required for provider health")
+        metadata = await self._client.models.retrieve(model)
+        model_id = getattr(metadata, "id", None)
+        if not isinstance(model_id, str) or not model_id:
+            raise RuntimeError("model provider returned invalid model metadata")
 
     @staticmethod
     def _input(messages: tuple[ModelMessage, ...]) -> list[dict[str, object]]:
