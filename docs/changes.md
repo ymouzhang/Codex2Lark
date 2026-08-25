@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined root and cross-graph write locking before implementation. Every root
+  write resolves its canonical live target after policy/approval, atomically
+  acquires the shared tenant-scoped durable resource lock before idempotency or
+  external effects, holds it through verification, and releases only that
+  target in a cancellation-safe boundary; unscoped delegated writers fail
+  closed. Implementation area: ToolExecutor lock lifecycle, Agent graph store,
+  production composition, delegation validation, and overlap/isolation tests.
+
 - Defined shared fair Provider/plugin call capacity before implementation. One
   cancellation-safe round-robin gate is shared by root and child Harnesses and
   ToolExecutors; Provider queue wait is inside wall time, plugin permits begin

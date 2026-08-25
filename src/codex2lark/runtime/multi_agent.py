@@ -293,7 +293,19 @@ class AgentGraphStore(Protocol):
         lease_ms: int,
     ) -> bool: ...
 
+    async def acquire_root_write_scope(
+        self,
+        root_run_id: str,
+        tenant_key: str,
+        target: WriteScopeTarget,
+        *,
+        now_ms: int,
+        lease_ms: int,
+    ) -> str | None: ...
+
     async def release_locks(self, node_id: str) -> None: ...
+
+    async def release_write_scope(self, owner_id: str, target: WriteScopeTarget) -> None: ...
 
     async def list_locks(self, node_id: str, *, now_ms: int) -> tuple[ResourceTarget, ...]: ...
 

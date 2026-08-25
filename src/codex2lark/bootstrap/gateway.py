@@ -430,6 +430,7 @@ def create_v3_gateway(
             policy,
             approvals,
             runtime_store,
+            write_scope_store=graph_store,
             capacity_gate=capacity_gate,
             tool_plugin_ids=tool_plugin_ids,
             plugin_concurrency=config.plugin_concurrency,

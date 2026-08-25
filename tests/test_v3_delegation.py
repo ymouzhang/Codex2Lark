@@ -323,6 +323,61 @@ def test_delegate_parallel_guard_rejects_writer_children() -> None:
     assert tool.parallel_safe_for({**base, "tool_ids": ["feishu.docs.edit"]}) is False
 
 
+async def test_delegate_rejects_writer_without_declared_target(tmp_path: Path) -> None:
+    database = SQLiteDatabase(tmp_path / "runtime.db")
+    await database.open()
+    store = SQLiteAgentGraphStore(database, EnvelopeCipher(MasterKey("test", b"u" * 32)))
+    registry = ToolRegistry([ScopedWriteTool(expected_parallel=1)])
+    coordinator = MultiAgentCoordinator(
+        supervisor=MultiAgentSupervisor(store),
+        store=store,
+        child_harness=None,  # type: ignore[arg-type]
+        sessions=InMemorySessionStore(),
+        child_tools=registry,
+        model_profile="test-model",
+    )
+    try:
+        await coordinator.prepare(
+            run_id="run-root",
+            task=leased_task(),
+            binding={
+                "tenant_key": "tenant",
+                "app_id": "app",
+                "chat_id": "chat",
+                "message_id": "message",
+                "sender_id": "user",
+            },
+            definition=root_definition(),
+            now_ms=1,
+        )
+        with pytest.raises(ValueError, match="every delegated writer"):
+            await coordinator.delegate(
+                {
+                    "name": "writer",
+                    "role": "author",
+                    "task_brief": "Write the target.",
+                    "expected_output_type": "OperationResult",
+                    "tool_ids": ["scoped.write"],
+                    "targets": [],
+                },
+                ToolContext(
+                    "run-root",
+                    "/root",
+                    "tenant",
+                    "app",
+                    "user",
+                    "tenant/app/chat/message",
+                    "user",
+                    1,
+                    "task-1",
+                    "chat",
+                ),
+                now_ms=2,
+            )
+    finally:
+        await database.close()
+
+
 async def test_disjoint_live_resolved_writer_children_run_concurrently_with_locks(
     tmp_path: Path,
 ) -> None:

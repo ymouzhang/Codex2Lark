@@ -742,6 +742,107 @@ class SQLiteAgentGraphStore:
             )
         )
 
+    async def acquire_root_write_scope(
+        self,
+        root_run_id: str,
+        tenant_key: str,
+        target: WriteScopeTarget,
+        *,
+        now_ms: int,
+        lease_ms: int,
+    ) -> str | None:
+        if not root_run_id or not tenant_key or lease_ms < 1:
+            raise ValueError("root run, tenant, and positive lock lease are required")
+
+        def operation(connection: sqlite3.Connection) -> str | None:
+            row = connection.execute(
+                """
+                SELECT g.graph_id, g.root_node_id, g.tenant_key,
+                       g.status AS graph_status, n.status AS node_status
+                FROM runtime_graphs g
+                JOIN runtime_agent_nodes n ON n.node_id = g.root_node_id
+                WHERE g.root_run_id = ?
+                """,
+                (root_run_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("root Agent graph is unavailable")
+            if str(row["tenant_key"]) != tenant_key:
+                raise PermissionError("root Agent tenant binding does not match the graph")
+            if row["graph_status"] != GraphStatus.ACTIVE.value or row["node_status"] not in {
+                NodeStatus.CREATED.value,
+                NodeStatus.READY.value,
+                NodeStatus.RUNNING.value,
+            }:
+                raise LookupError("root Agent graph is no longer active")
+            connection.execute(
+                "DELETE FROM runtime_resource_locks WHERE lease_expires_at_ms <= ?", (now_ms,)
+            )
+            owner_id = str(row["root_node_id"])
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO runtime_resource_locks(
+                        tenant_key, resource_type, resource_id, graph_id,
+                        owner_node_id, expected_revision, lease_expires_at_ms, created_at_ms
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tenant_key,
+                        target.resource_type,
+                        target.resource_id,
+                        row["graph_id"],
+                        owner_id,
+                        target.expected_revision,
+                        now_ms + lease_ms,
+                        now_ms,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                existing = connection.execute(
+                    """
+                    SELECT owner_node_id FROM runtime_resource_locks
+                    WHERE tenant_key = ? AND resource_type = ? AND resource_id = ?
+                    """,
+                    (tenant_key, target.resource_type, target.resource_id),
+                ).fetchone()
+                if existing is None or str(existing["owner_node_id"]) != owner_id:
+                    return None
+                connection.execute(
+                    """
+                    UPDATE runtime_resource_locks
+                    SET expected_revision = ?, lease_expires_at_ms = ?
+                    WHERE tenant_key = ? AND resource_type = ? AND resource_id = ?
+                      AND owner_node_id = ?
+                    """,
+                    (
+                        target.expected_revision,
+                        now_ms + lease_ms,
+                        tenant_key,
+                        target.resource_type,
+                        target.resource_id,
+                        owner_id,
+                    ),
+                )
+            return owner_id
+
+        return await self._database.transaction(operation)
+
+    async def release_write_scope(
+        self,
+        owner_id: str,
+        target: WriteScopeTarget,
+    ) -> None:
+        await self._database.transaction(
+            lambda connection: connection.execute(
+                """
+                DELETE FROM runtime_resource_locks
+                WHERE owner_node_id = ? AND resource_type = ? AND resource_id = ?
+                """,
+                (owner_id, target.resource_type, target.resource_id),
+            )
+        )
+
     async def list_locks(self, node_id: str, *, now_ms: int) -> tuple[ResourceTarget, ...]:
         def operation(connection: sqlite3.Connection) -> tuple[ResourceTarget, ...]:
             connection.execute(

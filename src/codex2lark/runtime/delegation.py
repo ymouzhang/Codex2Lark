@@ -513,6 +513,8 @@ class MultiAgentCoordinator:
             for tool_id, definition in definitions.items()
             if definition.effect in {ToolEffect.WRITE, ToolEffect.DESTRUCTIVE}
         }
+        if writers and not declarations:
+            raise ValueError("every delegated writer requires a declared target")
         if not declarations:
             return ()
         if not writers.issubset({str(item["tool_id"]) for item in declarations}):

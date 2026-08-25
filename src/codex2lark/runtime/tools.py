@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -121,6 +122,16 @@ class ToolOperationStore(Protocol):
 
 
 class WriteScopeLeaseStore(Protocol):
+    async def acquire_root_write_scope(
+        self,
+        root_run_id: str,
+        tenant_key: str,
+        target: WriteScopeTarget,
+        *,
+        now_ms: int,
+        lease_ms: int,
+    ) -> str | None: ...
+
     async def owns_write_scope(
         self,
         owner_id: str,
@@ -137,6 +148,12 @@ class WriteScopeLeaseStore(Protocol):
         now_ms: int,
         lease_ms: int,
     ) -> bool: ...
+
+    async def release_write_scope(
+        self,
+        owner_id: str,
+        target: WriteScopeTarget,
+    ) -> None: ...
 
 
 class ToolRegistry:
@@ -275,29 +292,22 @@ class ToolExecutor:
         call: ToolCall,
         context: ToolContext,
     ) -> ToolResult:
-        if (
-            context.write_scope_required
-            and not context.write_scope
-            and definition.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE)
-        ):
+        is_write = definition.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE)
+        if context.write_scope_required and not context.write_scope and is_write:
             return self._failure(
                 call,
                 definition.effect,
                 "write_lock_missing",
                 "the delegated writer no longer owns its required resource lock",
             )
-        if (
-            context.write_scope_required
-            and self._write_scope_store is None
-            and definition.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE)
-        ):
+        if context.write_scope_required and self._write_scope_store is None and is_write:
             return self._failure(
                 call,
                 definition.effect,
                 "write_lock_validator_missing",
                 "the delegated writer has no runtime lock validator",
             )
-        if context.write_scope and definition.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE):
+        if context.write_scope and is_write:
             resolver = getattr(tool, "resolve_write_target", None)
             if not callable(resolver):
                 return self._failure(
@@ -357,6 +367,153 @@ class ToolExecutor:
                     "write_lock_expired",
                     "the delegated writer's durable resource lock expired",
                 )
+        transient_owner: str | None = None
+        transient_target: WriteScopeTarget | None = None
+        lease_owner = (
+            context.run_id
+            if context.write_scope and is_write and self._write_scope_store is not None
+            else None
+        )
+        lease_targets = (
+            context.write_scope
+            if context.write_scope and is_write and self._write_scope_store is not None
+            else ()
+        )
+        is_runtime_root_write = (
+            is_write
+            and context.node_id == "/root"
+            and context.task_id is not None
+            and not context.write_scope
+        )
+        if is_runtime_root_write:
+            if self._write_scope_store is None:
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_lock_validator_missing",
+                    "the root Agent has no durable resource lock store",
+                )
+            resolver = getattr(tool, "resolve_write_target", None)
+            if not callable(resolver):
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_scope_unsupported",
+                    "the root writer tool cannot resolve its live target",
+                )
+            try:
+                transient_target = await resolver(call.arguments, context)
+                if not isinstance(transient_target, WriteScopeTarget):
+                    raise TypeError("target resolver returned an invalid target")
+                transient_owner = await self._write_scope_store.acquire_root_write_scope(
+                    context.run_id,
+                    context.tenant_key,
+                    transient_target,
+                    now_ms=self._clock_ms(),
+                    lease_ms=self._write_lock_lease_ms,
+                )
+            except (LookupError, PermissionError) as exc:
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_lock_unavailable",
+                    str(exc),
+                )
+            except Exception as exc:
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_scope_resolution_failed",
+                    f"live write target resolution failed: {type(exc).__name__}",
+                )
+            if transient_owner is None:
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_target_busy",
+                    "the live write target is locked by another Agent graph",
+                )
+        try:
+            if transient_owner is not None and transient_target is not None:
+                lease_owner = transient_owner
+                lease_targets = (transient_target,)
+            if lease_owner is not None and lease_targets:
+                return await self._execute_with_lease_heartbeat(
+                    tool,
+                    definition,
+                    call,
+                    context,
+                    lease_owner,
+                    lease_targets,
+                )
+            return await self._execute_operation(tool, definition, call, context)
+        finally:
+            if (
+                transient_owner is not None
+                and transient_target is not None
+                and self._write_scope_store is not None
+            ):
+                await self._release_transient_scope(transient_owner, transient_target)
+
+    async def _execute_with_lease_heartbeat(
+        self,
+        tool: SemanticTool,
+        definition: ToolDefinition,
+        call: ToolCall,
+        context: ToolContext,
+        owner_id: str,
+        targets: tuple[WriteScopeTarget, ...],
+    ) -> ToolResult:
+        assert self._write_scope_store is not None
+        operation = asyncio.create_task(self._execute_operation(tool, definition, call, context))
+        renewal = asyncio.create_task(self._renew_scope(owner_id, targets))
+        try:
+            done, _ = await asyncio.wait({operation, renewal}, return_when=asyncio.FIRST_COMPLETED)
+            if operation in done:
+                return await operation
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+            try:
+                await renewal
+            except Exception as exc:
+                return self._failure(
+                    call,
+                    definition.effect,
+                    "write_lock_expired",
+                    f"durable write lock renewal failed: {type(exc).__name__}",
+                )
+            raise RuntimeError("write lock renewal stopped unexpectedly")
+        finally:
+            for task in (operation, renewal):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(operation, renewal, return_exceptions=True)
+
+    async def _renew_scope(
+        self,
+        owner_id: str,
+        targets: tuple[WriteScopeTarget, ...],
+    ) -> None:
+        assert self._write_scope_store is not None
+        interval_s = max(0.001, self._write_lock_lease_ms / 3_000)
+        while True:
+            await asyncio.sleep(interval_s)
+            renewed = await self._write_scope_store.renew_write_scope(
+                owner_id,
+                targets,
+                now_ms=self._clock_ms(),
+                lease_ms=self._write_lock_lease_ms,
+            )
+            if not renewed:
+                raise RuntimeError("durable write lock is no longer owned")
+
+    async def _execute_operation(
+        self,
+        tool: SemanticTool,
+        definition: ToolDefinition,
+        call: ToolCall,
+        context: ToolContext,
+    ) -> ToolResult:
         operation_key: str | None = None
         owner = f"{context.run_id}:{context.node_id}"
         if definition.effect in (ToolEffect.WRITE, ToolEffect.DESTRUCTIVE):
@@ -391,6 +548,19 @@ class ToolExecutor:
             verification=verification,
             checkpoint_safe_observation=getattr(tool, "checkpoint_safe_observation", True),
         )
+
+    async def _release_transient_scope(
+        self,
+        owner_id: str,
+        target: WriteScopeTarget,
+    ) -> None:
+        assert self._write_scope_store is not None
+        release = asyncio.create_task(self._write_scope_store.release_write_scope(owner_id, target))
+        try:
+            await asyncio.shield(release)
+        except asyncio.CancelledError:
+            await release
+            raise
 
     async def _claim_write(
         self,

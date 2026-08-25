@@ -308,6 +308,26 @@ resolver remains serial. The graph supervisor still enforces budgets, leases,
 and `max_concurrency`, and returned artifacts are placed into the root journal
 in original call order.
 
+The same lock boundary applies to root Agents, not only delegated writers. After
+schema validation, policy evaluation, and any human approval, every root
+write/destructive call must use the capability's trusted live-target resolver.
+The executor then atomically maps the trusted `root_run_id` to its active graph
+and root node, verifies the graph tenant equals `ToolContext.tenant_key`, and
+acquires the same tenant/resource lock used by child Agents. Target resolution
+and locking happen before idempotency recovery or any external mutation. A
+missing resolver fails closed; an overlapping lock owned by another graph
+returns a typed `write_target_busy` result and performs no write.
+
+The root lease is held through reconciliation, execution, and read-back
+verification, then only that exact target is released in a cancellation-safe
+`finally` boundary. Process loss is covered by the finite durable lease. An
+independent graph can therefore proceed after normal release or expiry, while
+different canonical targets remain concurrent. Delegated writers continue to
+hold their predeclared locks for the child lifecycle and the per-call executor
+must not release them. A delegated child receiving any write/destructive tool
+without a successfully resolved predeclared target is invalid and cannot be
+activated.
+
 ## 9. User interaction during a graph
 
 New messages are classified outside the model:
