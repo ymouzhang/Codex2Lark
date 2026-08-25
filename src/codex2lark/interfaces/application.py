@@ -18,7 +18,9 @@ class Application:
     notifier: NotificationService
     membership: ChatMembershipService
     docs: DocsService
-    artifacts: ArtifactsService
+    sheets: ArtifactsService
+    base: ArtifactsService
+    whiteboard: ArtifactsService
     chat_digest: ChatDigestService
 
 
@@ -28,12 +30,15 @@ def create_application(lark: LarkCli | None = None) -> Application:
     notifier = NotificationService(client)
     membership = ChatMembershipService(client)
     docs = DocsService(client, drive, notifier)
+    artifacts = ArtifactsService(client, docs, drive)
     return Application(
         lark=client,
         drive=drive,
         notifier=notifier,
         membership=membership,
         docs=docs,
-        artifacts=ArtifactsService(client, docs, drive),
+        sheets=artifacts,
+        base=artifacts,
+        whiteboard=artifacts,
         chat_digest=ChatDigestService(client, docs, drive, notifier, membership),
     )

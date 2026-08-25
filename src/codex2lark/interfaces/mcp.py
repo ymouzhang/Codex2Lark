@@ -159,7 +159,7 @@ def build_mcp(application: Application | None = None) -> FastMCP:
     )
     async def feishu_whiteboard_render(request: WhiteboardRenderRequest) -> dict[str, Any]:
         try:
-            return await app.artifacts.render_whiteboard(request)
+            return await app.whiteboard.render_whiteboard(request)
         except Exception as exc:
             return safe_tool_call_error(exc)
 
@@ -170,7 +170,7 @@ def build_mcp(application: Application | None = None) -> FastMCP:
     )
     async def feishu_sheets_create(request: CreateWorkbookRequest) -> dict[str, Any]:
         try:
-            return await app.artifacts.create_workbook(request)
+            return await app.sheets.create_workbook(request)
         except Exception as exc:
             return safe_tool_call_error(exc)
 
@@ -184,7 +184,7 @@ def build_mcp(application: Application | None = None) -> FastMCP:
     )
     async def feishu_sheets_write(request: WriteSheetRequest) -> dict[str, Any]:
         try:
-            return await app.artifacts.write_sheet(request)
+            return await app.sheets.write_sheet(request)
         except Exception as exc:
             return safe_tool_call_error(exc)
 
@@ -195,7 +195,7 @@ def build_mcp(application: Application | None = None) -> FastMCP:
     )
     async def feishu_base_create(request: CreateBaseRequest) -> dict[str, Any]:
         try:
-            return await app.artifacts.create_base(request)
+            return await app.base.create_base(request)
         except Exception as exc:
             return safe_tool_call_error(exc)
 
@@ -211,7 +211,7 @@ def build_mcp(application: Application | None = None) -> FastMCP:
         request: UpsertBaseRecordsRequest,
     ) -> dict[str, Any]:
         try:
-            return await app.artifacts.upsert_base_records(request)
+            return await app.base.upsert_base_records(request)
         except Exception as exc:
             return safe_tool_call_error(exc)
 

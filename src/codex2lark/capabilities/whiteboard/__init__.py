@@ -1,0 +1,1 @@
+"""Feishu Whiteboard capability boundary."""

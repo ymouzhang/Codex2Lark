@@ -29,3 +29,10 @@ def test_services_do_not_depend_on_interfaces_or_gateway_bootstrap() -> None:
         assert not any(module.startswith(("interfaces", "bootstrap")) for module in modules), (
             path.name
         )
+
+
+def test_authoring_capabilities_have_independent_plugin_packages() -> None:
+    expected = {"drive", "sheets", "base", "whiteboard"}
+    for package in expected:
+        assert (PACKAGE_ROOT / "capabilities" / package / "plugin.py").is_file()
+    assert not (PACKAGE_ROOT / "capabilities" / "artifacts" / "plugin.py").exists()

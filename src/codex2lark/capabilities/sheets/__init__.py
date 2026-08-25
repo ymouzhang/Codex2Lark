@@ -1,0 +1,1 @@
+"""Feishu Sheets capability boundary."""

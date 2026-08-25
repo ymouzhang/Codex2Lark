@@ -8,12 +8,17 @@ from contextlib import suppress
 from typing import Protocol, TypeVar
 
 from codex2lark.adapters.openai_responses import OpenAIResponsesModel
-from codex2lark.capabilities.artifacts.plugin import FeishuArtifactsPlugin
-from codex2lark.capabilities.artifacts.tools import ArtifactService
+from codex2lark.capabilities.artifacts.tools import (
+    BaseService,
+    SheetsService,
+    WhiteboardService,
+)
+from codex2lark.capabilities.base.plugin import FeishuBasePlugin
 from codex2lark.capabilities.chat_digest.plugin import FeishuChatDigestPlugin
 from codex2lark.capabilities.chat_digest.tools import ChatDigestService
 from codex2lark.capabilities.docs.plugin import FeishuDocsPlugin
 from codex2lark.capabilities.docs.tools import DocumentService
+from codex2lark.capabilities.drive.plugin import DriveService, FeishuDrivePlugin
 from codex2lark.capabilities.im.admission import IMAdmissionService
 from codex2lark.capabilities.im.admission_policy import IMAdmissionPolicy
 from codex2lark.capabilities.im.attachments import AttachmentService, SafeAttachmentParser
@@ -42,6 +47,8 @@ from codex2lark.capabilities.im.plugin import create_plugin as create_im_plugin
 from codex2lark.capabilities.im.publisher import IMOutboxPublisher
 from codex2lark.capabilities.im.repository import SQLiteIMRepository
 from codex2lark.capabilities.im.task_handler import IMMentionTaskHandler, IMResponseTemplates
+from codex2lark.capabilities.sheets.plugin import FeishuSheetsPlugin
+from codex2lark.capabilities.whiteboard.plugin import FeishuWhiteboardPlugin
 from codex2lark.core.budgets import BudgetKind, BudgetLimit
 from codex2lark.core.models import Identity
 from codex2lark.interfaces.application import create_application
@@ -88,10 +95,19 @@ _T = TypeVar("_T")
 
 class AuthoringServices(Protocol):
     @property
+    def drive(self) -> DriveService: ...
+
+    @property
     def docs(self) -> DocumentService: ...
 
     @property
-    def artifacts(self) -> ArtifactService: ...
+    def sheets(self) -> SheetsService: ...
+
+    @property
+    def base(self) -> BaseService: ...
+
+    @property
+    def whiteboard(self) -> WhiteboardService: ...
 
     @property
     def membership(self) -> MembershipService: ...
@@ -104,7 +120,7 @@ class AllowConfiguredTools(ToolPolicy):
     def __init__(
         self,
         plugins: PluginManager | None = None,
-        tool_plugin_ids: dict[str, str] | None = None,
+        tool_plugin_ids: dict[str, str | tuple[str, ...]] | None = None,
     ) -> None:
         self._plugins = plugins
         self._tool_plugin_ids = dict(tool_plugin_ids or {})
@@ -113,14 +129,20 @@ class AllowConfiguredTools(ToolPolicy):
         self, definition: ToolDefinition, call: ToolCall, context: ToolContext
     ) -> PolicyDecision:
         del call
-        plugin_id = self._tool_plugin_ids.get(definition.tool_id)
-        if plugin_id is not None and self._plugins is not None:
-            health = await self._plugins.current_health(plugin_id)
-            if not health.healthy:
-                return PolicyDecision(
-                    False,
-                    f"capability plugin is unhealthy: {plugin_id}",
-                )
+        plugin_value = self._tool_plugin_ids.get(definition.tool_id)
+        plugin_ids = (
+            plugin_value
+            if isinstance(plugin_value, tuple)
+            else ((plugin_value,) if plugin_value is not None else ())
+        )
+        if self._plugins is not None:
+            for plugin_id in plugin_ids:
+                health = await self._plugins.current_health(plugin_id)
+                if not health.healthy:
+                    return PolicyDecision(
+                        False,
+                        f"capability plugin is unhealthy: {plugin_id}",
+                    )
         if not all(
             (
                 context.tenant_key,
@@ -349,8 +371,13 @@ def create_v3_gateway(
         clock_ms=lambda: int(time.time() * 1000),
     )
     active_authoring = authoring or create_application()
+    drive_plugin = FeishuDrivePlugin(active_authoring.drive)
     docs_plugin = FeishuDocsPlugin(active_authoring.docs, config.authoring_identity)
-    artifacts_plugin = FeishuArtifactsPlugin(active_authoring.artifacts, config.authoring_identity)
+    sheets_plugin = FeishuSheetsPlugin(active_authoring.sheets, config.authoring_identity)
+    base_plugin = FeishuBasePlugin(active_authoring.base, config.authoring_identity)
+    whiteboard_plugin = FeishuWhiteboardPlugin(
+        active_authoring.whiteboard, config.authoring_identity
+    )
     chat_digest_plugin = FeishuChatDigestPlugin(
         active_authoring.chat_digest, config.authoring_identity
     )
@@ -358,19 +385,27 @@ def create_v3_gateway(
         runtime_api=1,
         allowlist={
             "feishu-im",
+            "feishu-drive",
             "feishu-docs",
-            "feishu-artifacts",
+            "feishu-sheets",
+            "feishu-base",
+            "feishu-whiteboard",
             "feishu-chat-digest",
         },
         mandatory_plugin_ids={"feishu-im"},
     )
     plugins.register(create_im_plugin())
+    plugins.register(drive_plugin)
     plugins.register(docs_plugin)
-    plugins.register(artifacts_plugin)
+    plugins.register(sheets_plugin)
+    plugins.register(base_plugin)
+    plugins.register(whiteboard_plugin)
     plugins.register(chat_digest_plugin)
     business_tools = [
         *docs_plugin.tools,
-        *artifacts_plugin.tools,
+        *sheets_plugin.tools,
+        *base_plugin.tools,
+        *whiteboard_plugin.tools,
         *chat_digest_plugin.tools,
     ]
     business_registry = ToolRegistry(business_tools)
@@ -380,12 +415,41 @@ def create_v3_gateway(
         output_cost_micros_per_million_tokens=(config.model_output_cost_micros_per_million_tokens),
         base_url=config.openai_base_url,
     )
-    tool_plugin_ids = {
+    owning_plugin_ids = {
         tool.definition.tool_id: plugin.manifest.plugin_id
-        for plugin in (docs_plugin, artifacts_plugin, chat_digest_plugin)
+        for plugin in (
+            docs_plugin,
+            sheets_plugin,
+            base_plugin,
+            whiteboard_plugin,
+            chat_digest_plugin,
+        )
         for tool in plugin.tools
     }
-    policy = AllowConfiguredTools(plugins, tool_plugin_ids)
+    tool_policy_plugins: dict[str, str | tuple[str, ...]] = dict(owning_plugin_ids)
+    for tool in docs_plugin.tools:
+        tool_policy_plugins[tool.definition.tool_id] = (
+            docs_plugin.manifest.plugin_id,
+            drive_plugin.manifest.plugin_id,
+        )
+    tool_policy_plugins["feishu.sheets.create"] = (
+        sheets_plugin.manifest.plugin_id,
+        drive_plugin.manifest.plugin_id,
+    )
+    tool_policy_plugins["feishu.base.create"] = (
+        base_plugin.manifest.plugin_id,
+        drive_plugin.manifest.plugin_id,
+    )
+    tool_policy_plugins["feishu.whiteboard.render"] = (
+        whiteboard_plugin.manifest.plugin_id,
+        docs_plugin.manifest.plugin_id,
+    )
+    tool_policy_plugins["feishu.chat.digest.publish"] = (
+        chat_digest_plugin.manifest.plugin_id,
+        drive_plugin.manifest.plugin_id,
+        docs_plugin.manifest.plugin_id,
+    )
+    policy = AllowConfiguredTools(plugins, tool_policy_plugins)
     approvals = DurableApprovalBroker(runtime_store)
     graph_store = SQLiteAgentGraphStore(database, cipher)
     capacity_gate = FairCapacityGate()
@@ -399,7 +463,7 @@ def create_v3_gateway(
             runtime_store,
             write_scope_store=graph_store,
             capacity_gate=capacity_gate,
-            tool_plugin_ids=tool_plugin_ids,
+            tool_plugin_ids=owning_plugin_ids,
             plugin_concurrency=config.plugin_concurrency,
         ),
         resources=resource_loader,
@@ -439,7 +503,7 @@ def create_v3_gateway(
             runtime_store,
             write_scope_store=graph_store,
             capacity_gate=capacity_gate,
-            tool_plugin_ids=tool_plugin_ids,
+            tool_plugin_ids=owning_plugin_ids,
             plugin_concurrency=config.plugin_concurrency,
         ),
         resources=resource_loader,

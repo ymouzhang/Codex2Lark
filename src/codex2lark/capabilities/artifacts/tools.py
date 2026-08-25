@@ -16,7 +16,6 @@ from codex2lark.core.models import (
 )
 from codex2lark.runtime.targets import exact_target, logical_reservation
 from codex2lark.runtime.tools import (
-    SemanticTool,
     ToolContext,
     ToolReconciliation,
     WriteScopeTarget,
@@ -29,13 +28,17 @@ from codex2lark.runtime.types import (
 )
 
 
-class ArtifactService(Protocol):
+class WhiteboardService(Protocol):
     async def render_whiteboard(self, request: WhiteboardRenderRequest) -> dict[str, Any]: ...
 
+
+class SheetsService(Protocol):
     async def create_workbook(self, request: CreateWorkbookRequest) -> dict[str, Any]: ...
 
     async def write_sheet(self, request: WriteSheetRequest) -> dict[str, Any]: ...
 
+
+class BaseService(Protocol):
     async def create_base(self, request: CreateBaseRequest) -> dict[str, Any]: ...
 
     async def upsert_base_records(self, request: UpsertBaseRecordsRequest) -> dict[str, Any]: ...
@@ -70,11 +73,11 @@ def _resource(value: str) -> ResourceRef:
     return ResourceRef(url=value) if value.startswith("https://") else ResourceRef(token=value)
 
 
-class _ArtifactTool:
+class _ArtifactTool[ServiceT]:
     definition: ToolDefinition
     checkpoint_safe_observation = False
 
-    def __init__(self, service: ArtifactService, identity: Identity) -> None:
+    def __init__(self, service: ServiceT, identity: Identity) -> None:
         self._service = service
         self._identity = identity
 
@@ -160,7 +163,7 @@ class _ArtifactTool:
         return tuple(dict.fromkeys(found))
 
 
-class RenderWhiteboardTool(_ArtifactTool):
+class RenderWhiteboardTool(_ArtifactTool[WhiteboardService]):
     definition = ToolDefinition(
         "feishu.whiteboard.render",
         1,
@@ -220,7 +223,7 @@ class RenderWhiteboardTool(_ArtifactTool):
         return logical_reservation("whiteboard-create", binding)
 
 
-class CreateWorkbookTool(_ArtifactTool):
+class CreateWorkbookTool(_ArtifactTool[SheetsService]):
     _sheet = _object(
         {
             "name": _text(),
@@ -289,7 +292,7 @@ class CreateWorkbookTool(_ArtifactTool):
         return logical_reservation("sheet-create", request.title)
 
 
-class WriteSheetTool(_ArtifactTool):
+class WriteSheetTool(_ArtifactTool[SheetsService]):
     definition = ToolDefinition(
         "feishu.sheets.write",
         1,
@@ -337,7 +340,7 @@ class WriteSheetTool(_ArtifactTool):
         return exact_target("sheet", request.spreadsheet_token)
 
 
-class CreateBaseTool(_ArtifactTool):
+class CreateBaseTool(_ArtifactTool[BaseService]):
     definition = ToolDefinition(
         "feishu.base.create",
         1,
@@ -382,7 +385,7 @@ class CreateBaseTool(_ArtifactTool):
         return logical_reservation("base-create", request.name)
 
 
-class UpsertBaseRecordsTool(_ArtifactTool):
+class UpsertBaseRecordsTool(_ArtifactTool[BaseService]):
     definition = ToolDefinition(
         "feishu.base.upsert",
         1,
@@ -437,13 +440,3 @@ def _declaration_resource(declaration: dict[str, object]) -> str:
     if not isinstance(resource, str) or not resource:
         raise ValueError("delegated artifact write requires a resource target")
     return resource
-
-
-def artifact_tools(service: ArtifactService, identity: Identity) -> list[SemanticTool]:
-    return [
-        RenderWhiteboardTool(service, identity),
-        CreateWorkbookTool(service, identity),
-        WriteSheetTool(service, identity),
-        CreateBaseTool(service, identity),
-        UpsertBaseRecordsTool(service, identity),
-    ]

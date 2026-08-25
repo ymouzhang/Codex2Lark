@@ -4,15 +4,17 @@ from typing import Any
 
 import pytest
 
-from codex2lark.capabilities.artifacts.plugin import FeishuArtifactsPlugin
 from codex2lark.capabilities.artifacts.tools import (
     CreateBaseTool,
     CreateWorkbookTool,
     RenderWhiteboardTool,
     UpsertBaseRecordsTool,
     WriteSheetTool,
-    artifact_tools,
 )
+from codex2lark.capabilities.base.plugin import FeishuBasePlugin
+from codex2lark.capabilities.drive.plugin import FeishuDrivePlugin
+from codex2lark.capabilities.sheets.plugin import FeishuSheetsPlugin
+from codex2lark.capabilities.whiteboard.plugin import FeishuWhiteboardPlugin
 from codex2lark.core.models import CreateWorkbookRequest, Identity
 from codex2lark.runtime.tools import ToolContext
 from codex2lark.runtime.types import VerificationState
@@ -63,7 +65,13 @@ def context() -> ToolContext:
 
 
 def test_artifact_tool_profile_uses_strict_bounded_schemas() -> None:
-    tools = artifact_tools(FakeArtifactService(), Identity.USER)  # type: ignore[arg-type]
+    service = FakeArtifactService()
+    plugins = (
+        FeishuWhiteboardPlugin(service, Identity.USER),  # type: ignore[arg-type]
+        FeishuSheetsPlugin(service, Identity.USER),  # type: ignore[arg-type]
+        FeishuBasePlugin(service, Identity.USER),  # type: ignore[arg-type]
+    )
+    tools = [tool for plugin in plugins for tool in plugin.tools]
 
     assert [tool.definition.tool_id for tool in tools] == [
         "feishu.whiteboard.render",
@@ -80,18 +88,29 @@ def test_artifact_tool_profile_uses_strict_bounded_schemas() -> None:
         assert tool.checkpoint_safe_observation is False
 
 
-async def test_artifact_plugin_manifest_and_lifecycle() -> None:
-    plugin = FeishuArtifactsPlugin(
-        FakeArtifactService(),
-        Identity.USER,  # type: ignore[arg-type]
+async def test_authoring_plugins_have_independent_manifests_and_lifecycles() -> None:
+    service = FakeArtifactService()
+    plugins = (
+        FeishuDrivePlugin(service),  # type: ignore[arg-type]
+        FeishuSheetsPlugin(service, Identity.USER),  # type: ignore[arg-type]
+        FeishuBasePlugin(service, Identity.USER),  # type: ignore[arg-type]
+        FeishuWhiteboardPlugin(service, Identity.USER),  # type: ignore[arg-type]
     )
 
-    assert plugin.manifest.plugin_id == "feishu-artifacts"
-    assert len(plugin.tools) == 5
-    assert not (await plugin.health()).healthy
-    await plugin.initialize()
-    assert (await plugin.health()).healthy
-    await plugin.stop()
+    assert {plugin.manifest.plugin_id for plugin in plugins} == {
+        "feishu-drive",
+        "feishu-sheets",
+        "feishu-base",
+        "feishu-whiteboard",
+    }
+    assert sum(len(getattr(plugin, "tools", ())) for plugin in plugins) == 5
+    for plugin in plugins:
+        assert not (await plugin.health()).healthy
+        await plugin.initialize()
+        assert (await plugin.health()).healthy
+    await plugins[1].stop()
+    assert not (await plugins[1].health()).healthy
+    assert (await plugins[2].health()).healthy
 
 
 async def test_workbook_tool_parses_json_and_binds_identity() -> None:

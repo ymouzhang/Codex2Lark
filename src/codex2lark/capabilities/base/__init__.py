@@ -1,0 +1,1 @@
+"""Feishu Base capability boundary."""

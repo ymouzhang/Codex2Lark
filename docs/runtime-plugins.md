@@ -298,13 +298,29 @@ as a transitional trusted adapter. The model sees only strict schemas and
 semantic results. The adapter identity is configured by the operator, is bound
 outside model input, and cannot be overridden in tool arguments.
 
-The authoring artifact plugin adds bounded `feishu.whiteboard.render`,
-`feishu.sheets.create`, `feishu.sheets.write`, `feishu.base.create`, and
-`feishu.base.upsert` tools. Each schema bounds collection sizes through its
-validated request model. Every write returns an upstream confirmation or live
-read-back verification record; Sheet writes specifically read values/formulas
-back and reject formula errors. Artifact observations are non-persistable
-because cells, records, and diagram sources may contain business content.
+Authoring is split into independently healthy capability plugins:
+
+| Plugin | Public responsibility | Model-facing tools |
+|---|---|---|
+| `feishu-drive` | Managed-folder, search, and metadata service port used by authoring capabilities | None; Drive is not a generic model surface |
+| `feishu-sheets` | Workbook creation and bounded range writes | `feishu.sheets.create`, `feishu.sheets.write` |
+| `feishu-base` | Base creation and bounded record upsert | `feishu.base.create`, `feishu.base.upsert` |
+| `feishu-whiteboard` | Bound-document board creation/update | `feishu.whiteboard.render` |
+
+There is no aggregate `feishu-artifacts` lifecycle or policy identity. Each
+plugin owns a distinct manifest, scope set, health state, and tool set, and
+depends only on its narrow public service port plus the shared Drive port where
+managed-folder placement is required. Tool policy checks both the owning plugin
+and declared Drive dependency immediately before execution. An unhealthy
+Sheets, Base, or Whiteboard plugin blocks only its tools; an unhealthy Drive
+plugin blocks authoring operations that require Drive without affecting IM or
+unrelated read-only work.
+
+Each schema bounds collection sizes through its validated request model. Every
+write returns an upstream confirmation or live read-back verification record;
+Sheet writes specifically read values/formulas back and reject formula errors.
+Artifact observations are non-persistable because cells, records, and diagram
+sources may contain business content.
 
 The `feishu-chat-digest` workflow plugin exposes
 `feishu.chat.digest.publish` to the durable group Harness. It reuses the same

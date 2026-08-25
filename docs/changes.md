@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined independent Drive, Sheets, Base, and Whiteboard capability boundaries
+  before implementation. The aggregate `feishu-artifacts` plugin is removed;
+  each domain owns one manifest/lifecycle and narrow public service port, while
+  policy checks explicit Drive dependencies without exposing a generic Drive
+  tool. Implementation area: capability packages, production composition/tool
+  ownership, authoring service protocols, isolation tests, and package-boundary
+  assertions.
+
 - Corrected and defined Feishu event-source supervision before implementation.
   The pinned transport owns the server-authoritative bounded reconnect schedule;
   Codex2Lark observes reconnect transitions, closes admission readiness while

@@ -93,6 +93,12 @@ class ToggleCapabilityPlugin:
         pass
 
 
+class NamedTogglePlugin(ToggleCapabilityPlugin):
+    def __init__(self, plugin_id: str, capability: str, healthy: bool) -> None:
+        super().__init__(healthy)
+        self.manifest = PluginManifest(plugin_id, "1.0.0", 1, (capability,))
+
+
 def gateway(database: LifecycleDouble, source: LifecycleDouble) -> tuple[V3Gateway, WorkerDouble]:
     tasks = WorkerDouble()
     outbox = WorkerDouble()
@@ -251,6 +257,41 @@ async def test_tool_policy_isolates_unhealthy_plugin_and_allows_live_recovery() 
 
     assert not denied.allowed and "unhealthy" in denied.reason
     assert allowed.allowed
+
+
+async def test_tool_policy_checks_owner_and_explicit_drive_dependency() -> None:
+    sheets = NamedTogglePlugin("feishu-sheets", "sheets.range.write", True)
+    drive = NamedTogglePlugin("feishu-drive", "drive.managed-folder", False)
+    manager = PluginManager(
+        runtime_api=1,
+        allowlist={"feishu-sheets", "feishu-drive"},
+        mandatory_plugin_ids=set(),
+    )
+    manager.register(sheets)
+    manager.register(drive)
+    await manager.start()
+    definition = ToolDefinition(
+        "feishu.sheets.create", 1, "create", {"type": "object"}, ToolEffect.WRITE
+    )
+    policy = AllowConfiguredTools(
+        manager,
+        {definition.tool_id: ("feishu-sheets", "feishu-drive")},
+    )
+    context = ToolContext("run", "/root", "tenant", "app", "user", "session", "bot", 1)
+
+    denied = await policy.authorize(definition, ToolCall("call-1", definition.tool_id, {}), context)
+    drive.healthy = True
+    recovered = await policy.authorize(
+        definition, ToolCall("call-2", definition.tool_id, {}), context
+    )
+    sheets.healthy = False
+    owner_failed = await policy.authorize(
+        definition, ToolCall("call-3", definition.tool_id, {}), context
+    )
+
+    assert not denied.allowed and "feishu-drive" in denied.reason
+    assert recovered.allowed
+    assert not owner_failed.allowed and "feishu-sheets" in owner_failed.reason
 
 
 class FakeChannel:
@@ -480,6 +521,16 @@ class UnusedArtifactService:
         raise AssertionError("unexpected artifact call")
 
 
+class UnusedDriveService:
+    async def ensure_managed_folder(self, identity: Identity) -> dict[str, object]:
+        del identity
+        raise AssertionError("unexpected Drive call")
+
+    async def find_managed_folder(self, identity: Identity) -> dict[str, object] | None:
+        del identity
+        raise AssertionError("unexpected Drive call")
+
+
 class UnusedMembershipService:
     async def ensure_current_user(
         self, *, chat_id: str, chat_identity: Identity
@@ -496,8 +547,12 @@ class UnusedChatDigestService:
 
 class AuthoringFixture:
     def __init__(self, docs: object | None = None) -> None:
+        self.drive = UnusedDriveService()
         self.docs = docs or ProfessionalDocumentService()
-        self.artifacts = UnusedArtifactService()
+        artifacts = UnusedArtifactService()
+        self.sheets = artifacts
+        self.base = artifacts
+        self.whiteboard = artifacts
         self.membership = UnusedMembershipService()
         self.chat_digest = UnusedChatDigestService()
 

@@ -1,37 +1,33 @@
 from __future__ import annotations
 
+from codex2lark.capabilities.artifacts.tools import (
+    CreateWorkbookTool,
+    SheetsService,
+    WriteSheetTool,
+)
 from codex2lark.core.models import Identity
 from codex2lark.runtime.plugins import PluginHealth, PluginManifest
 from codex2lark.runtime.tools import SemanticTool
 
-from .tools import ArtifactService, artifact_tools
 
-
-class FeishuArtifactsPlugin:
+class FeishuSheetsPlugin:
     manifest = PluginManifest(
-        plugin_id="feishu-artifacts",
+        plugin_id="feishu-sheets",
         version="1.0.0",
         runtime_api=1,
-        capabilities=(
-            "whiteboard.render",
-            "sheets.workbook.create",
-            "sheets.range.write",
-            "base.app.create",
-            "base.records.upsert",
-        ),
+        capabilities=("sheets.workbook.create", "sheets.range.write"),
         required_scopes=(
-            "board:whiteboard:node:create",
             "sheets:spreadsheet:create",
             "sheets:spreadsheet:write_only",
-            "base:app:create",
-            "base:record:create",
-            "base:record:update",
         ),
         resources=("resources/authoring",),
     )
 
-    def __init__(self, service: ArtifactService, identity: Identity) -> None:
-        self.tools: tuple[SemanticTool, ...] = tuple(artifact_tools(service, identity))
+    def __init__(self, service: SheetsService, identity: Identity) -> None:
+        self.tools: tuple[SemanticTool, ...] = (
+            CreateWorkbookTool(service, identity),
+            WriteSheetTool(service, identity),
+        )
         self._started = False
 
     async def initialize(self) -> None:
