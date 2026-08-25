@@ -18,6 +18,8 @@ class GatewayProcessStatus:
     state: str
     pid: int | None
     started_at_ms: int | None
+    source_state: str | None = None
+    reconnect_attempts: int = 0
 
 
 class GatewayStatusFiles:
@@ -26,13 +28,27 @@ class GatewayStatusFiles:
         self.pid_path = self.data_dir / "gateway.pid"
         self.status_path = self.data_dir / "gateway-status.json"
 
-    def publish(self, state: str, *, pid: int, started_at_ms: int) -> None:
+    def publish(
+        self,
+        state: str,
+        *,
+        pid: int,
+        started_at_ms: int,
+        source_state: str | None = None,
+        reconnect_attempts: int = 0,
+    ) -> None:
         self.data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._atomic_write(self.pid_path, f"{pid}\n".encode())
         self._atomic_write(
             self.status_path,
             json.dumps(
-                {"state": state, "pid": pid, "started_at_ms": started_at_ms},
+                {
+                    "state": state,
+                    "pid": pid,
+                    "started_at_ms": started_at_ms,
+                    "source_state": source_state,
+                    "reconnect_attempts": reconnect_attempts,
+                },
                 separators=(",", ":"),
                 sort_keys=True,
             ).encode(),
@@ -63,13 +79,32 @@ class GatewayStatusFiles:
             return GatewayProcessStatus(False, "starting", pid, None)
         state = payload.get("state")
         started_at_ms = payload.get("started_at_ms")
-        if state not in {"starting", "ready", "stopping"}:
+        if state not in {"starting", "ready", "degraded", "stopping"}:
+            return GatewayProcessStatus(False, "invalid", pid, None)
+        source_state = payload.get("source_state")
+        reconnect_attempts = payload.get("reconnect_attempts", 0)
+        normalized_source = source_state if isinstance(source_state, str) else None
+        if state == "ready" and normalized_source != "connected":
+            return GatewayProcessStatus(False, "invalid", pid, None)
+        if state == "degraded" and normalized_source not in {
+            "starting",
+            "reconnecting",
+            "error",
+        }:
             return GatewayProcessStatus(False, "invalid", pid, None)
         return GatewayProcessStatus(
             state == "ready",
             state,
             pid,
             started_at_ms if isinstance(started_at_ms, int) else None,
+            normalized_source,
+            (
+                reconnect_attempts
+                if isinstance(reconnect_attempts, int)
+                and not isinstance(reconnect_attempts, bool)
+                and reconnect_attempts >= 0
+                else 0
+            ),
         )
 
     @staticmethod
@@ -142,7 +177,7 @@ class GatewayProcessController:
                 self.files.clear_if_owner(process.pid)
                 raise RuntimeError(f"Gateway exited during startup with code {process.returncode}")
             status = self.files.read()
-            if status.state == "ready" and status.pid == process.pid:
+            if status.ok and status.pid == process.pid:
                 return status
             time.sleep(0.05)
         process.terminate()

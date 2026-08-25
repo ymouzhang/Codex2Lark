@@ -700,6 +700,83 @@ async def test_official_channel_source_normalizes_and_admits_before_callback_ret
         await source.stop()
 
 
+async def test_channel_source_gates_admission_and_reports_reconnect_health() -> None:
+    channel = FakeChannel()
+    admission = FakeAdmission()
+    source = OfficialChannelEventSource(
+        channel,
+        admission,
+        app_id="app-1",
+        received_at_ms=lambda: 500,
+    )
+    await source.start()
+    try:
+        connected = source.health()
+        assert connected.ready and connected.state == "connected"
+
+        channel.handlers["reconnecting"]()
+        reconnecting = await source.wait_health_change(connected.version)
+        assert not reconnecting.ready
+        assert reconnecting.state == "reconnecting"
+        assert reconnecting.reconnect_attempts == 1
+
+        callback = asyncio.create_task(channel.handlers["message"](channel_message()))
+        await asyncio.sleep(0)
+        assert not callback.done()
+        assert admission.messages == []
+
+        channel.handlers["reconnected"]()
+        recovered = await source.wait_health_change(reconnecting.version)
+        await callback
+        assert recovered.ready and recovered.state == "connected"
+        assert len(admission.messages) == 1
+    finally:
+        await source.stop()
+
+
+async def test_durable_raw_admission_waits_for_confirmed_reconnect() -> None:
+    class DurableFakeChannel(FakeChannel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.raw_message: Any = None
+
+        def bind_durable_handlers(
+            self,
+            message: Any,
+            bot_added: Any,
+            message_recalled: Any,
+            bot_removed: Any,
+            card_action: Any,
+        ) -> None:
+            del bot_added, message_recalled, bot_removed, card_action
+            self.raw_message = message
+
+    channel = DurableFakeChannel()
+    admission = FakeAdmission()
+    source = OfficialChannelEventSource(
+        channel,
+        admission,
+        app_id="app-1",
+        received_at_ms=lambda: 500,
+    )
+    await source.start()
+    try:
+        connected = source.health()
+        channel.handlers["reconnecting"]()
+        await source.wait_health_change(connected.version)
+
+        callback = asyncio.create_task(channel.raw_message(raw_channel_event()))
+        await asyncio.sleep(0)
+        assert not callback.done()
+        assert admission.messages == []
+
+        channel.handlers["reconnected"]()
+        await callback
+        assert [item.message_id for item in admission.messages] == ["om_raw"]
+    finally:
+        await source.stop()
+
+
 class FakeBotAddedHandler:
     def __init__(self) -> None:
         self.events: list[object] = []

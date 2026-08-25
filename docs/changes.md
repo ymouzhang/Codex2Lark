@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Corrected and defined Feishu event-source supervision before implementation.
+  The pinned transport owns the server-authoritative bounded reconnect schedule;
+  Codex2Lark observes reconnect transitions, closes admission readiness while
+  disconnected, restores it only after confirmation, and publishes content-safe
+  dynamic `ready`/`degraded` process health without competing for the socket.
+  Implementation area: Channel source health state machine, Gateway/CLI health
+  propagation, process status schema, operations runbook, and transition tests.
+
 - Defined root and cross-graph write locking before implementation. Every root
   write resolves its canonical live target after policy/approval, atomically
   acquires the shared tenant-scoped durable resource lock before idempotency or

@@ -321,7 +321,13 @@ message reference. Unverifiable success is `uncertain`, never silently
 
 ## 13. Failure containment
 
-- Event sources restart independently with bounded exponential backoff.
+- Event sources are independently supervised. The Feishu long-connection
+  adapter follows the server-authoritative reconnect interval/count delivered
+  during the authenticated handshake; invalid timing values are bounded by the
+  pinned transport library. Codex2Lark observes reconnect lifecycle events,
+  marks ingress degraded and closes its admission-ready gate while disconnected,
+  then restores readiness only after a confirmed reconnect. It does not run a
+  competing reconnect loop around the same socket.
 - Plugin health gates only Agent definitions that require that plugin.
 - Agent node failure does not cancel siblings unless root policy selects
   fail-fast or the failed node is a declared dependency.

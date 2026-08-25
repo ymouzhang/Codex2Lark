@@ -5,6 +5,7 @@ import concurrent.futures
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Protocol, cast
 
@@ -81,7 +82,7 @@ class _DurableDispatcherBridge:
 class ChannelPort(Protocol):
     bot_identity: object | None
 
-    def on(self, event: str, handler: Callable[[object], Awaitable[None]]) -> object: ...
+    def on(self, event: str, handler: Callable[..., object]) -> object: ...
 
     async def connect_until_ready(self, *, timeout: float | None = 30.0) -> None: ...
 
@@ -112,6 +113,14 @@ class LifecycleHandler(Protocol):
 
 class CardActionHandler(Protocol):
     async def handle(self, raw: dict[str, Any]) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class EventSourceHealth:
+    state: str
+    ready: bool
+    reconnect_attempts: int
+    version: int
 
 
 def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
@@ -458,12 +467,25 @@ class OfficialChannelEventSource:
         self._started = False
         self._ready = asyncio.Event()
         self._normalizer: ChannelMessageNormalizer | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._health = EventSourceHealth("stopped", False, 0, 0)
+        self._health_changed = asyncio.Event()
+        self._transport_subscriptions: list[Callable[[], object]] = []
 
     async def start(self) -> None:
         if self._started:
             raise RuntimeError("official Channel source is already running")
         self._started = True
         self._ready.clear()
+        self._loop = asyncio.get_running_loop()
+        self._set_health("starting", ready=False)
+        for event, handler in (
+            ("reconnecting", self._on_transport_reconnecting),
+            ("reconnected", self._on_transport_reconnected),
+        ):
+            unsubscribe = self._channel.on(event, handler)
+            if callable(unsubscribe):
+                self._transport_subscriptions.append(unsubscribe)
         durable_binder = getattr(self._channel, "bind_durable_handlers", None)
         if not callable(durable_binder):
             self._channel.on("message", self._on_message)
@@ -487,24 +509,20 @@ class OfficialChannelEventSource:
                     self._on_raw_message,
                     self._on_raw_bot_added if self._bot_added_handler is not None else None,
                     (
-                        self._lifecycle_handler.handle_message_recalled
+                        self._on_raw_message_recalled
                         if self._lifecycle_handler is not None
                         else None
                     ),
-                    (
-                        self._lifecycle_handler.handle_bot_removed
-                        if self._lifecycle_handler is not None
-                        else None
-                    ),
-                    self._card_action_handler.handle
-                    if self._card_action_handler is not None
-                    else None,
+                    (self._on_raw_bot_removed if self._lifecycle_handler is not None else None),
+                    self._on_raw_card_action if self._card_action_handler is not None else None,
                 )
             self._ready.set()
+            self._set_health("connected", ready=True)
         except BaseException:
-            self._ready.set()
+            self._set_health("error", ready=False)
             self._started = False
             await self._channel.disconnect()
+            self._unsubscribe_transport()
             raise
 
     async def stop(self) -> None:
@@ -517,6 +535,59 @@ class OfficialChannelEventSource:
         self._started = False
         self._normalizer = None
         self._ready.clear()
+        self._set_health("stopped", ready=False)
+        self._unsubscribe_transport()
+        self._loop = None
+
+    def health(self) -> EventSourceHealth:
+        return self._health
+
+    async def wait_health_change(self, after_version: int) -> EventSourceHealth:
+        while self._health.version == after_version:
+            self._health_changed.clear()
+            if self._health.version != after_version:
+                break
+            await self._health_changed.wait()
+        return self._health
+
+    def _on_transport_reconnecting(self, *_args: object) -> None:
+        self._schedule_health("reconnecting", ready=False, reconnect=True)
+
+    def _on_transport_reconnected(self, *_args: object) -> None:
+        self._schedule_health("connected", ready=True)
+
+    def _schedule_health(self, state: str, *, ready: bool, reconnect: bool = False) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+        loop.call_soon_threadsafe(
+            self._set_health,
+            state,
+            ready,
+            reconnect,
+        )
+
+    def _set_health(self, state: str, ready: bool, reconnect: bool = False) -> None:
+        attempts = self._health.reconnect_attempts + (1 if reconnect else 0)
+        if ready:
+            self._ready.set()
+        else:
+            self._ready.clear()
+        self._health = EventSourceHealth(
+            state,
+            ready,
+            attempts,
+            self._health.version + 1,
+        )
+        self._health_changed.set()
+
+    def _unsubscribe_transport(self) -> None:
+        for unsubscribe in self._transport_subscriptions:
+            try:
+                unsubscribe()
+            except Exception:
+                logger.warning("Channel transport-event unsubscribe failed")
+        self._transport_subscriptions.clear()
 
     async def _on_message(self, message: object) -> None:
         await self._ready.wait()
@@ -533,6 +604,7 @@ class OfficialChannelEventSource:
         await self._bot_added_handler.handle_bot_added(event)
 
     async def _on_raw_message(self, raw: dict[str, Any]) -> None:
+        await self._ready.wait()
         normalizer = self._normalizer
         if normalizer is None:
             raise RuntimeError("official Channel source is not ready for raw admission")
@@ -540,12 +612,31 @@ class OfficialChannelEventSource:
         await self._admission.admit(normalized)
 
     async def _on_raw_bot_added(self, raw: dict[str, Any]) -> None:
+        await self._ready.wait()
         if self._bot_added_handler is None:
             raise RuntimeError("official Channel bot-added handler is unavailable")
         event = self._mapping(raw.get("event"))
         await self._bot_added_handler.handle_bot_added(
             SimpleNamespace(raw=raw, chat_id=event.get("chat_id"))
         )
+
+    async def _on_raw_message_recalled(self, raw: dict[str, Any]) -> None:
+        await self._ready.wait()
+        if self._lifecycle_handler is None:
+            raise RuntimeError("official Channel lifecycle handler is unavailable")
+        await self._lifecycle_handler.handle_message_recalled(raw)
+
+    async def _on_raw_bot_removed(self, raw: dict[str, Any]) -> None:
+        await self._ready.wait()
+        if self._lifecycle_handler is None:
+            raise RuntimeError("official Channel lifecycle handler is unavailable")
+        await self._lifecycle_handler.handle_bot_removed(raw)
+
+    async def _on_raw_card_action(self, raw: dict[str, Any]) -> str:
+        await self._ready.wait()
+        if self._card_action_handler is None:
+            raise RuntimeError("official Channel approval handler is unavailable")
+        return await self._card_action_handler.handle(raw)
 
     async def _on_bot_removed(self, event: object) -> None:
         await self._ready.wait()

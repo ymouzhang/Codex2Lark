@@ -220,8 +220,13 @@ uv run codex2lark gateway start
 uv run codex2lark gateway status
 ```
 
-A healthy status is content-safe and includes `"state":"ready"`. For foreground
-debugging use:
+A healthy status is content-safe and includes `"state":"ready"` and
+`"source_state":"connected"`. During a long-connection interruption it changes
+to `"state":"degraded"`, reports only the safe source state and reconnect count,
+and returns to ready after the transport confirms reconnection. Message
+admission is gated while degraded; already durable tasks and outbox work
+continue. No message bodies, endpoint errors, credentials, or connection URLs
+are written to the status file. For foreground debugging use:
 
 ```bash
 uv run codex2lark gateway run
@@ -232,6 +237,14 @@ or Redis. Admission, tasks, run checkpoints, and reply intents are durable.
 Expired leases are recovered after restart. Press `Ctrl+C` for a draining stop;
 the service stops event intake, completes its bounded drain, checkpoints SQLite,
 and then exits.
+
+The pinned Feishu transport owns the socket retry schedule because the server
+supplies reconnect interval and retry-count values on each handshake. Its
+validated schedule is bounded; Codex2Lark subscribes to `reconnecting` and
+`reconnected` lifecycle signals instead of opening a second socket or retry
+loop. If status remains degraded, inspect outbound network and application
+credentials, then use `gateway stop` followed by `gateway start` only after the
+underlying cause is corrected.
 
 The in-process drain defaults to 30 seconds and can be configured with
 `CODEX2LARK_SHUTDOWN_DRAIN_MS`. Intake is disabled first. A task still running

@@ -19,6 +19,7 @@ from codex2lark.capabilities.im.admission_policy import IMAdmissionPolicy
 from codex2lark.capabilities.im.attachments import AttachmentService, SafeAttachmentParser
 from codex2lark.capabilities.im.channel_adapter import (
     ChannelPort,
+    EventSourceHealth,
     OfficialChannelEventSource,
     create_official_channel,
 )
@@ -232,6 +233,12 @@ class V3Gateway:
     async def _bounded(self, awaitable: Awaitable[_T]) -> _T:
         async with asyncio.timeout(self._shutdown_timeout):
             return await awaitable
+
+    def source_health(self) -> EventSourceHealth:
+        return self._source.health()
+
+    async def wait_source_health_change(self, after_version: int) -> EventSourceHealth:
+        return await self._source.wait_health_change(after_version)
 
     async def _run(self) -> None:
         while not self._stop.is_set():

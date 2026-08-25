@@ -208,12 +208,39 @@ async def _gateway() -> int:
             raise RuntimeError("daemon parent did not publish the Gateway PID")
     else:
         status_files.publish("starting", pid=pid, started_at_ms=started_at_ms)
+    health_monitor: asyncio.Task[None] | None = None
+
+    async def publish_source_health() -> None:
+        health = gateway.source_health()
+        while True:
+            status_files.publish(
+                "ready" if health.ready else "degraded",
+                pid=pid,
+                started_at_ms=started_at_ms,
+                source_state=health.state,
+                reconnect_attempts=health.reconnect_attempts,
+            )
+            health = await gateway.wait_source_health_change(health.version)
+
     try:
         await gateway.start()
-        status_files.publish("ready", pid=pid, started_at_ms=started_at_ms)
+        health_monitor = asyncio.create_task(
+            publish_source_health(), name="codex2lark-source-health"
+        )
         await shutdown.wait()
     finally:
-        status_files.publish("stopping", pid=pid, started_at_ms=started_at_ms)
+        if health_monitor is not None:
+            health_monitor.cancel()
+            with suppress(asyncio.CancelledError):
+                await health_monitor
+        health = gateway.source_health()
+        status_files.publish(
+            "stopping",
+            pid=pid,
+            started_at_ms=started_at_ms,
+            source_state=health.state,
+            reconnect_attempts=health.reconnect_attempts,
+        )
         try:
             await gateway.stop()
         finally:
