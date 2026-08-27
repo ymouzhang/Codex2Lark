@@ -295,6 +295,11 @@ the verified `feishu.chat.digest.publish` semantic tool. Its arguments bind one
 exact chat target and bounded time range; identity remains trusted runtime
 context. The workflow reuses the tested chronological renderer and returns a
 verified managed-folder document reference before the root may claim completion.
+Requests whose primary intent is to collect, archive, or organize messages from
+the current Feishu group must use this workflow tool. Generic document creation
+is not a substitute because it neither owns authoritative history pagination nor
+the chronological message-rendering contract. The root Agent instructions and
+both tool descriptions state this routing rule explicitly.
 
 Acceptance criterion 9 is exercised through the production composition path.
 The deterministic fixture admits a group mention, calls exact-title search,

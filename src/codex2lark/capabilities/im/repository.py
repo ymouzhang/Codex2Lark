@@ -450,6 +450,38 @@ class SQLiteIMRepository:
         )
         return None if row is None else self._attachment(row)
 
+    async def recent_attachments(
+        self,
+        tenant_key: str,
+        app_id: str,
+        chat_id: str,
+        *,
+        since_ms: int,
+        before_ms: int,
+        limit: int = 100,
+    ) -> list[StoredAttachment]:
+        if limit < 1 or limit > 500:
+            raise ValueError("attachment discovery limit must be between 1 and 500")
+        rows = await self._database.call(
+            lambda connection: connection.execute(
+                """
+                SELECT a.* FROM im_attachments AS a
+                JOIN im_messages AS m
+                  ON m.tenant_key = a.tenant_key
+                 AND m.app_id = a.app_id
+                 AND m.message_id = a.message_id
+                WHERE a.tenant_key = ? AND a.app_id = ? AND a.chat_id = ?
+                  AND m.created_at_source_ms >= ?
+                  AND m.created_at_source_ms <= ?
+                  AND m.is_recalled = 0 AND m.is_deleted = 0
+                ORDER BY m.created_at_source_ms DESC, a.message_id DESC
+                LIMIT ?
+                """,
+                (tenant_key, app_id, chat_id, since_ms, before_ms, limit),
+            ).fetchall()
+        )
+        return [self._attachment(row) for row in rows]
+
     async def record_attachment_blob(
         self,
         attachment: StoredAttachment,

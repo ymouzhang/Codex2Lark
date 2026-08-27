@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .context_provider import IMContextRequest, MessagePage
+from .context_provider import IMContextRequest, IMHistoryUnavailableError, MessagePage
 from .models import AttachmentReference, IncomingMessage, Mention
 
 
@@ -92,6 +92,10 @@ class OfficialIMMessageAPI:
         code = getattr(response, "code", None)
         if code != 0:
             request_id = getattr(response, "request_id", None)
+            if operation == "list messages" and code == 230027:
+                raise IMHistoryUnavailableError(
+                    f"Feishu group history is unavailable: request_id={request_id}"
+                )
             raise RuntimeError(f"Feishu {operation} failed: code={code}, request_id={request_id}")
 
     @staticmethod
@@ -120,6 +124,24 @@ class OfficialLiveIMReader:
                 end_time_s=None,
                 limit=limit,
             )
+        related_ids = tuple(
+            dict.fromkeys(
+                item
+                for item in (trigger.parent_id, trigger.root_id)
+                if item and item != trigger.message_id
+            )
+        )
+        if related_ids:
+            request = IMContextRequest(
+                trigger.tenant_key,
+                trigger.app_id,
+                trigger.chat_id,
+                trigger.message_id,
+            )
+            messages = []
+            for message_id in related_ids[:limit]:
+                messages.append(self._normalize(await self._api.get(message_id), request))
+            return MessagePage(tuple(messages), len(related_ids) <= limit)
         page = await self._collect(
             trigger,
             container_type="chat",

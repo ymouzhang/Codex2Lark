@@ -105,18 +105,19 @@ After configuring the environment in
 start the Gateway for mention-driven group work:
 
 ```bash
-uv run codex2lark gateway start
+uv run --env-file .env codex2lark gateway start
 ```
 
 The command returns a content-safe JSON result after the long connection is
 ready. Inspect it at any time:
 
 ```bash
-uv run codex2lark gateway status
+uv run --env-file .env codex2lark gateway status
 ```
 
-For foreground debugging, run `uv run codex2lark gateway run`; bare
-`uv run codex2lark gateway` is the same foreground mode.
+For foreground debugging, run
+`uv run --env-file .env codex2lark gateway run`; omitting `run` selects the
+same foreground mode.
 
 The Gateway is independent of Codex and MCP. Closing Codex does not stop it. In
 production, run this command with systemd, Docker, or another process manager.
@@ -169,7 +170,7 @@ different terminal.
 Stop a Gateway started by `gateway start` with:
 
 ```bash
-uv run codex2lark gateway stop
+uv run --env-file .env codex2lark gateway stop
 ```
 
 The command sends a graceful termination request only after validating that the

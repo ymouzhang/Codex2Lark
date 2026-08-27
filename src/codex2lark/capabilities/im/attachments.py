@@ -17,6 +17,37 @@ from codex2lark.storage.capacity import StorageCapacityMonitor
 
 from .models import StoredAttachment
 
+_SOURCE_TEXT_SUFFIXES = frozenset(
+    {
+        ".bash",
+        ".bat",
+        ".c",
+        ".cmd",
+        ".conf",
+        ".cpp",
+        ".fish",
+        ".go",
+        ".h",
+        ".hpp",
+        ".ini",
+        ".java",
+        ".js",
+        ".jsx",
+        ".py",
+        ".ps1",
+        ".rb",
+        ".rs",
+        ".sh",
+        ".sql",
+        ".toml",
+        ".ts",
+        ".tsx",
+        ".yaml",
+        ".yml",
+        ".zsh",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class AttachmentLoadRequest:
@@ -131,6 +162,8 @@ class SafeAttachmentParser:
         try:
             if suffix in {".txt", ".md", ".markdown"}:
                 return self._text(content)
+            if suffix in _SOURCE_TEXT_SUFFIXES:
+                return self._bounded(content.decode("utf-8-sig"), "source_code")
             if suffix == ".json":
                 decoded = content.decode("utf-8-sig")
                 parsed = json.loads(decoded)
@@ -277,12 +310,6 @@ class SafeAttachmentParser:
             ".gz",
             ".exe",
             ".dll",
-            ".sh",
-            ".bat",
-            ".cmd",
-            ".ps1",
-            ".py",
-            ".js",
             ".jar",
         }:
             return True

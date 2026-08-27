@@ -399,10 +399,16 @@ The IM acknowledgement and terminal suffix bundle is likewise versioned package
 data. It is loaded once at composition and mapped to the typed response-template
 object; event content and model output cannot select a different locale or
 override these trusted strings. The first production profile ships
-`group-agent-core@1.1.0`, `delegated-worker-core@1.0.0`, and `im-zh-CN@2`.
+`group-agent-core@1.3.0`, `delegated-worker-core@1.0.0`, and `im-zh-CN@2`.
+The group package routes current-group message collection, archival, and digest
+requests exclusively to `feishu.chat.digest.publish`; generic document creation
+may format derived conclusions but may not fabricate a chat-history archive.
 The group package teaches the root to include exact structured targets only for
 existing resources that a capability can resolve live; it keeps create and
-unresolved writer delegation serial.
+unresolved writer delegation serial. Group attachments remain an IM data source:
+when the bound context does not contain the requested attachment, the root
+reports the limitation and asks for a direct reply or re-upload instead of
+searching Drive or Docs for a same-named resource.
 
 ## 12. Discovery and trust
 

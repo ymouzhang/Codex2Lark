@@ -115,6 +115,13 @@ The long connection is initiated by Codex2Lark and requires outbound network
 access, not a public IP. MCP is an independent interactive interface; it is not
 the event service and its availability does not control inbound Feishu work.
 
+The pinned Python Channel SDK captures a module-level WebSocket event loop when
+it is first imported. The synchronous Gateway bootstrap must therefore create
+the official Channel before `asyncio.run()` starts the Runtime loop, matching
+the SDK's supported lifecycle. This compatibility rule is confined to the IM
+transport adapter; the Runtime, plugins, Harness, storage, and model provider
+never depend on SDK import order or private event-loop state.
+
 ## 5. Runtime decomposition
 
 ```text
@@ -384,12 +391,17 @@ systemd or container supervisor
     └── encrypted blob store
 ```
 
-The process starts in this order: configuration, key, storage integrity,
+The process starts in this order: synchronous configuration/key validation and
+Channel construction, Runtime event-loop creation, storage integrity,
 migrations, plugins, policies/Agent definitions, model-provider identity/model
 probe, event-source connection and bot-identity probe, recovery, then readiness.
 `ready` requires both live probes; a configured secret alone is not health.
 Provider readiness uses a metadata-only model lookup and never creates a model
-response or token charge. Shutdown stops admission, drains within a deadline,
+response or token charge. The model adapter remains provider-neutral through an
+OpenAI-compatible endpoint, key, and model identifier. The checked-in local
+deployment profile selects DeepSeek at `https://api.deepseek.com` with
+`deepseek-v4-flash`; this is an operations choice, not a dependency from the
+Harness or capability plugins. Shutdown stops admission, drains within a deadline,
 checkpoints or releases leases, flushes outbox state, closes sources, checkpoints
 SQLite, and exits.
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import subprocess
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -82,7 +84,7 @@ def test_gateway_doctor_validates_configuration_without_printing_secrets(
     output = json.loads(raw)
 
     assert output["checks"]["storage"] == "not_initialized"
-    assert output["checks"]["agent_resources"]["group-agent-core"] == "1.1.0"
+    assert output["checks"]["agent_resources"]["group-agent-core"] == "1.3.0"
     assert "feishu-secret-value" not in raw
     assert "openai-secret-value" not in raw
 
@@ -99,6 +101,61 @@ def test_gateway_reports_invalid_configuration_without_traceback(
 
     assert cli.main(["gateway"]) == 2
     assert "missing gateway secret" in caplog.text
+
+
+def test_gateway_constructs_official_channel_before_runtime_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = SimpleNamespace(feishu_app_id="cli_app", feishu_app_secret="secret")
+    channel = object()
+    observations: list[str] = []
+
+    monkeypatch.setattr(cli.GatewayConfig, "from_environment", lambda: config)
+
+    def create_channel(*, app_id: str, app_secret: str) -> object:
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            asyncio.get_running_loop()
+        assert (app_id, app_secret) == ("cli_app", "secret")
+        observations.append("channel")
+        return channel
+
+    async def run_gateway(received_config: object, received_channel: object) -> int:
+        assert asyncio.get_running_loop().is_running()
+        assert received_config is config
+        assert received_channel is channel
+        observations.append("runtime")
+        return 17
+
+    monkeypatch.setattr(cli, "create_official_channel", create_channel)
+    monkeypatch.setattr(cli, "_gateway", run_gateway)
+
+    assert cli._run_gateway() == 17
+    assert observations == ["channel", "runtime"]
+
+
+def test_official_channel_sdk_loop_isolated_in_clean_process() -> None:
+    script = """
+import asyncio
+from codex2lark.capabilities.im.channel_adapter import create_official_channel
+
+channel = create_official_channel(app_id="cli_test", app_secret="secret")
+from lark_channel.ws.client import loop as sdk_loop
+
+async def verify():
+    assert sdk_loop is not asyncio.get_running_loop()
+
+asyncio.run(verify())
+channel.close_durable_bridge()
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 @pytest.mark.asyncio

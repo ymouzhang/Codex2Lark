@@ -4,7 +4,7 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from html import escape, unescape
 from pathlib import Path
 from typing import Any
@@ -164,12 +164,19 @@ def _collect_file_names(value: Any) -> list[str]:
     return list(dict.fromkeys(names))
 
 
-def _timestamp(value: Any) -> float | None:
+def _timestamp(value: Any, zone: tzinfo = UTC) -> float | None:
     if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
         number = float(value)
-    else:
+        return number / 1000 if number > 10_000_000_000 else number
+    if not isinstance(value, str):
         return None
-    return number / 1000 if number > 10_000_000_000 else number
+    try:
+        moment = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=zone)
+    return moment.timestamp()
 
 
 def _sender_name(message: dict[str, Any]) -> str:
@@ -208,7 +215,9 @@ def _normal_text(message_type: str, decoded: Any, file_names: list[str]) -> str:
     return f"{message_type or '未知'} 消息"
 
 
-def _normalize_message(message: dict[str, Any], *, thread_reply: bool = False) -> ChatEntry:
+def _normalize_message(
+    message: dict[str, Any], *, thread_reply: bool = False, zone: tzinfo = UTC
+) -> ChatEntry:
     raw_content = message.get("content", "")
     decoded = _decoded_content(raw_content)
     message_type = str(message.get("msg_type") or "unknown").lower()
@@ -225,7 +234,7 @@ def _normalize_message(message: dict[str, Any], *, thread_reply: bool = False) -
     return ChatEntry(
         message_id=message_id,
         create_time=create_time,
-        timestamp=_timestamp(create_time_value),
+        timestamp=_timestamp(create_time_value, zone),
         sender=_sender_name(message),
         text=text,
         image_keys=tuple(image_keys if not deleted else []),
@@ -235,13 +244,13 @@ def _normalize_message(message: dict[str, Any], *, thread_reply: bool = False) -
     )
 
 
-def _flatten_messages(messages: list[Any]) -> list[ChatEntry]:
+def _flatten_messages(messages: list[Any], *, zone: tzinfo = UTC) -> list[ChatEntry]:
     entries: list[ChatEntry] = []
 
     def append(raw: Any, *, thread_reply: bool = False) -> None:
         if not isinstance(raw, dict):
             return
-        entries.append(_normalize_message(raw, thread_reply=thread_reply))
+        entries.append(_normalize_message(raw, thread_reply=thread_reply, zone=zone))
         replies = raw.get("thread_replies")
         if isinstance(replies, list):
             for reply in replies:
@@ -258,14 +267,16 @@ def _flatten_messages(messages: list[Any]) -> list[ChatEntry]:
             anonymous += 1
             key = f"anonymous-{anonymous}"
         unique.setdefault(key, entry)
-    return sorted(
-        unique.values(),
-        key=lambda item: (
-            item.timestamp is None,
-            item.timestamp if item.timestamp is not None else 0,
-            item.message_id,
-        ),
+    indexed = list(enumerate(unique.values()))
+    indexed.sort(
+        key=lambda pair: (
+            pair[1].timestamp is None,
+            pair[1].timestamp if pair[1].timestamp is not None else 0,
+            pair[1].message_id if pair[1].timestamp is not None else "",
+            pair[0],
+        )
     )
+    return [entry for _, entry in indexed]
 
 
 def _render_time(entry: ChatEntry, zone: ZoneInfo) -> tuple[str, str]:
@@ -304,9 +315,11 @@ def _render_digest_xml(
             parts.append(f"<h2>{escape(date_label)}</h2>")
             active_date = date_label
         reply = " · 话题回复" if entry.thread_reply else ""
+        parts.append("<blockquote>")
         parts.append(f"<p><b>{escape(time_label)} · {escape(entry.sender)}{reply}</b></p>")
         for line in entry.text.splitlines() or [entry.text]:
             parts.append(f"<p>{escape(line)}</p>")
+        parts.append("</blockquote>")
         for image_key in entry.image_keys:
             path = image_paths.get((entry.message_id, image_key))
             if path is None:
@@ -317,7 +330,16 @@ def _render_digest_xml(
                     f'<img path="{escape(path, quote=True)}" '
                     f'caption="{escape(caption, quote=True)}"/>'
                 )
+        parts.append("<hr/>")
     return "".join(parts)
+
+
+def _absolute_https_url(resource: dict[str, Any]) -> str | None:
+    for key in ("url", "document_url"):
+        value = resource.get(key)
+        if isinstance(value, str) and value.startswith("https://"):
+            return value
+    return None
 
 
 class ChatDigestService:
@@ -383,7 +405,7 @@ class ChatDigestService:
         raw_messages = pulled.data.get("messages", [])
         if not isinstance(raw_messages, list):
             raise _validation("lark-cli returned an invalid group message list")
-        entries = _flatten_messages(raw_messages)
+        entries = _flatten_messages(raw_messages, zone=zone)
         if len(entries) > request.max_messages:
             raise _validation(
                 "group history exceeded the declared message limit; no digest was created",
@@ -553,6 +575,36 @@ class ChatDigestService:
                 details={"resource": resource, "verification": verification.as_dict()},
             )
         live_resource = extract_resource(inspected["data"])
+        canonical_url = (
+            _absolute_https_url(live_resource)
+            or _absolute_https_url(resource)
+            or (reference if reference.startswith("https://") else None)
+        )
+        if canonical_url is None and managed_folder is not None:
+            discovered = await self.drive.search_managed_documents(
+                chat["name"], author_identity, managed_folder
+            )
+            expected_token = find_first_value(live_resource, {"document_id", "token"})
+            matches = discovered.get("matches", [])
+            candidates = [
+                candidate
+                for candidate in matches
+                if isinstance(candidate, dict)
+                and (
+                    expected_token is None
+                    or find_first_value(candidate, {"document_id", "token"}) == expected_token
+                )
+                and _absolute_https_url(candidate) is not None
+            ]
+            if len(candidates) == 1:
+                canonical_url = _absolute_https_url(candidates[0])
+        if canonical_url is None:
+            raise Codex2LarkError(
+                ErrorCategory.VERIFICATION,
+                "group-chat digest was verified but Feishu did not return a clickable URL",
+                details={"resource": live_resource},
+            )
+        live_resource = {**live_resource, "url": canonical_url}
         warnings.extend(written.warnings)
         warnings.extend(inspected.get("warnings", []))
         if request.verification.fail_on_warning and warnings:
@@ -565,6 +617,7 @@ class ChatDigestService:
             try:
                 notification = await self.notifier.document_edited(
                     resource=live_resource,
+                    document_title=chat["name"],
                     change_summary=(
                         f"刷新群聊“{chat['name']}”从 {request.start} 至 {request.end} "
                         f"的消息汇总, 共 {len(entries)} 条消息"

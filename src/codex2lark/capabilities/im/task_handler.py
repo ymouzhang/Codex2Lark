@@ -245,11 +245,29 @@ class IMMentionTaskHandler:
         }[outcome.status]
         parts = [outcome.summary.strip() or outcome.status.value]
         if outcome.resource_refs:
-            parts.append("Resources:\n" + "\n".join(f"- {item}" for item in outcome.resource_refs))
-        if outcome.warnings:
-            parts.append("Warnings: " + ", ".join(outcome.warnings))
+            parts.append("文档链接:\n" + "\n".join(f"- {item}" for item in outcome.resource_refs))
+        parts.extend(self._present_warnings(outcome.warnings))
         parts.append(suffix)
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _present_warnings(warnings: tuple[str, ...]) -> tuple[str, ...]:
+        remaining = list(dict.fromkeys(warnings))
+        presented: list[str] = []
+        if "im_context_history_unavailable" in remaining:
+            remaining.remove("im_context_history_unavailable")
+            if "im_context_incomplete" in remaining:
+                remaining.remove("im_context_incomplete")
+            presented.append(
+                "提示: 飞书拒绝了机器人读取群聊历史 (230027), "
+                "本次回答仅基于当前消息。请为应用身份开通群消息读取权限并发布新版本。"
+            )
+        elif "im_context_incomplete" in remaining:
+            remaining.remove("im_context_incomplete")
+            presented.append("提示: 本次读取的群聊上下文可能不完整。")
+        if remaining:
+            presented.append("Warnings: " + ", ".join(remaining))
+        return tuple(presented)
 
     @staticmethod
     def _binding(task: LeasedTask) -> dict[str, str]:

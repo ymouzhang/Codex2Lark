@@ -4,7 +4,10 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import re
+import threading
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Protocol, cast
@@ -12,6 +15,24 @@ from typing import Any, Protocol, cast
 from .models import AttachmentReference, IncomingMessage, Mention
 
 logger = logging.getLogger(__name__)
+
+_WEBSOCKET_URL = re.compile(r"\bwss?://[^\s]+", re.IGNORECASE)
+
+
+class _ChannelWebSocketURLFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        redacted = _WEBSOCKET_URL.sub("<redacted websocket endpoint>", message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+def _install_channel_log_redaction(channel_logger: logging.Logger) -> None:
+    if any(isinstance(item, _ChannelWebSocketURLFilter) for item in channel_logger.filters):
+        return
+    channel_logger.addFilter(_ChannelWebSocketURLFilter())
 
 
 class _DurableDispatcherBridge:
@@ -22,9 +43,15 @@ class _DurableDispatcherBridge:
         self._message_recalled: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._bot_removed: Callable[[dict[str, Any]], Awaitable[None]] | None = None
         self._card_action: Callable[[dict[str, Any]], Awaitable[None]] | None = None
-        self._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="codex2lark-admission"
-        )
+        self._runtime_loop: asyncio.AbstractEventLoop | None = None
+        self._futures: set[concurrent.futures.Future[None]] = set()
+        self._lock = threading.Lock()
+
+    def bind_runtime_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
+        if loop is not None and (loop.is_closed() or not loop.is_running()):
+            raise RuntimeError("durable admission requires a running Runtime loop")
+        with self._lock:
+            self._runtime_loop = loop
 
     def bind(
         self,
@@ -56,7 +83,11 @@ class _DurableDispatcherBridge:
         self._dispatch(self._card_action, data, "cardAction")
 
     def close(self) -> None:
-        self._executor.shutdown(wait=True, cancel_futures=True)
+        with self._lock:
+            self._runtime_loop = None
+            futures = tuple(self._futures)
+        for future in futures:
+            future.cancel()
 
     def _dispatch(
         self,
@@ -70,13 +101,31 @@ class _DurableDispatcherBridge:
         if not isinstance(raw, dict):
             raise ValueError(f"durable {event_name} event is not an object")
 
+        with self._lock:
+            runtime_loop = self._runtime_loop
+        if runtime_loop is None or runtime_loop.is_closed() or not runtime_loop.is_running():
+            raise RuntimeError("durable Runtime event loop is not ready")
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is runtime_loop:
+            raise RuntimeError("durable SDK callback cannot block the Runtime event loop")
+
         async def invoke() -> None:
             await handler(raw)
 
-        future: concurrent.futures.Future[None] = self._executor.submit(
-            lambda: asyncio.run(invoke())
-        )
-        future.result(timeout=25)
+        future = asyncio.run_coroutine_threadsafe(invoke(), runtime_loop)
+        with self._lock:
+            self._futures.add(future)
+        try:
+            future.result(timeout=25)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise TimeoutError(f"durable {event_name} admission timed out") from None
+        finally:
+            with self._lock:
+                self._futures.discard(future)
 
 
 class ChannelPort(Protocol):
@@ -135,6 +184,9 @@ def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
         TextBatchConfig,
     )
     from lark_channel.channel import _coerce  # type: ignore[import-untyped]
+    from lark_channel.core.log import logger as channel_logger  # type: ignore[import-untyped]
+
+    _install_channel_log_redaction(channel_logger)
 
     class DurableAdmissionChannel(FeishuChannel):  # type: ignore[misc]
         def __init__(self, **parameters: object) -> None:
@@ -152,6 +204,9 @@ def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
             self._durable_bridge.bind(
                 message, bot_added, message_recalled, bot_removed, card_action
             )
+
+        def bind_runtime_loop(self, loop: asyncio.AbstractEventLoop | None) -> None:
+            self._durable_bridge.bind_runtime_loop(loop)
 
         def _build_dispatcher(self) -> object:
             dispatcher = super()._build_dispatcher()
@@ -186,6 +241,60 @@ def create_official_channel(*, app_id: str, app_secret: str) -> ChannelPort:
 
             self._durable_bridge.dispatch_card_action(data)
             return P2CardActionTriggerResponse({})
+
+        def start(self) -> None:
+            from lark_channel.ws.client import (  # type: ignore[import-untyped]
+                loop as transport_loop,
+            )
+
+            asyncio.set_event_loop(transport_loop)
+            try:
+                super().start()
+            finally:
+                asyncio.set_event_loop(None)
+
+        def stop(self, *, join_timeout: float = 5.0) -> None:
+            self._cancel_transport_periodic_tasks()
+            super().stop(join_timeout=join_timeout)
+
+        def _cancel_transport_periodic_tasks(self) -> None:
+            ws_client = getattr(self, "_ws_client", None)
+            cache = getattr(ws_client, "_cache", None)
+            cron = getattr(cache, "_cron", None)
+            if not isinstance(cron, asyncio.Task):
+                return
+            transport_loop = cron.get_loop()
+            if not transport_loop.is_running():
+                cron.cancel()
+                return
+
+            async def cancel_periodic_tasks() -> None:
+                tasks = [
+                    task
+                    for task in asyncio.all_tasks()
+                    if task is not asyncio.current_task()
+                    and getattr(task.get_coro(), "__qualname__", "")
+                    in {"Client._ping_loop", "ExpiringCache._start_clear_cron"}
+                ]
+                for task in tasks:
+                    task.cancel()
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+
+            future = asyncio.run_coroutine_threadsafe(cancel_periodic_tasks(), transport_loop)
+            with suppress(concurrent.futures.CancelledError, TimeoutError):
+                future.result(timeout=1.0)
+
+        def _drain_cancelled_bg_tasks(self) -> None:
+            background_loop = getattr(self, "_bg_loop", None)
+            if background_loop is None or not background_loop.is_running():
+                return
+            drained = threading.Event()
+            try:
+                background_loop.call_soon_threadsafe(drained.set)
+            except RuntimeError:
+                return
+            drained.wait(timeout=0.5)
 
         async def disconnect(self) -> None:
             try:
@@ -478,24 +587,27 @@ class OfficialChannelEventSource:
         self._started = True
         self._ready.clear()
         self._loop = asyncio.get_running_loop()
+        runtime_loop_binder = getattr(self._channel, "bind_runtime_loop", None)
         self._set_health("starting", ready=False)
-        for event, handler in (
-            ("reconnecting", self._on_transport_reconnecting),
-            ("reconnected", self._on_transport_reconnected),
-        ):
-            unsubscribe = self._channel.on(event, handler)
-            if callable(unsubscribe):
-                self._transport_subscriptions.append(unsubscribe)
         durable_binder = getattr(self._channel, "bind_durable_handlers", None)
-        if not callable(durable_binder):
-            self._channel.on("message", self._on_message)
-            if self._bot_added_handler is not None:
-                self._channel.on("botAdded", self._on_bot_added)
-            if self._lifecycle_handler is not None:
-                self._channel.on("botLeave", self._on_bot_removed)
-            if self._card_action_handler is not None:
-                self._channel.on("cardAction", self._on_card_action)
         try:
+            if callable(runtime_loop_binder):
+                runtime_loop_binder(self._loop)
+            for event, handler in (
+                ("reconnecting", self._on_transport_reconnecting),
+                ("reconnected", self._on_transport_reconnected),
+            ):
+                unsubscribe = self._channel.on(event, handler)
+                if callable(unsubscribe):
+                    self._transport_subscriptions.append(unsubscribe)
+            if not callable(durable_binder):
+                self._channel.on("message", self._on_message)
+                if self._bot_added_handler is not None:
+                    self._channel.on("botAdded", self._on_bot_added)
+                if self._lifecycle_handler is not None:
+                    self._channel.on("botLeave", self._on_bot_removed)
+                if self._card_action_handler is not None:
+                    self._channel.on("cardAction", self._on_card_action)
             await self._channel.connect_until_ready(timeout=30.0)
             identity = self._channel.bot_identity
             bot_open_id = getattr(identity, "open_id", None)
@@ -521,8 +633,12 @@ class OfficialChannelEventSource:
         except BaseException:
             self._set_health("error", ready=False)
             self._started = False
-            await self._channel.disconnect()
-            self._unsubscribe_transport()
+            try:
+                await self._channel.disconnect()
+            finally:
+                if callable(runtime_loop_binder):
+                    runtime_loop_binder(None)
+                self._unsubscribe_transport()
             raise
 
     async def stop(self) -> None:
@@ -531,13 +647,18 @@ class OfficialChannelEventSource:
         durable_binder = getattr(self._channel, "bind_durable_handlers", None)
         if callable(durable_binder):
             durable_binder(None, None, None, None, None)
-        await self._channel.disconnect()
-        self._started = False
-        self._normalizer = None
-        self._ready.clear()
-        self._set_health("stopped", ready=False)
-        self._unsubscribe_transport()
-        self._loop = None
+        runtime_loop_binder = getattr(self._channel, "bind_runtime_loop", None)
+        try:
+            await self._channel.disconnect()
+        finally:
+            if callable(runtime_loop_binder):
+                runtime_loop_binder(None)
+            self._started = False
+            self._normalizer = None
+            self._ready.clear()
+            self._set_health("stopped", ready=False)
+            self._unsubscribe_transport()
+            self._loop = None
 
     def health(self) -> EventSourceHealth:
         return self._health

@@ -103,6 +103,9 @@ resolve as an ambiguity and require an explicit URL/token.
 9. Verify the changed scope and required unchanged markers.
 10. Send the current authenticated user a bot direct message containing the
     document title/link, the approved change summary, and verification success.
+    The caller passes the already verified document title explicitly; the
+    notification adapter must not infer it from an optional resource-metadata
+    field or fall back to `未命名文档` for a verified named document.
 11. Return the notification status. If delivery failed, report it without
     repeating the edit.
 
@@ -146,8 +149,18 @@ time, sender, and content.
 - Require an explicit start and end time; never infer an unbounded history.
 - Resolve a supplied group name by normalized exact match and never choose a
   fuzzy or duplicate candidate.
-- Preserve chronological order across top-level messages and expanded thread
-  replies.
+- Collect every accepted page and expanded thread reply before rendering, then
+  apply one stable ascending sort by source creation time and message ID. The
+  document must read from oldest to newest like the source chat; entries without
+  a usable creation time appear after timestamped entries and retain their
+  upstream order.
+- Accept Feishu creation times represented as Unix seconds, Unix milliseconds,
+  RFC 3339, or the `lark-cli` local datetime form `YYYY-MM-DD HH:MM[:SS]`.
+  Offset-free values use the digest request timezone for both sorting and
+  rendering; they must not be downgraded to `日期未知`.
+- Render each message as one visually separated chat record. Date headings are
+  ascending, and each record keeps its time, sender, body, attachment metadata,
+  and adjacent images together.
 - Render sender names returned by IM; fall back to sender ID, then `System`.
 - Escape all message text and filenames as untrusted document data.
 - Insert successfully downloaded images adjacent to their message metadata.
@@ -162,3 +175,6 @@ time, sender, and content.
   contains the `群聊记录` marker. Never overwrite an unmarked same-title file.
 - Perform the normal live read-back check and send the edit-completion bot
   message when an existing digest was refreshed.
+- A successful digest result exposes the canonical absolute HTTPS document URL
+  returned by Feishu. A document token is valid for internal read-back but is
+  never an acceptable user-facing completion reference.

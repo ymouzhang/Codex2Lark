@@ -48,7 +48,7 @@ class IMAdmissionService:
         self._policy = policy or IMAdmissionPolicy()
 
     async def admit(self, message: IncomingMessage) -> IMAdmissionDecision:
-        reason = self._evaluate(message)
+        reason = self._evaluate_source(message)
         if reason is not IMAdmissionReason.ADMITTED:
             return IMAdmissionDecision(reason)
 
@@ -63,6 +63,9 @@ class IMAdmissionService:
 
         if not await self._message_mirror.upsert_message(message):
             return IMAdmissionDecision(IMAdmissionReason.ACCESS_REVOKED)
+        reason = self._evaluate_trigger(message)
+        if reason is not IMAdmissionReason.ADMITTED:
+            return IMAdmissionDecision(reason)
         source_payload = json.dumps(
             {
                 "chat_id": message.chat_id,
@@ -178,11 +181,15 @@ class IMAdmissionService:
                     return RunControlKind.STEER, instruction
         return RunControlKind.FOLLOW_UP, text
 
-    def _evaluate(self, message: IncomingMessage) -> IMAdmissionReason:
+    @staticmethod
+    def _evaluate_source(message: IncomingMessage) -> IMAdmissionReason:
         if message.chat_type != "group":
             return IMAdmissionReason.NOT_GROUP
         if message.sender_type in {"bot", "app", "system"}:
             return IMAdmissionReason.BOT_SENDER
+        return IMAdmissionReason.ADMITTED
+
+    def _evaluate_trigger(self, message: IncomingMessage) -> IMAdmissionReason:
         bot_open_id = self._bot_open_id()
         if not bot_open_id or not message.explicitly_mentions(bot_open_id):
             return IMAdmissionReason.BOT_NOT_MENTIONED

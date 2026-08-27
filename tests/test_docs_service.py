@@ -60,11 +60,15 @@ class StubNotifier:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.summaries: list[str] = []
+        self.titles: list[str] = []
 
     async def document_edited(self, **kwargs: object) -> dict[str, object]:
         summary = kwargs["change_summary"]
+        title = kwargs["document_title"]
         assert isinstance(summary, str)
+        assert isinstance(title, str)
         self.summaries.append(summary)
+        self.titles.append(title)
         if self.fail:
             raise RuntimeError("notification unavailable")
         return {"status": "sent", "message_id": "om_test"}

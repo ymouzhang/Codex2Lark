@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -7,7 +8,7 @@ from typing import Protocol
 from codex2lark.runtime.context import ContextEvidence
 
 from .attachments import AttachmentEvidence, AttachmentLoadRequest
-from .models import IncomingMessage
+from .models import IncomingMessage, StoredAttachment
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,10 @@ class MessagePage:
     complete: bool
 
 
+class IMHistoryUnavailableError(PermissionError):
+    """The verified trigger is readable but optional group history is not authorized."""
+
+
 @dataclass(frozen=True, slots=True)
 class IMContextBundle:
     trigger: IncomingMessage
@@ -49,6 +54,17 @@ class LiveIMReader(Protocol):
 
 class MessageMirror(Protocol):
     async def upsert_message(self, message: IncomingMessage) -> bool: ...
+
+    async def recent_attachments(
+        self,
+        tenant_key: str,
+        app_id: str,
+        chat_id: str,
+        *,
+        since_ms: int,
+        before_ms: int,
+        limit: int = 100,
+    ) -> list[StoredAttachment]: ...
 
 
 class AttachmentEvidenceLoader(Protocol):
@@ -85,14 +101,26 @@ class IMContextProvider:
         if trigger.is_recalled or trigger.is_deleted:
             raise LookupError("trigger message is no longer available")
 
-        if trigger.thread_id or trigger.root_id or trigger.parent_id:
-            page = await self._source.related_messages(trigger, limit=self._related_limit)
-        else:
-            page = await self._source.recent_messages(
+        warnings: list[str] = []
+        related = bool(trigger.thread_id or trigger.root_id or trigger.parent_id)
+        try:
+            if related:
+                page = await self._source.related_messages(trigger, limit=self._related_limit)
+            else:
+                page = await self._source.recent_messages(
+                    trigger,
+                    since_ms=max(0, trigger.occurred_at_ms - self._lookback_ms),
+                    limit=self._recent_limit,
+                )
+        except IMHistoryUnavailableError:
+            warnings.append("im_context_history_unavailable")
+            recovered = await self._recover_observed_attachments(
+                request,
                 trigger,
                 since_ms=max(0, trigger.occurred_at_ms - self._lookback_ms),
-                limit=self._recent_limit,
+                warnings=warnings,
             )
+            page = MessagePage(recovered, False)
 
         selected: dict[str, IncomingMessage] = {}
         for message in page.messages:
@@ -110,10 +138,14 @@ class IMContextProvider:
                 selected[message.message_id] = message
         ordered = sorted(selected.values(), key=lambda item: (item.occurred_at_ms, item.message_id))
         evidence = [self._evidence(message) for message in ordered]
-        warnings = [] if page.complete else ["im_context_incomplete"]
+        if not page.complete:
+            warnings.append("im_context_incomplete")
         if self._attachments is not None:
-            for message in (*ordered, trigger):
+            planned = self._plan_attachments(trigger, ordered, related=related, warnings=warnings)
+            for message, resource_keys in planned:
                 for attachment in message.attachments:
+                    if attachment.resource_key not in resource_keys:
+                        continue
                     loaded = await self._attachments.load(
                         AttachmentLoadRequest(
                             message.tenant_key,
@@ -128,6 +160,93 @@ class IMContextProvider:
                     if loaded.warning_code:
                         warnings.append(loaded.warning_code)
         return IMContextBundle(trigger, tuple(evidence), tuple(dict.fromkeys(warnings)))
+
+    @classmethod
+    def _plan_attachments(
+        cls,
+        trigger: IncomingMessage,
+        contextual: list[IncomingMessage],
+        *,
+        related: bool,
+        warnings: list[str],
+    ) -> tuple[tuple[IncomingMessage, frozenset[str]], ...]:
+        planned: list[tuple[IncomingMessage, frozenset[str]]] = []
+        if trigger.attachments:
+            planned.append((trigger, frozenset(item.resource_key for item in trigger.attachments)))
+        if related:
+            planned.extend(
+                (message, frozenset(item.resource_key for item in message.attachments))
+                for message in contextual
+                if message.attachments
+            )
+            return tuple(planned)
+
+        request = cls._normalized_filename_text(trigger.body_text)
+        candidates: dict[str, list[tuple[IncomingMessage, str]]] = {}
+        for message in contextual:
+            for attachment in message.attachments:
+                filename = cls._normalized_filename_text(attachment.filename or "")
+                if filename and filename in request:
+                    candidates.setdefault(filename, []).append((message, attachment.resource_key))
+        for matches in candidates.values():
+            if len(matches) != 1:
+                warnings.append("im_attachment_ambiguous")
+                continue
+            message, resource_key = matches[0]
+            planned.append((message, frozenset({resource_key})))
+        return tuple(planned)
+
+    @staticmethod
+    def _normalized_filename_text(value: str) -> str:
+        return unicodedata.normalize("NFKC", value).casefold()
+
+    async def _recover_observed_attachments(
+        self,
+        request: IMContextRequest,
+        trigger: IncomingMessage,
+        *,
+        since_ms: int,
+        warnings: list[str],
+    ) -> tuple[IncomingMessage, ...]:
+        observed = await self._mirror.recent_attachments(
+            request.tenant_key,
+            request.app_id,
+            request.chat_id,
+            since_ms=since_ms,
+            before_ms=trigger.occurred_at_ms,
+        )
+        request_text = self._normalized_filename_text(trigger.body_text)
+        matches: dict[str, list[StoredAttachment]] = {}
+        for attachment in observed:
+            filename = self._normalized_filename_text(attachment.filename or "")
+            if filename and filename in request_text:
+                matches.setdefault(filename, []).append(attachment)
+
+        recovered: list[IncomingMessage] = []
+        for candidates in matches.values():
+            identities = {(item.message_id, item.resource_key) for item in candidates}
+            if len(identities) != 1:
+                warnings.append("im_attachment_ambiguous")
+                continue
+            candidate = candidates[0]
+            live = await self._source.get_message(
+                IMContextRequest(
+                    request.tenant_key,
+                    request.app_id,
+                    request.chat_id,
+                    candidate.message_id,
+                )
+            )
+            self._validate_binding(request, live)
+            live_names = {
+                self._normalized_filename_text(item.filename or "") for item in live.attachments
+            }
+            expected = self._normalized_filename_text(candidate.filename or "")
+            if expected not in live_names:
+                warnings.append("im_attachment_live_mismatch")
+                continue
+            recovered.append(live)
+        return tuple(recovered)
 
     @staticmethod
     def _validate_binding(request: IMContextRequest, message: IncomingMessage) -> None:

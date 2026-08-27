@@ -17,6 +17,7 @@ from .adapters.lark_cli import SUPPORTED_LARK_CLI_VERSION, safe_tool_call_error
 from .bootstrap.config import GatewayConfig, resolve_data_dir
 from .bootstrap.gateway import create_v3_gateway
 from .bootstrap.process_control import GatewayProcessController, GatewayStatusFiles
+from .capabilities.im.channel_adapter import ChannelPort, create_official_channel
 from .interfaces.application import create_application
 from .interfaces.mcp import run_stdio
 from .runtime.resources import ResourceLoader
@@ -188,9 +189,8 @@ def _doctor_gateway() -> int:
     return 0
 
 
-async def _gateway() -> int:
-    config = GatewayConfig.from_environment()
-    gateway = create_v3_gateway(config)
+async def _gateway(config: GatewayConfig, channel: ChannelPort) -> int:
+    gateway = create_v3_gateway(config, channel=channel)
     status_files = GatewayStatusFiles(config.data_dir)
     pid = os.getpid()
     started_at_ms = int(time.time() * 1000)
@@ -248,6 +248,15 @@ async def _gateway() -> int:
         finally:
             status_files.clear_if_owner(pid)
     return 0
+
+
+def _run_gateway() -> int:
+    config = GatewayConfig.from_environment()
+    channel = create_official_channel(
+        app_id=config.feishu_app_id,
+        app_secret=config.feishu_app_secret,
+    )
+    return asyncio.run(_gateway(config, channel))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -421,7 +430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.gateway_action == "stop":
                 print(GatewayStatusFiles.as_json(controller.stop()))
                 return 0
-            return asyncio.run(_gateway())
+            return _run_gateway()
         except (RuntimeError, TimeoutError, ValueError) as exc:
             logging.error("Gateway configuration is invalid: %s", exc)
             return 2

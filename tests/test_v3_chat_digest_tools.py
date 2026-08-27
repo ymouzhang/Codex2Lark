@@ -89,3 +89,18 @@ async def test_chat_digest_verification_requires_resource_reference() -> None:
     verification = await tool.verify(arguments(), {"verification": {"status": "passed"}}, context())
 
     assert verification.state is VerificationState.FAILED
+
+
+async def test_chat_digest_verification_rejects_bare_document_token() -> None:
+    tool = PublishChatDigestTool(FakeDigestService(), Identity.USER)
+    verification = await tool.verify(
+        arguments(),
+        {
+            "verification": {"status": "passed"},
+            "resource": {"document_id": "docx_token_only"},
+        },
+        context(),
+    )
+
+    assert verification.state is VerificationState.FAILED
+    assert verification.resource_refs == ()

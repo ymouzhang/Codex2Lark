@@ -88,6 +88,13 @@ applies the same derived-data invalidation before an edited source is used.
 Checkpoint reuse is conditional on an exact source-version match; a stale
 checkpoint is discarded and rebuilt rather than failing the user task.
 
+An eligible group message may be mirrored without starting an Agent run. This
+observation path exists so a later explicit request can resolve a recently sent
+image or file when Feishu delivers ordinary group messages to the application.
+It applies the same enabled-chat, authorized-actor, membership, encryption,
+retention, edit, recall, and revocation rules as task admission. It creates no
+runtime event, task, acknowledgement, or model call.
+
 A message starts an Agent run only when all conditions hold:
 
 1. `chat_type` is `group`;
@@ -99,7 +106,9 @@ A message starts an Agent run only when all conditions hold:
    mention placeholder.
 
 Bot-authored messages, ordinary unaddressed chat, edited-event echoes, malformed
-events, and duplicate deliveries do not invoke the model.
+events, and duplicate deliveries do not invoke the model. Eligible ordinary
+user messages may still take the observation path above; bot/system messages
+and messages denied by chat, actor, or membership policy create no mirror row.
 
 ### Runtime API 1 IM boundary
 
@@ -127,7 +136,8 @@ A crash between the two operations may leave an unused mirror row but cannot
 acknowledge forgotten work. Redelivery completes admission. The runtime event's
 `(tenant, app, event_id)` uniqueness prevents a second task or acknowledgement.
 Ignored events return a typed reason and create neither a task nor an outbox
-intent.
+intent. An eligible ordinary message is ignored for task admission only after
+its normalized encrypted mirror has been upserted.
 
 The Channel adapter registers only message and bot-membership callbacks. A
 callback converts the SDK value into the canonical inbound value and returns
@@ -141,18 +151,36 @@ Backpressure therefore remains at the upstream callback boundary.
 The pinned Channel SDK normally schedules its public async handler after its
 WebSocket dispatcher returns. The production adapter therefore binds at the
 pinned P2 dispatcher method, converts the raw SDK model to the canonical value,
-and blocks that dispatcher on a dedicated admission thread for at most 25
-seconds. A committed admission returns normally; validation, storage, or timeout
-failure propagates to the dispatcher so the WebSocket response is non-success
-and Feishu can redeliver. This narrow version-coupled adapter is covered by a
-contract test and must be re-audited before changing `lark-channel-sdk`.
+and submits the admission coroutine to the already-running Gateway loop with a
+thread-safe future. The SDK dispatcher blocks on that future for at most 25
+seconds, but no extra admission executor or per-event asyncio loop exists.
+Concurrent callbacks may schedule concurrently; SQLite remains the single
+transaction serializer. A committed admission returns normally; validation,
+storage, cancellation, or timeout failure cancels the submitted coroutine and
+propagates to the dispatcher so the WebSocket response is non-success and
+Feishu can redeliver.
+
+The official Channel object is created synchronously before the Gateway calls
+`asyncio.run()`. This prevents the pinned SDK's module-level WebSocket loop from
+capturing the active Runtime loop. Event callbacks cross from the SDK thread to
+the Runtime only through the bounded bridge above; reconnect notifications use
+the same Runtime loop's thread-safe scheduling. Async message sends and media
+downloads remain ordinary `ChannelPort` calls from the Runtime loop. The pinned
+adapter also binds SDK-owned periodic transport work to that WebSocket loop and
+cancels it before stopping the loop. SDK background cancellation uses a
+thread-safe callback barrier instead of creating a final coroutine during
+shutdown, so graceful shutdown leaves no orphaned coroutines. This
+version-coupled lifecycle is covered in a clean subprocess and must be
+re-audited before changing `lark-channel-sdk`.
 
 The IM outbox publisher accepts only typed acknowledgement, progress, approval,
 and terminal payloads. It replies to the source `message_id`, preserves thread
-placement, passes the durable outbox idempotency key as the SDK request UUID,
-and treats an SDK result as sent only when success and an upstream message
-reference are both present. Failed or ambiguous sends remain retryable and are
-never converted into task completion.
+placement, and derives a deterministic RFC 4122 UUID from the durable internal
+idempotency key before calling Feishu. Internal keys remain descriptive and are
+not constrained by transport field limits, while every retry maps to the same
+valid Feishu UUID. An SDK result is sent only when success and an upstream
+message reference are both present. Failed or ambiguous sends remain retryable
+and are never converted into task completion.
 
 ### Active-run control admission
 
@@ -193,7 +221,19 @@ states:
 The terminal reply states the status explicitly, summarizes completed work,
 links created or modified Feishu resources, reports verification warnings, and
 invites the user to ask a follow-up question. A model message alone is never
-evidence of completion.
+evidence of completion. User-facing Feishu document references are labeled and
+rendered as complete absolute HTTPS URLs so the client can make them clickable;
+opaque document tokens are never presented as successful completion links.
+
+Typed warning codes remain in durable outcomes and diagnostics, but the IM
+renderer never exposes internal identifiers such as
+`im_context_history_unavailable`. Known context warnings are localized and
+deduplicated: missing history plus incomplete context becomes one concise note
+that Feishu rejected bot-identity group-history access and the answer therefore
+used only the verified current message. This warning maps to upstream error
+`230027`; the operations guide names the required current application-identity
+scope. Other warnings retain their existing truthful presentation until a
+dedicated localization is defined.
 
 Acknowledgement and terminal replies use deterministic idempotency keys derived
 from the source `message_id` and reply kind.
@@ -256,9 +296,13 @@ the trigger from background evidence, and emits one `ContextEvidence` per live
 message with `im.message:<message_id>` provenance and its source update version.
 Recalled/deleted items become mirror tombstones and never become model evidence.
 An incomplete page is a typed warning; the provider never labels incomplete
-history as complete. Local mirror rows are used for restart and reconciliation,
-but the provider does not silently fall back to stale local content when a
-required live read fails.
+history as complete. The trigger-message live read and trusted binding are
+required. When Feishu explicitly reports that the bot lacks the optional group
+history scope, the provider continues with the verified trigger only and emits
+`im_context_history_unavailable`; it never substitutes stale mirror content.
+Network failures, malformed responses, binding violations, and other live-read
+errors still fail the run. Local mirror rows are used only for restart and
+reconciliation.
 
 The production provider also loads attachment references from the trigger and
 selected contextual messages through the bounded attachment service. Downloads
@@ -266,6 +310,27 @@ are authorized by tenant/app/chat/message/resource binding and use the Feishu
 message-resource endpoint. Parsed text or safe metadata becomes separately
 attributed evidence; parser blocks, truncation, and unsupported media become
 typed warnings rather than silent omissions.
+
+Attachment resolution is relationship-first and must remain within IM:
+
+1. use an attachment on the triggering message;
+2. use an attachment on the replied-to message or active thread;
+3. for an unthreaded request that names a file, resolve an exact normalized
+   filename in the bounded live recent-message page;
+4. if history is unauthorized, no exact match exists, or several exact matches
+   are ambiguous, report the attachment as unavailable and ask the user to
+   reply directly to the file message or attach it again.
+
+The Agent must not search Drive, Docs, the managed authoring folder, or another
+business-data source as a substitute for an unresolved group attachment. When
+group-history listing is denied but Feishu previously delivered the ordinary
+file event, the encrypted local attachment index may identify a unique exact
+filename and its message ID inside the same bounded lookback window. The
+provider must refetch that exact message ID from Feishu, revalidate tenant/app/
+chat and filename bindings, and use only the live result. Local observation is
+therefore a discovery index, never an authoritative content fallback. If the
+event was not delivered, the live refetch fails, or the filename is ambiguous,
+the attachment remains unavailable.
 
 ## 6. Attachment collection and parsing
 
@@ -291,7 +356,8 @@ Supported first-release parsing routes are:
 | XLSX | bounded sheets, typed cells, formulas, and dimensions |
 | PPTX | slide titles, body text, notes, and media references |
 | audio and video | metadata only in the first release |
-| archive, executable, and script | store when policy permits; never unpack or execute automatically |
+| source code and scripts | bounded inert UTF-8 text decoding; never execute |
+| archive and executable | store when policy permits; never unpack or execute automatically |
 
 Every parser returns text or structured evidence with source provenance,
 truncation warnings, parser version, and content hash. Parsing never executes
@@ -313,12 +379,14 @@ owner-only temporary file and atomic link. SQLite then records the blob
 reference. A crash before that transaction may leave only an encrypted orphan,
 which maintenance removes; a database row never points at plaintext.
 
-Text/Markdown/JSON/CSV use bounded decoding and validation. PDF uses the pinned
+Text/Markdown/JSON/CSV and recognized source-code/script extensions use bounded
+UTF-8 decoding. Script text is evidence only: it is never imported, evaluated,
+spawned, sourced, or passed to a shell. PDF uses the pinned
 `pypdf` parser without following links. DOCX/XLSX/PPTX use bounded ZIP member
 selection and `defusedxml`; formulas are rendered as inert text and never
 evaluated. Images produce a typed managed-image reference plus metadata. Audio
-and video produce metadata only. Archives, scripts, and executables return a
-blocked parser result and are never unpacked or executed. Parser output is
+and video produce metadata only. Archives and executables return a blocked
+parser result and are never unpacked or executed. Parser output is
 encrypted and keyed by content hash, parser ID/version, and policy version.
 
 ## 7. Durable storage

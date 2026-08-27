@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Protocol
+from uuid import NAMESPACE_URL, uuid5
 
 from codex2lark.core.events import LeasedOutboxMessage
 
@@ -41,7 +42,7 @@ class IMOutboxPublisher:
                 "reply_in_thread": bool(item.payload.get("reply_in_thread", False)),
                 "receive_id_type": "chat_id",
                 "reply_target_gone": "fail",
-                "uuid": item.idempotency_key,
+                "uuid": self._request_uuid(item.idempotency_key),
             },
         )
         success = bool(getattr(result, "success", False))
@@ -58,3 +59,7 @@ class IMOutboxPublisher:
         if not isinstance(value, str) or not value:
             raise ValueError(f"Feishu IM outbox payload requires {field}")
         return value
+
+    @staticmethod
+    def _request_uuid(idempotency_key: str) -> str:
+        return str(uuid5(NAMESPACE_URL, f"urn:codex2lark:feishu-im-reply:{idempotency_key}"))

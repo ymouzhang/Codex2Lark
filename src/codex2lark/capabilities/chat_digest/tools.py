@@ -26,7 +26,9 @@ class PublishChatDigestTool:
         2,
         (
             "Create or refresh one verified chronological history document for the "
-            "current trusted Feishu group. "
+            "current trusted Feishu group. This is the required tool whenever the user "
+            "asks to collect, archive, organize, or publish current-group messages; do "
+            "not use generic document creation for that intent. "
             "Images may be embedded; ordinary files are represented by filename only."
         ),
         {
@@ -85,9 +87,9 @@ class PublishChatDigestTool:
         resource = observation.get("resource")
         refs: list[str] = []
         if isinstance(resource, dict):
-            for field in ("url", "document_id", "token"):
+            for field in ("url", "document_url"):
                 value = resource.get(field)
-                if isinstance(value, str) and value:
+                if isinstance(value, str) and value.startswith("https://"):
                     refs.append(value)
                     break
         state = (

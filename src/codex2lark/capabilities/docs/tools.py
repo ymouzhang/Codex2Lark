@@ -128,9 +128,9 @@ class _DocumentTool:
         resource = observation.get("resource")
         if not isinstance(resource, dict):
             return ()
-        for field in ("url", "document_url", "token", "document_id"):
+        for field in ("url", "document_url"):
             value = resource.get(field)
-            if isinstance(value, str) and value:
+            if isinstance(value, str) and value.startswith("https://"):
                 return (value,)
         return ()
 
@@ -186,7 +186,8 @@ class CreateDocumentTool(_DocumentTool):
         (
             "Create a rich Feishu document from validated Feishu XML in the managed folder and "
             "read it back. Use headings, tables, callouts, code, and Mermaid whiteboards when "
-            "useful."
+            "useful. Do not use this tool to collect or archive messages from the current "
+            "group; that intent requires feishu.chat.digest.publish."
         ),
         _object(
             {

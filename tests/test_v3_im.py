@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
+import threading
 import zipfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import UUID
+
+import pytest
 
 from codex2lark.capabilities.im.admission import IMAdmissionService
 from codex2lark.capabilities.im.admission_policy import IMAdmissionPolicy
@@ -20,17 +25,20 @@ from codex2lark.capabilities.im.channel_adapter import (
     ChannelMessageNormalizer,
     OfficialChannelEventSource,
     _DurableDispatcherBridge,
+    _install_channel_log_redaction,
     create_official_channel,
 )
 from codex2lark.capabilities.im.context_provider import (
     IMContextProvider,
     IMContextRequest,
+    IMHistoryUnavailableError,
     MessagePage,
 )
 from codex2lark.capabilities.im.lifecycle import (
     IMLifecycleAdmissionService,
     IMLifecycleTaskHandler,
 )
+from codex2lark.capabilities.im.live_reader import OfficialIMMessageAPI
 from codex2lark.capabilities.im.membership import (
     BotAddedAdmissionService,
     MembershipTaskHandler,
@@ -136,7 +144,44 @@ async def test_exact_mention_admission_rejects_non_requests(tmp_path: Path) -> N
                 for table in ("im_messages", "runtime_tasks", "runtime_outbox")
             )
         )
-        assert counts == (0, 0, 0)
+        assert counts == (1, 0, 0)
+    finally:
+        await database.close()
+
+
+async def test_ordinary_human_message_is_observed_without_starting_work(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, service = await setup(tmp_path)
+    incoming = message(
+        event_id="event-file",
+        message_id="om_file",
+        message_type="file",
+        body_text="",
+        mentions=(),
+        thread_id=None,
+        attachments=(
+            AttachmentReference("file-script", "file", "trojan-go_mod1.sh", "text/plain", 12),
+        ),
+    )
+    try:
+        decision = await service.admit(incoming)
+        stored = await repository.get_message("tenant-1", "app-1", "om_file")
+        attachment = await repository.get_attachment(
+            "tenant-1", "app-1", "oc_group", "om_file", "file-script"
+        )
+        counts = await database.call(
+            lambda connection: tuple(
+                connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("runtime_tasks", "runtime_outbox")
+            )
+        )
+
+        assert decision.reason is IMAdmissionReason.BOT_NOT_MENTIONED
+        assert stored is not None
+        assert attachment is not None
+        assert attachment.filename == "trojan-go_mod1.sh"
+        assert counts == (0, 0)
     finally:
         await database.close()
 
@@ -444,8 +489,27 @@ def test_raw_channel_normalizer_preserves_durable_admission_fields() -> None:
     assert normalized.explicitly_mentions("ou_bot")
 
 
+def test_channel_logger_redacts_websocket_url_and_query_credentials() -> None:
+    output = io.StringIO()
+    channel_logger = logging.Logger("test-channel")
+    channel_logger.addHandler(logging.StreamHandler(output))
+    _install_channel_log_redaction(channel_logger)
+    _install_channel_log_redaction(channel_logger)
+
+    channel_logger.info(
+        "connected to wss://frontier.example/ws?access_key=secret&ticket=secret-ticket"
+    )
+
+    logged = output.getvalue()
+    assert "wss://" not in logged
+    assert "access_key" not in logged
+    assert "secret-ticket" not in logged
+    assert logged.count("<redacted websocket endpoint>") == 1
+
+
 async def test_pinned_channel_dispatcher_waits_for_durable_handler() -> None:
     bridge = _DurableDispatcherBridge(lambda value: value)
+    bridge.bind_runtime_loop(asyncio.get_running_loop())
     completed: list[str] = []
 
     async def admit(raw: dict[str, Any]) -> None:
@@ -454,12 +518,83 @@ async def test_pinned_channel_dispatcher_waits_for_durable_handler() -> None:
 
     bridge.bind(admit, None, admit, admit, admit)
 
-    bridge.dispatch_message(raw_channel_event())
-    bridge.dispatch_message_recalled(raw_channel_event())
-    bridge.dispatch_bot_removed(raw_channel_event())
-    bridge.dispatch_card_action(raw_channel_event())
+    errors: list[BaseException] = []
 
+    async def dispatch(callback: Any) -> None:
+        def invoke() -> None:
+            try:
+                callback(raw_channel_event())
+            except BaseException as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=invoke)
+        thread.start()
+        while thread.is_alive():
+            await asyncio.sleep(0.001)
+        thread.join()
+
+    await dispatch(bridge.dispatch_message)
+    await dispatch(bridge.dispatch_message_recalled)
+    await dispatch(bridge.dispatch_bot_removed)
+    await dispatch(bridge.dispatch_card_action)
+
+    assert errors == []
     assert completed == ["event-raw", "event-raw", "event-raw", "event-raw"]
+    bridge.close()
+
+
+async def test_pinned_channel_bridge_allows_concurrent_group_admission() -> None:
+    bridge = _DurableDispatcherBridge(lambda value: value)
+    bridge.bind_runtime_loop(asyncio.get_running_loop())
+    all_started = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+    maximum_active = 0
+
+    async def admit(_raw: dict[str, Any]) -> None:
+        nonlocal active, maximum_active
+        active += 1
+        maximum_active = max(maximum_active, active)
+        if active == 3:
+            all_started.set()
+        await release.wait()
+        active -= 1
+
+    bridge.bind(admit, None, None, None, None)
+    errors: list[BaseException] = []
+
+    def invoke() -> None:
+        try:
+            bridge.dispatch_message(raw_channel_event())
+        except BaseException as exc:
+            errors.append(exc)
+
+    callbacks = [threading.Thread(target=invoke) for _ in range(3)]
+    for callback in callbacks:
+        callback.start()
+    await asyncio.wait_for(all_started.wait(), timeout=1)
+    release.set()
+    while any(callback.is_alive() for callback in callbacks):
+        await asyncio.sleep(0.001)
+    for callback in callbacks:
+        callback.join()
+
+    assert errors == []
+    assert maximum_active == 3
+    bridge.close()
+
+
+async def test_pinned_channel_bridge_rejects_runtime_loop_blocking() -> None:
+    bridge = _DurableDispatcherBridge(lambda value: value)
+    bridge.bind_runtime_loop(asyncio.get_running_loop())
+
+    async def admit(_raw: dict[str, Any]) -> None:
+        return None
+
+    bridge.bind(admit, None, None, None, None)
+
+    with pytest.raises(RuntimeError, match="cannot block the Runtime event loop"):
+        bridge.dispatch_message(raw_channel_event())
     bridge.close()
 
 
@@ -908,12 +1043,16 @@ async def test_im_outbox_publisher_preserves_thread_and_requires_confirmation() 
     )
 
     assert await publisher.publish(item) == "om_reply"
-    assert channel.sent[0][2] == {
+    send_options = channel.sent[0][2]
+    request_uuid = send_options.pop("uuid")
+    assert isinstance(request_uuid, str)
+    assert UUID(request_uuid).version == 5
+    assert request_uuid == publisher._request_uuid("stable-key")
+    assert send_options == {
         "reply_to": "om_channel",
         "reply_in_thread": True,
         "receive_id_type": "chat_id",
         "reply_target_gone": "fail",
-        "uuid": "stable-key",
     }
     approval = replace(
         item,
@@ -1066,6 +1205,104 @@ async def test_context_provider_rejects_cross_chat_source_data(tmp_path: Path) -
         await database.close()
 
 
+async def test_context_provider_continues_only_for_explicit_missing_history_scope(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    trigger = message()
+
+    class MissingHistoryReader(FakeLiveIMReader):
+        async def related_messages(self, trigger: IncomingMessage, *, limit: int) -> MessagePage:
+            raise IMHistoryUnavailableError("missing im:message.group_msg")
+
+        async def recent_messages(
+            self, trigger: IncomingMessage, *, since_ms: int, limit: int
+        ) -> MessagePage:
+            raise IMHistoryUnavailableError("missing im:message.group_msg")
+
+    try:
+        bundle = await IMContextProvider(MissingHistoryReader(trigger, ()), repository).collect(
+            IMContextRequest("tenant-1", "app-1", "oc_group", "om_request")
+        )
+
+        assert bundle.trigger == trigger
+        assert bundle.evidence == ()
+        assert bundle.warnings == (
+            "im_context_history_unavailable",
+            "im_context_incomplete",
+        )
+        assert await repository.get_message("tenant-1", "app-1", "om_request") is not None
+    finally:
+        await database.close()
+
+
+async def test_context_provider_uses_observation_only_to_refetch_named_file_live(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, admission = await setup(tmp_path)
+    file_message = message(
+        event_id="file-event",
+        message_id="om_file",
+        message_type="file",
+        body_text="",
+        mentions=(),
+        attachments=(AttachmentReference("file-script", "file", "trojan-go_mod1.sh"),),
+        occurred_at_ms=90,
+        received_at_ms=91,
+        thread_id=None,
+    )
+    trigger = message(
+        body_text="Please analyze trojan-go_mod1.sh",
+        attachments=(),
+        occurred_at_ms=100,
+        thread_id=None,
+        root_id=None,
+        parent_id=None,
+    )
+
+    class HistoryDeniedReader(FakeLiveIMReader):
+        async def get_message(self, request: IMContextRequest) -> IncomingMessage:
+            if request.message_id == file_message.message_id:
+                return file_message
+            return await super().get_message(request)
+
+        async def recent_messages(
+            self, trigger: IncomingMessage, *, since_ms: int, limit: int
+        ) -> MessagePage:
+            raise IMHistoryUnavailableError("missing application history scope")
+
+    loader = FakeAttachmentLoader()
+    try:
+        observed = await admission.admit(file_message)
+        bundle = await IMContextProvider(
+            HistoryDeniedReader(trigger, ()),
+            repository,
+            attachments=loader,
+            clock_ms=lambda: 500,
+        ).collect(IMContextRequest("tenant-1", "app-1", "oc_group", "om_request"))
+
+        assert observed.reason is IMAdmissionReason.BOT_NOT_MENTIONED
+        assert len(loader.requests) == 1
+        request, _now_ms = loader.requests[0]
+        assert isinstance(request, AttachmentLoadRequest)
+        assert request.message_id == "om_file"
+        assert request.resource_key == "file-script"
+        assert "im_context_history_unavailable" in bundle.warnings
+    finally:
+        await database.close()
+
+
+def test_live_reader_types_only_missing_group_history_scope() -> None:
+    with pytest.raises(IMHistoryUnavailableError):
+        OfficialIMMessageAPI._require_success(
+            SimpleNamespace(code=230027, request_id="req-1"), "list messages"
+        )
+    with pytest.raises(RuntimeError, match="code=230027"):
+        OfficialIMMessageAPI._require_success(
+            SimpleNamespace(code=230027, request_id="req-2"), "get message"
+        )
+
+
 class FakeAttachmentLoader:
     def __init__(self) -> None:
         self.requests: list[tuple[object, int]] = []
@@ -1107,6 +1344,92 @@ async def test_context_provider_loads_bound_attachment_evidence_and_warning(
         assert isinstance(request, AttachmentLoadRequest)
         assert request.message_id == "om_request"
         assert now_ms == 500
+    finally:
+        await database.close()
+
+
+async def test_context_provider_resolves_only_exact_named_recent_attachment(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    trigger = message(
+        body_text="Please analyze trojan-go_mod1.sh",
+        attachments=(),
+        thread_id=None,
+        root_id=None,
+        parent_id=None,
+    )
+    wanted = message(
+        event_id="file-event",
+        message_id="om_file",
+        message_type="file",
+        body_text="",
+        mentions=(),
+        attachments=(AttachmentReference("wanted-key", "file", "trojan-go_mod1.sh"),),
+        occurred_at_ms=90,
+        thread_id=None,
+    )
+    unrelated = message(
+        event_id="other-event",
+        message_id="om_other",
+        message_type="file",
+        body_text="",
+        mentions=(),
+        attachments=(AttachmentReference("other-key", "file", "secrets.txt"),),
+        occurred_at_ms=80,
+        thread_id=None,
+    )
+    loader = FakeAttachmentLoader()
+    try:
+        bundle = await IMContextProvider(
+            FakeLiveIMReader(trigger, (unrelated, wanted)),
+            repository,
+            attachments=loader,
+            clock_ms=lambda: 500,
+        ).collect(IMContextRequest("tenant-1", "app-1", "oc_group", "om_request"))
+
+        assert len(loader.requests) == 1
+        request, _now_ms = loader.requests[0]
+        assert isinstance(request, AttachmentLoadRequest)
+        assert request.message_id == "om_file"
+        assert request.resource_key == "wanted-key"
+        assert "im_attachment_ambiguous" not in bundle.warnings
+    finally:
+        await database.close()
+
+
+async def test_context_provider_does_not_guess_between_duplicate_filenames(
+    tmp_path: Path,
+) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    trigger = message(
+        body_text="Please analyze config.sh",
+        attachments=(),
+        thread_id=None,
+        root_id=None,
+        parent_id=None,
+    )
+    candidates = tuple(
+        message(
+            event_id=f"file-event-{index}",
+            message_id=f"om_file_{index}",
+            message_type="file",
+            body_text="",
+            mentions=(),
+            attachments=(AttachmentReference(f"key-{index}", "file", "config.sh"),),
+            occurred_at_ms=80 + index,
+            thread_id=None,
+        )
+        for index in range(2)
+    )
+    loader = FakeAttachmentLoader()
+    try:
+        bundle = await IMContextProvider(
+            FakeLiveIMReader(trigger, candidates), repository, attachments=loader
+        ).collect(IMContextRequest("tenant-1", "app-1", "oc_group", "om_request"))
+
+        assert loader.requests == []
+        assert "im_attachment_ambiguous" in bundle.warnings
     finally:
         await database.close()
 
@@ -1238,15 +1561,19 @@ def stored_attachment(filename: str, *, resource_type: str = "file") -> Any:
     )
 
 
-def test_safe_attachment_parser_keeps_formulas_inert_and_blocks_active_content() -> None:
+def test_safe_attachment_parser_keeps_formulas_and_scripts_inert() -> None:
     parser = SafeAttachmentParser()
     workbook = parser.parse(stored_attachment("book.xlsx"), xlsx_bytes())
-    blocked = parser.parse(stored_attachment("payload.sh"), b"echo unsafe")
+    script = parser.parse(stored_attachment("payload.sh"), b"#!/bin/sh\necho inspect-only")
+    blocked = parser.parse(stored_attachment("payload.exe"), b"MZ executable")
 
     assert workbook.state == "parsed"
     assert workbook.content is not None
     assert "A1=Revenue" in workbook.content
     assert "[formula:SUM(B2:B3)]" in workbook.content
+    assert script.state == "parsed"
+    assert script.content_kind == "source_code"
+    assert script.content == "#!/bin/sh\necho inspect-only"
     assert blocked.state == "blocked"
     assert blocked.warning_code == "active_content_blocked"
 
@@ -1340,6 +1667,28 @@ def response_templates() -> IMResponseTemplates:
     )
 
 
+def test_im_terminal_renderer_localizes_and_deduplicates_context_warnings() -> None:
+    handler = object.__new__(IMMentionTaskHandler)
+    handler._templates = response_templates()
+
+    rendered = handler._render(
+        AgentOutcome(
+            RunStatus.COMPLETED,
+            "Answer based on the current message.",
+            warnings=(
+                "im_context_history_unavailable",
+                "im_context_incomplete",
+            ),
+        )
+    )
+
+    assert "im_context_" not in rendered
+    assert rendered.count("回答仅基于当前消息") == 1
+    assert "230027" in rendered
+    assert "应用身份" in rendered
+    assert "Completed. Ask me if anything is unclear." in rendered
+
+
 async def test_im_task_handler_renders_verified_terminal_reply_and_reuses_terminal_run(
     tmp_path: Path,
 ) -> None:
@@ -1379,6 +1728,7 @@ async def test_im_task_handler_renders_verified_terminal_reply_and_reuses_termin
         assert "https://example.feishu.cn/docx/docx_1" in str(
             result.terminal_message.payload["text"]
         )
+        assert "文档链接:" in str(result.terminal_message.payload["text"])
 
         run_id = handler.run_id_for_task("task-recovered")
         await sessions.start_run(

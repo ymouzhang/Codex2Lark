@@ -4,13 +4,18 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from codex2lark.adapters.lark_cli import LarkCliResult
 from codex2lark.core.errors import AmbiguityError, Codex2LarkError
 from codex2lark.core.models import ChatDigestRequest, Identity
-from codex2lark.services.chat_digest import ChatDigestService, _normalize_message
+from codex2lark.services.chat_digest import (
+    ChatDigestService,
+    _flatten_messages,
+    _normalize_message,
+)
 
 
 class DigestDrive:
@@ -230,6 +235,79 @@ def test_post_resource_markers_become_image_and_filename_metadata() -> None:
     assert "文件: architecture.pdf (未下载)" in entry.text
 
 
+def test_flattened_messages_are_globally_ascending_with_undated_entries_last() -> None:
+    entries = _flatten_messages(
+        [
+            {
+                "message_id": "om_late",
+                "msg_type": "text",
+                "create_time": "2000",
+                "content": '{"text":"late"}',
+                "thread_replies": [
+                    {
+                        "message_id": "om_middle",
+                        "msg_type": "text",
+                        "create_time": "1500",
+                        "content": '{"text":"middle"}',
+                    }
+                ],
+            },
+            {
+                "message_id": "om_unknown_first",
+                "msg_type": "system",
+                "content": "{}",
+            },
+            {
+                "message_id": "om_early",
+                "msg_type": "text",
+                "create_time": "1000",
+                "content": '{"text":"early"}',
+            },
+            {
+                "message_id": "om_unknown_second",
+                "msg_type": "system",
+                "content": "{}",
+            },
+        ]
+    )
+
+    assert [entry.message_id for entry in entries] == [
+        "om_early",
+        "om_middle",
+        "om_late",
+        "om_unknown_first",
+        "om_unknown_second",
+    ]
+
+
+def test_lark_cli_local_datetime_strings_are_parsed_and_sorted() -> None:
+    entries = _flatten_messages(
+        [
+            {
+                "message_id": "om_late",
+                "msg_type": "text",
+                "create_time": "2026-08-26 21:04",
+                "content": '{"text":"late"}',
+            },
+            {
+                "message_id": "om_early",
+                "msg_type": "text",
+                "create_time": "2026-07-28 16:15",
+                "content": '{"text":"early"}',
+            },
+            {
+                "message_id": "om_middle",
+                "msg_type": "text",
+                "create_time": "2026-08-26 20:49:30",
+                "content": '{"text":"middle"}',
+            },
+        ],
+        zone=ZoneInfo("Asia/Shanghai"),
+    )
+
+    assert [entry.message_id for entry in entries] == ["om_early", "om_middle", "om_late"]
+
+
 @pytest.mark.asyncio
 async def test_digest_orders_messages_inserts_images_and_never_downloads_files() -> None:
     lark = DigestLark(messages=sample_messages())
@@ -246,6 +324,7 @@ async def test_digest_orders_messages_inserts_images_and_never_downloads_files()
 
     assert result["ok"] is True
     assert result["action"] == "created"
+    assert result["resource"]["url"] == "https://example.feishu.cn/docx/docx_digest"
     assert result["notification"]["status"] == "not_applicable"
     assert result["stats"] == {
         "messages": 4,
@@ -256,6 +335,8 @@ async def test_digest_orders_messages_inserts_images_and_never_downloads_files()
     assert lark.uploaded_xml.index("张三") < lark.uploaded_xml.index("李四")
     assert lark.uploaded_xml.index("李四") < lark.uploaded_xml.index("王五")
     assert lark.uploaded_xml.index("王五") < lark.uploaded_xml.index("赵六")
+    assert lark.uploaded_xml.count("<blockquote>") == 4
+    assert lark.uploaded_xml.count("<hr/>") == 4
     assert "讨论 &lt;部署&gt; 方案" in lark.uploaded_xml
     assert "文件: plan.pdf (未下载)" in lark.uploaded_xml
     assert '<img path="@./chat-image-0.png"' in lark.uploaded_xml
@@ -451,6 +532,7 @@ async def test_existing_recognized_digest_is_refreshed_and_notified() -> None:
     assert any(call[:2] == ("docs", "+update") for call, _ in lark.calls)
     assert all(call[:2] != ("docs", "+create") for call, _ in lark.calls)
     assert notifier.calls[0]["operations_applied"] == 1
+    assert notifier.calls[0]["document_title"] == "项目群"
 
 
 @pytest.mark.asyncio

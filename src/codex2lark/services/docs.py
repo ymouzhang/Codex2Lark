@@ -13,6 +13,7 @@ from ..authoring.verifier import (
     extract_content,
     extract_resource,
     extract_revision,
+    find_first_value,
     verify_document,
 )
 from ..core.errors import AmbiguityError, ConflictError, VerificationError
@@ -22,6 +23,7 @@ from ..core.models import (
     DocumentFormat,
     EditCommand,
     EditDocumentRequest,
+    Identity,
     InspectDocumentRequest,
     PublishDocumentRequest,
     ResourceRef,
@@ -43,6 +45,48 @@ class DocsService:
         self.lark = lark
         self.drive = drive or DriveService(lark)
         self.notifier = notifier or NotificationService(lark)
+
+    @staticmethod
+    def _absolute_url(resource: dict[str, Any]) -> str | None:
+        value = find_first_value(resource, {"url", "document_url"})
+        return value if isinstance(value, str) and value.startswith("https://") else None
+
+    async def _canonical_resource(
+        self,
+        *,
+        live_resource: dict[str, Any],
+        title: str,
+        identity: Identity,
+        fallback_resource: dict[str, Any] | None = None,
+        fallback_url: str | None = None,
+    ) -> dict[str, Any]:
+        url = self._absolute_url(live_resource)
+        if url is None and fallback_resource is not None:
+            url = self._absolute_url(fallback_resource)
+        if url is None and isinstance(fallback_url, str) and fallback_url.startswith("https://"):
+            url = fallback_url
+        if url is None:
+            expected_token = find_first_value(live_resource, {"document_id", "token"})
+            found = await self.drive.search_documents(title, identity)
+            matches = found.get("matches", [])
+            candidates = [
+                candidate
+                for candidate in matches
+                if isinstance(candidate, dict)
+                and (
+                    expected_token is None
+                    or find_first_value(candidate, {"document_id", "token"}) == expected_token
+                )
+                and self._absolute_url(candidate) is not None
+            ]
+            if len(candidates) == 1:
+                url = self._absolute_url(candidates[0])
+        if url is None:
+            raise VerificationError(
+                "Feishu document was verified but no canonical clickable URL was returned",
+                details={"resource": live_resource},
+            )
+        return {**live_resource, "url": url}
 
     async def search(self, request: SearchDocumentsRequest) -> dict[str, Any]:
         return await self.drive.search_documents(request.title, request.identity)
@@ -138,9 +182,16 @@ class DocsService:
                 "document was created but warnings are forbidden by the verification policy",
                 details={"resource": resource, "warnings": warnings},
             )
+        live_resource = await self._canonical_resource(
+            live_resource=extract_resource(inspected["data"]),
+            title=request.title,
+            identity=request.identity,
+            fallback_resource=resource,
+            fallback_url=reference,
+        )
         return {
             "ok": True,
-            "resource": resource,
+            "resource": live_resource,
             "managed_folder": managed_folder,
             "verification": verification.as_dict(),
             "warnings": warnings,
@@ -271,10 +322,19 @@ class DocsService:
                 "document edit completed but read-back verification failed",
                 details={"verification": verification.as_dict()},
             )
-        live_resource = extract_resource(inspected["data"])
+        title_value = find_first_value(inspected["data"], {"title"})
+        if not isinstance(title_value, str) or not title_value:
+            raise VerificationError("verified document did not contain a usable title")
+        live_resource = await self._canonical_resource(
+            live_resource=extract_resource(inspected["data"]),
+            title=title_value,
+            identity=request.identity,
+            fallback_url=resource.value,
+        )
         try:
             notification = await self.notifier.document_edited(
                 resource=live_resource,
+                document_title=title_value,
                 change_summary=request.change_summary,
                 revision=inspected["revision"],
                 operations_applied=len(results),

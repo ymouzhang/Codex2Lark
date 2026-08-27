@@ -26,7 +26,6 @@ from codex2lark.capabilities.im.channel_adapter import (
     ChannelPort,
     EventSourceHealth,
     OfficialChannelEventSource,
-    create_official_channel,
 )
 from codex2lark.capabilities.im.context_provider import IMContextProvider
 from codex2lark.capabilities.im.lifecycle import (
@@ -291,7 +290,7 @@ class V3Gateway:
 def create_v3_gateway(
     config: GatewayConfig,
     *,
-    channel: ChannelPort | None = None,
+    channel: ChannelPort,
     model: ModelProvider | None = None,
     im_api: IMMessageAPI | None = None,
     authoring: AuthoringServices | None = None,
@@ -301,10 +300,7 @@ def create_v3_gateway(
     runtime_store = RuntimeStore(database, cipher)
     sessions: SessionStore = SQLiteSessionStore(database, cipher)
     im_repository = SQLiteIMRepository(database, cipher)
-    active_channel = channel or create_official_channel(
-        app_id=config.feishu_app_id,
-        app_secret=config.feishu_app_secret,
-    )
+    active_channel = channel
     resource_loader = ResourceLoader.from_package("codex2lark.bundled_resources")
     im_templates = ResourceLoader.load_im_templates("codex2lark.bundled_resources", "zh-CN")
     rollout = RootAgentRollout(

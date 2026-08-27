@@ -41,10 +41,10 @@ async def test_edit_notification_is_bot_dm_with_idempotency_key() -> None:
     result = await notifier.document_edited(
         resource={
             "document_id": "docx_test",
-            "title": '技术方案 <at user_id="all"></at>',
             "url": "https://example.feishu.cn/docx/docx_test",
             "content": "<title>技术方案</title><p>已更新</p>",
         },
+        document_title='技术方案 <at user_id="all"></at>',
         change_summary="更新架构章节并保留实施计划",
         revision=8,
         operations_applied=2,
@@ -67,3 +67,17 @@ async def test_edit_notification_is_bot_dm_with_idempotency_key() -> None:
     key = call[call.index("--idempotency-key") + 1]
     assert key.startswith("codex2lark-edit-")
     assert len(key) <= 50
+
+
+@pytest.mark.asyncio
+async def test_edit_notification_requires_explicit_verified_title() -> None:
+    notifier = NotificationService(NotificationLark())  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="verified document title"):
+        await notifier.document_edited(
+            resource={"url": "https://example.feishu.cn/docx/docx_test"},
+            document_title="   ",
+            change_summary="更新正文",
+            revision=1,
+            operations_applied=1,
+        )

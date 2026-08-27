@@ -29,6 +29,7 @@ class NotificationService:
         self,
         *,
         resource: dict[str, Any],
+        document_title: str,
         change_summary: str,
         revision: int | None,
         operations_applied: int,
@@ -59,8 +60,9 @@ class NotificationService:
                 "the authenticated Feishu user did not include an open ID",
             )
 
-        title_value = find_first_value(resource, {"title", "name"})
-        raw_title = _single_line(title_value) if isinstance(title_value, str) else "未命名文档"
+        raw_title = _single_line(document_title)
+        if not raw_title:
+            raise ValueError("edit notification requires a verified document title")
         title = _markdown_text(raw_title)
         url_value = find_first_value(resource, {"url"})
         url = url_value if isinstance(url_value, str) and url_value.startswith("https://") else None

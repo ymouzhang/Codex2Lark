@@ -3,6 +3,80 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Defined group-attachment resolution before implementation. Eligible ordinary
+  human group messages are encrypted observations without Agent tasks; a later
+  request resolves attachments from the trigger/reply/thread first and then an
+  exact filename in authorized bounded history. Missing or ambiguous IM
+  evidence is reported truthfully and never replaced with a Drive/Docs search.
+  Recognized scripts and source files are decoded only as bounded inert UTF-8
+  evidence, while archives and executable binaries remain blocked and no file
+  content is ever executed. Implementation area: IM admission, safe attachment
+  parser, root Agent resource package, and regression tests.
+
+- Required edit-completion notifications to receive the verified document title
+  explicitly before implementation. Feishu read-back metadata may omit `title`,
+  so notification rendering no longer infers the label from that optional field
+  or degrades a known document to `未命名文档`. Implementation area: document and
+  group-digest services, notification adapter, and regression tests.
+
+- Tightened the group-digest review contract before implementation: all pages
+  and thread replies receive one stable oldest-to-newest sort, each message is
+  rendered as a separated chat record, verified completion exposes an absolute
+  clickable Feishu document URL rather than a token, and bot-history error
+  `230027` is described to users as an application-identity permission denial.
+  Implementation area: digest service/tool verification and IM terminal
+  rendering. Also made current-group history intent route explicitly to the
+  dedicated digest workflow instead of generic document creation, after live
+  inspection proved the latter produced a model-ordered archive. Implementation
+  area: root Agent package and semantic tool descriptions.
+  Live comparison also showed that `lark-cli` returns local datetime strings,
+  not only Unix timestamps, so the contract now requires timezone-aware parsing
+  of both forms before sorting. Implementation area: digest normalization and
+  chronological rendering tests.
+
+- Corrected the group-history permission migration after validating the current
+  Feishu permission center. New applications use the application-identity scope
+  `im:message.group_msg:include_bot:read`; legacy API error `230027` may still
+  name the retired `im:message.group_msg`, and the user-identity
+  `im:message.group_msg:get_as_user` remains insufficient for the Gateway.
+  Implementation area: operations guidance only.
+
+- Defined user-facing warning presentation before implementation. Durable IM
+  context warning codes remain available for diagnostics, while terminal group
+  replies localize and deduplicate the known missing/incomplete-history codes
+  instead of exposing internal identifiers. Implementation area: IM terminal
+  renderer and contract tests.
+
+- Defined the Feishu reply idempotency boundary before implementation. The IM
+  publisher maps descriptive internal idempotency keys to deterministic RFC
+  4122 UUIDs accepted by Feishu while preserving stable retry semantics.
+  Operations names the current bot-only group-history scope required for live
+  context. A verified trigger can continue with a typed incomplete warning only
+  for that explicit missing-history-scope response; other live-read failures
+  still abort. Implementation area: IM publisher, live reader, context provider,
+  and contract tests.
+
+- Selected `deepseek-v4-flash` for the checked-in local deployment profile
+  without coupling the Harness to DeepSeek; provider URL, key, model identifier,
+  and exact prices remain environment configuration. Implementation area:
+  environment template, local operator configuration, architecture and
+  operations guidance.
+
+- Defined the pinned Channel SDK event-loop boundary before implementation.
+  Production constructs the official Channel synchronously before
+  `asyncio.run()`, then submits raw-event durable admission to the one Gateway
+  loop with a bounded thread-safe future instead of a dedicated executor and a
+  new asyncio loop per event. Implementation area: CLI/Gateway composition,
+  Channel adapter lifecycle and bridge, subprocess/concurrency/shutdown tests,
+  SDK WebSocket URL redaction, and startup diagnostics.
+
+- Documented an explicit local `.env` workflow before adding its safe template.
+  Local operators copy `.env.example`, protect `.env` with owner-only
+  permissions, and pass it through `uv run --env-file .env`; real environment
+  files remain ignored by Git and production still uses an external secret
+  provider. Implementation area: root environment template, ignore rules, and
+  Gateway operation examples.
+
 - Defined live startup readiness and end-to-end content-safe trace bindings
   before implementation. Gateway readiness requires a metadata-only model probe
   plus connected Feishu bot identity, while one event-generated opaque trace ID

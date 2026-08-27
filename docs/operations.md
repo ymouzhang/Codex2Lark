@@ -116,7 +116,21 @@ events in the Feishu developer console:
 
 Grant the least permissions needed for enabled capabilities. The IM runtime
 requires message read/history, reply-as-bot, chat metadata, and message-resource
-read permissions. Group-member automation additionally requires:
+read permissions. For current applications, bounded group-context collection
+requires the application-identity scope **Get user and bot messages in groups**
+(`im:message.group_msg:include_bot:read`). The legacy
+`im:message.group_msg` scope stopped accepting new applications on 2024-09-30,
+although the history API may still name it in error `230027`; treat that error
+as a request for the current replacement scope. The user-identity scope
+`im:message.group_msg:get_as_user` does not authorize the Gateway's bot
+credential. After adding the replacement scope, create and publish a new
+application version before retrying. This scope is also required when a file
+and the later @ request are separate, unthreaded messages: without it the
+Gateway can read a known message ID but cannot discover the earlier file.
+Replying directly to the file message or attaching the file to the @ request
+provides an explicit relationship and is the recommended diagnostic path.
+Group-member automation additionally
+requires:
 
 1. Grant the bot these permissions:
    - `im:chat.members:bot_access`
@@ -132,7 +146,26 @@ read permissions. Group-member automation additionally requires:
    availability scope.
 
 Provide runtime secrets through the service environment or an external secret
-provider. They are never written into the database:
+provider. They are never written into the database. For local development,
+copy the repository template and restrict the resulting plaintext file to its
+owner:
+
+```bash
+cp .env.example .env
+chmod 600 .env
+```
+
+Edit `.env`, then pass it explicitly to every Gateway command. `uv` does not
+need the values exported into the interactive shell:
+
+```bash
+uv run --env-file .env codex2lark doctor --gateway
+uv run --env-file .env codex2lark gateway start
+uv run --env-file .env codex2lark gateway status
+```
+
+The real `.env` is ignored by Git; `.env.example` contains placeholders only.
+Do not use a repository plaintext file as the production secret provider.
 
 Generate the 32-byte encryption key once and retain it in the secret provider:
 
@@ -143,17 +176,21 @@ openssl rand -base64 32
 ```bash
 export CODEX2LARK_FEISHU_APP_ID='cli_xxx'
 export CODEX2LARK_FEISHU_APP_SECRET='...'
-export OPENAI_API_KEY='...'
-export CODEX2LARK_MODEL='gpt-5'
-export CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS='1250000'
-export CODEX2LARK_MODEL_OUTPUT_COST_MICROS_PER_MILLION_TOKENS='10000000'
+export OPENAI_API_KEY='your-deepseek-key'
+export OPENAI_BASE_URL='https://api.deepseek.com'
+export CODEX2LARK_MODEL='deepseek-v4-flash'
+export CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS='current-provider-price'
+export CODEX2LARK_MODEL_OUTPUT_COST_MICROS_PER_MILLION_TOKENS='current-provider-price'
 export CODEX2LARK_MASTER_KEY_ID='local-v1'
 export CODEX2LARK_MASTER_KEY_BASE64='a-base64-encoded-32-byte-key'
 export CODEX2LARK_AUTHORING_IDENTITY='user'
 ```
 
-The two model-price values above are illustrative, not a current price quote.
-Set them from the provider's current price for the exact configured model. They
+The checked-in local profile uses DeepSeek `deepseek-v4-flash`, while the
+Runtime continues to accept any endpoint that implements the required
+OpenAI-compatible Responses and model-readiness APIs. The two model-price
+placeholders above are not a price quote. Set them from the provider's current
+price for the exact configured model. They
 are micro-US-dollars per one million tokens (`$1.25` becomes `1250000`). The
 Gateway refuses to start without positive values so a monetary budget is never
 silently treated as free. Root runs default to 15 active minutes and `$1.00`;
@@ -220,8 +257,8 @@ procedure.
 Start the Gateway:
 
 ```bash
-uv run codex2lark gateway start
-uv run codex2lark gateway status
+uv run --env-file .env codex2lark gateway start
+uv run --env-file .env codex2lark gateway status
 ```
 
 A healthy status is content-safe and includes `"state":"ready"` and
@@ -233,7 +270,7 @@ continue. No message bodies, endpoint errors, credentials, or connection URLs
 are written to the status file. For foreground debugging use:
 
 ```bash
-uv run codex2lark gateway run
+uv run --env-file .env codex2lark gateway run
 ```
 
 The Gateway needs outbound internet access but no public IP, Webhook, RabbitMQ,
@@ -249,6 +286,13 @@ validated schedule is bounded; Codex2Lark subscribes to `reconnecting` and
 loop. If status remains degraded, inspect outbound network and application
 credentials, then use `gateway stop` followed by `gateway start` only after the
 underlying cause is corrected.
+
+The Gateway creates the pinned Channel SDK synchronously before starting its
+async Runtime loop. If a startup log contains `This event loop is already
+running`, the executable and SDK lifecycle contract are out of sync; do not
+work around it with `nest_asyncio`, a second WebSocket, or an untracked helper
+thread. Stop the process, retain `gateway.log`, and restore the tested Channel
+bootstrap boundary.
 
 The in-process drain defaults to 30 seconds and can be configured with
 `CODEX2LARK_SHUTDOWN_DRAIN_MS`. Intake is disabled first. A task still running

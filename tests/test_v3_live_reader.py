@@ -12,6 +12,7 @@ def wire_message(
     text: str = "hello",
     thread_id: str | None = None,
     root_id: str | None = None,
+    parent_id: str | None = None,
 ) -> object:
     return SimpleNamespace(
         message_id=message_id,
@@ -25,16 +26,18 @@ def wire_message(
         mentions=(SimpleNamespace(id="ou_bot", name="Agent", key="@_user_1"),),
         thread_id=thread_id,
         root_id=root_id,
-        parent_id=None,
+        parent_id=parent_id,
     )
 
 
 class FakeMessageAPI:
     def __init__(self, pages: list[WireMessagePage] | None = None) -> None:
         self.pages = pages or []
+        self.get_calls: list[str] = []
         self.list_calls: list[dict[str, object]] = []
 
     async def get(self, message_id: str) -> object:
+        self.get_calls.append(message_id)
         return wire_message(message_id, text="@_user_1 please help")
 
     async def list(self, **parameters: object) -> WireMessagePage:
@@ -90,3 +93,19 @@ async def test_live_reader_uses_thread_container_for_related_context() -> None:
     assert page.complete is True
     assert api.list_calls[0]["container_type"] == "thread"
     assert api.list_calls[0]["container_id"] == "omt_1"
+
+
+async def test_live_reader_fetches_known_reply_parent_without_listing_chat() -> None:
+    api = FakeMessageAPI()
+    reader = OfficialLiveIMReader(api, bot_open_id="ou_bot")
+    normalized = reader._normalize(
+        wire_message("om_trigger", root_id="om_root", parent_id="om_file"),
+        IMContextRequest("tenant-1", "app-1", "oc_group", "om_trigger"),
+    )
+
+    page = await reader.related_messages(normalized, limit=20)
+
+    assert [item.message_id for item in page.messages] == ["om_file", "om_root"]
+    assert api.get_calls == ["om_file", "om_root"]
+    assert api.list_calls == []
+    assert page.complete is True

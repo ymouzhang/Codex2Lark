@@ -80,7 +80,7 @@ After configuring the V3 secrets and state directory described in
 Gateway:
 
 ```bash
-uv run codex2lark gateway
+uv run --env-file .env codex2lark gateway
 ```
 
 The Gateway uses an outbound long connection and requires neither a public IP
