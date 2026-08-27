@@ -3,6 +3,30 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Raised the documented default IM attachment download limit to an inclusive
+  200 MiB (209,715,200 bytes). Declared-size preflight, actual-byte postflight,
+  encrypted persistence, storage-pressure admission, parser limits, and cleanup
+  remain separate safeguards; `CODEX2LARK_MAX_ATTACHMENT_BYTES` continues to
+  support a positive operator override. Implementation area: Gateway
+  configuration, attachment service defaults, environment template, and tests.
+
+- Corrected the bot group-history permission contract from live Feishu API and
+  permission-center verification. Bot history reads require a base application
+  message permission (`im:message:readonly` or `im:message`) together with
+  `im:message.group_msg`; `im:message.group_msg.include_bot:read` is an event
+  permission and is not a history-read replacement. Error `230027` now directs
+  operators to verify the full permission pair and bot membership, and a new
+  app version is required only when the console reports unpublished changes.
+  Implementation area: operations guidance and terminal IM diagnostics.
+
+- Defined explicit group-attachment search before implementation. Requests that
+  name a file or ask to collect/search group files use a bounded 30-day,
+  500-message live discovery window instead of ordinary two-hour chat context.
+  Local encrypted discovery uses the same bound, exact filename selection, and
+  mandatory live message refetch; only selected attachments are downloaded.
+  Implementation area: IM context planning, repository discovery, and
+  regression tests.
+
 - Defined group-attachment resolution before implementation. Eligible ordinary
   human group messages are encrypted observations without Agent tasks; a later
   request resolves attachments from the trigger/reply/thread first and then an
@@ -33,13 +57,6 @@ it. It is not a release changelog.
   not only Unix timestamps, so the contract now requires timezone-aware parsing
   of both forms before sorting. Implementation area: digest normalization and
   chronological rendering tests.
-
-- Corrected the group-history permission migration after validating the current
-  Feishu permission center. New applications use the application-identity scope
-  `im:message.group_msg:include_bot:read`; legacy API error `230027` may still
-  name the retired `im:message.group_msg`, and the user-identity
-  `im:message.group_msg:get_as_user` remains insufficient for the Gateway.
-  Implementation area: operations guidance only.
 
 - Defined user-facing warning presentation before implementation. Durable IM
   context warning codes remain available for diagnostics, while terminal group

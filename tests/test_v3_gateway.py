@@ -13,6 +13,7 @@ import pytest
 
 from codex2lark.bootstrap.config import GatewayConfig
 from codex2lark.bootstrap.gateway import AllowConfiguredTools, V3Gateway, create_v3_gateway
+from codex2lark.capabilities.im.attachments import DEFAULT_MAX_ATTACHMENT_BYTES
 from codex2lark.capabilities.im.live_reader import WireMessagePage
 from codex2lark.core.models import CreateDocumentRequest, EditDocumentRequest, Identity
 from codex2lark.runtime.plugins import PluginHealth, PluginManager, PluginManifest
@@ -146,6 +147,13 @@ def test_gateway_config_requires_explicit_secrets_and_resolves_state_path(tmp_pa
     assert config.model_provider_concurrency == 4
     assert config.plugin_concurrency == 4
     assert "secret" not in repr(config)
+    default_attachment_values = dict(values)
+    del default_attachment_values["CODEX2LARK_MAX_ATTACHMENT_BYTES"]
+    assert (
+        GatewayConfig.from_environment(default_attachment_values).max_attachment_bytes
+        == DEFAULT_MAX_ATTACHMENT_BYTES
+        == 209_715_200
+    )
     missing_price = dict(values)
     del missing_price["CODEX2LARK_MODEL_INPUT_COST_MICROS_PER_MILLION_TOKENS"]
     with pytest.raises(ValueError, match="MODEL_INPUT_COST"):

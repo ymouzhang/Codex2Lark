@@ -116,16 +116,24 @@ events in the Feishu developer console:
 
 Grant the least permissions needed for enabled capabilities. The IM runtime
 requires message read/history, reply-as-bot, chat metadata, and message-resource
-read permissions. For current applications, bounded group-context collection
-requires the application-identity scope **Get user and bot messages in groups**
-(`im:message.group_msg:include_bot:read`). The legacy
-`im:message.group_msg` scope stopped accepting new applications on 2024-09-30,
-although the history API may still name it in error `230027`; treat that error
-as a request for the current replacement scope. The user-identity scope
-`im:message.group_msg:get_as_user` does not authorize the Gateway's bot
-credential. After adding the replacement scope, create and publish a new
-application version before retrying. This scope is also required when a file
-and the later @ request are separate, unthreaded messages: without it the
+read permissions. For bounded group-context collection with bot identity, the
+Feishu history API requires both:
+
+- one base application-identity message permission, preferably **Get direct and
+  group messages** (`im:message:readonly`; `im:message` is also accepted); and
+- the application-identity sensitive permission **Get all messages in groups**
+  (`im:message.group_msg`).
+
+The event permission **Get messages sent by users and bots in groups** is
+`im:message.group_msg.include_bot:read` (note the dot before `include_bot`). It
+controls event delivery and does not replace `im:message.group_msg` for the
+history API. The user-identity scope `im:message.group_msg:get_as_user` likewise
+does not authorize the Gateway's bot credential. When history reads return
+`230027`, verify this complete bot-identity permission pair and that the bot is
+still a member of the target group. The permission center may activate an
+exempt permission immediately; publish a new application version only when the
+console marks the change as unpublished. This permission pair is also required
+when a file and the later @ request are separate, unthreaded messages: without it the
 Gateway can read a known message ID but cannot discover the earlier file.
 Replying directly to the file message or attaching the file to the @ request
 provides an explicit relationship and is the recommended diagnostic path.
@@ -337,8 +345,14 @@ Optional overrides are positive byte counts:
 ```bash
 export CODEX2LARK_STORAGE_MAX_BYTES=$((10 * 1024 * 1024 * 1024))
 export CODEX2LARK_STORAGE_MIN_FREE_BYTES=$((512 * 1024 * 1024))
-export CODEX2LARK_MAX_ATTACHMENT_BYTES=$((20 * 1024 * 1024))
+export CODEX2LARK_MAX_ATTACHMENT_BYTES=$((200 * 1024 * 1024))
 ```
+
+The attachment setting is inclusive: the default permits files up to 200 MiB
+(209,715,200 bytes). Files with a larger declared size are rejected before
+transfer; every completed transfer is checked again before encrypted storage.
+Keep the overall managed-storage and free-space limits comfortably above the
+largest permitted attachment.
 
 ## 6. Runtime storage operations
 

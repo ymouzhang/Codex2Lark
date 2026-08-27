@@ -231,8 +231,8 @@ renderer never exposes internal identifiers such as
 deduplicated: missing history plus incomplete context becomes one concise note
 that Feishu rejected bot-identity group-history access and the answer therefore
 used only the verified current message. This warning maps to upstream error
-`230027`; the operations guide names the required current application-identity
-scope. Other warnings retain their existing truthful presentation until a
+`230027`; the operations guide names the required base message permission plus
+the `im:message.group_msg` application-identity scope. Other warnings retain their existing truthful presentation until a
 dedicated localization is defined.
 
 Acknowledgement and terminal replies use deterministic idempotency keys derived
@@ -274,6 +274,8 @@ Context selection is relationship-first:
 Proposed default limits are configuration values:
 
 - ordinary group context: 30 preceding messages or two hours;
+- explicit attachment lookup (a request names a file or asks to collect/search
+  group files): 500 preceding messages or 30 days;
 - thread context: root plus 50 recent replies;
 - one model-visible item: 10,000 tokens maximum;
 - complete collected context: bounded by the selected model policy;
@@ -316,7 +318,7 @@ Attachment resolution is relationship-first and must remain within IM:
 1. use an attachment on the triggering message;
 2. use an attachment on the replied-to message or active thread;
 3. for an unthreaded request that names a file, resolve an exact normalized
-   filename in the bounded live recent-message page;
+   filename in the bounded 30-day/500-message attachment-search page;
 4. if history is unauthorized, no exact match exists, or several exact matches
    are ambiguous, report the attachment as unavailable and ask the user to
    reply directly to the file message or attach it again.
@@ -331,6 +333,14 @@ chat and filename bindings, and use only the live result. Local observation is
 therefore a discovery index, never an authoritative content fallback. If the
 event was not delivered, the live refetch fails, or the filename is ambiguous,
 the attachment remains unavailable.
+
+The expanded attachment window is selected deterministically before inference
+when the normalized request contains an attachment/file intent or a recognizable
+filename extension. It does not expose a free-form history query to the model.
+Only attachments whose normalized filename occurs in the active request are
+downloaded for analysis; asking to collect files does not automatically download
+every binary in the group. The same 30-day bound applies to encrypted local
+candidate discovery when application-identity history listing is unavailable.
 
 ## 6. Attachment collection and parsing
 
@@ -365,11 +375,19 @@ macros, embedded programs, formulas, links, or instructions found in the file.
 
 ### Runtime API 1 attachment ingest and parsers
 
-The first implementation defaults to 20 MiB per downloaded attachment, 50 MiB
-total declared uncompressed Office ZIP members, 1,000 ZIP entries, a 100:1
-member compression-ratio ceiling, and 200,000 output characters. These are hard
-upper bounds configurable only downward by a task policy. A declared size above
-the limit is rejected before download; actual bytes are checked again.
+The Runtime defaults to an inclusive 200 MiB (209,715,200-byte) limit per
+downloaded attachment. Operators may set a different positive deployment limit
+with `CODEX2LARK_MAX_ATTACHMENT_BYTES`; task policy may only reduce the active
+deployment limit. A trustworthy declared size above the active limit is rejected
+before download, and the actual downloaded byte count is checked again before
+encrypted persistence or parsing. Unknown declared size does not bypass the
+post-download check.
+
+Parser limits remain independent from the transport limit: Office ZIP parsing
+allows at most 50 MiB total declared uncompressed members, 1,000 ZIP entries, a
+100:1 member compression-ratio ceiling, and 200,000 output characters. A file
+may therefore download successfully but still yield bounded metadata or a
+blocked/failed parse result without executing its contents.
 
 Download authorization is a trusted `AttachmentLoadRequest` bound to tenant,
 app, chat, message, and resource key. The repository must already contain that

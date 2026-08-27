@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,6 +10,9 @@ from codex2lark.runtime.context import ContextEvidence
 
 from .attachments import AttachmentEvidence, AttachmentLoadRequest
 from .models import IncomingMessage, StoredAttachment
+
+_FILENAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@+~-]*\.[A-Za-z0-9][A-Za-z0-9+~-]{0,15}")
+_ATTACHMENT_INTENT_TERMS = ("文件", "附件", "attachment", "file")
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,16 +84,29 @@ class IMContextProvider:
         recent_limit: int = 30,
         related_limit: int = 50,
         lookback_ms: int = 2 * 60 * 60 * 1000,
+        attachment_search_limit: int = 500,
+        attachment_lookback_ms: int = 30 * 24 * 60 * 60 * 1000,
         attachments: AttachmentEvidenceLoader | None = None,
         clock_ms: Callable[[], int] | None = None,
     ) -> None:
-        if min(recent_limit, related_limit, lookback_ms) < 1:
+        if (
+            min(
+                recent_limit,
+                related_limit,
+                lookback_ms,
+                attachment_search_limit,
+                attachment_lookback_ms,
+            )
+            < 1
+        ):
             raise ValueError("IM context limits must be positive")
         self._source = source
         self._mirror = mirror
         self._recent_limit = recent_limit
         self._related_limit = related_limit
         self._lookback_ms = lookback_ms
+        self._attachment_search_limit = attachment_search_limit
+        self._attachment_lookback_ms = attachment_lookback_ms
         self._attachments = attachments
         self._clock_ms = clock_ms or (lambda: 0)
 
@@ -103,21 +120,26 @@ class IMContextProvider:
 
         warnings: list[str] = []
         related = bool(trigger.thread_id or trigger.root_id or trigger.parent_id)
+        attachment_search = not related and self._requests_attachment_search(trigger.body_text)
+        lookback_ms = self._attachment_lookback_ms if attachment_search else self._lookback_ms
+        recent_limit = self._attachment_search_limit if attachment_search else self._recent_limit
+        since_ms = max(0, trigger.occurred_at_ms - lookback_ms)
         try:
             if related:
                 page = await self._source.related_messages(trigger, limit=self._related_limit)
             else:
                 page = await self._source.recent_messages(
                     trigger,
-                    since_ms=max(0, trigger.occurred_at_ms - self._lookback_ms),
-                    limit=self._recent_limit,
+                    since_ms=since_ms,
+                    limit=recent_limit,
                 )
         except IMHistoryUnavailableError:
             warnings.append("im_context_history_unavailable")
             recovered = await self._recover_observed_attachments(
                 request,
                 trigger,
-                since_ms=max(0, trigger.occurred_at_ms - self._lookback_ms),
+                since_ms=since_ms,
+                limit=recent_limit,
                 warnings=warnings,
             )
             page = MessagePage(recovered, False)
@@ -200,12 +222,20 @@ class IMContextProvider:
     def _normalized_filename_text(value: str) -> str:
         return unicodedata.normalize("NFKC", value).casefold()
 
+    @classmethod
+    def _requests_attachment_search(cls, value: str) -> bool:
+        normalized = cls._normalized_filename_text(value)
+        return bool(_FILENAME_PATTERN.search(normalized)) or any(
+            term in normalized for term in _ATTACHMENT_INTENT_TERMS
+        )
+
     async def _recover_observed_attachments(
         self,
         request: IMContextRequest,
         trigger: IncomingMessage,
         *,
         since_ms: int,
+        limit: int,
         warnings: list[str],
     ) -> tuple[IncomingMessage, ...]:
         observed = await self._mirror.recent_attachments(
@@ -214,6 +244,7 @@ class IMContextProvider:
             request.chat_id,
             since_ms=since_ms,
             before_ms=trigger.occurred_at_ms,
+            limit=limit,
         )
         request_text = self._normalized_filename_text(trigger.body_text)
         matches: dict[str, list[StoredAttachment]] = {}

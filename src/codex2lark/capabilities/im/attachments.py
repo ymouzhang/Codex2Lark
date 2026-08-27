@@ -48,6 +48,8 @@ _SOURCE_TEXT_SUFFIXES = frozenset(
     }
 )
 
+DEFAULT_MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024
+
 
 @dataclass(frozen=True, slots=True)
 class AttachmentLoadRequest:
@@ -324,7 +326,7 @@ class AttachmentService:
         blobs: EncryptedBlobStore,
         parser: SafeAttachmentParser,
         *,
-        max_attachment_bytes: int = 20 * 1024 * 1024,
+        max_attachment_bytes: int = DEFAULT_MAX_ATTACHMENT_BYTES,
         parsing_policy_version: str = "1",
         capacity: StorageCapacityMonitor | None = None,
     ) -> None:

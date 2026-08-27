@@ -433,7 +433,7 @@ The first production capacity gate is evaluated immediately before an upstream
 attachment download. It combines managed data bytes with filesystem free space
 and the declared/requested allocation. Existing encrypted blobs remain readable
 at every pressure level. The defaults are a 10 GiB managed-data ceiling, 80%
-warning level, 90% hard level, 512 MiB filesystem reserve, and 20 MiB per-file
+warning level, 90% hard level, 512 MiB filesystem reserve, and 200 MiB per-file
 limit. Operators can override byte ceilings through validated Gateway
 configuration. A hard denial becomes attributed attachment evidence with the
 `storage_pressure_hard` warning; it does not fail the text-only Agent request.

@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from codex2lark.capabilities.im.attachments import DEFAULT_MAX_ATTACHMENT_BYTES
 from codex2lark.core.models import Identity
 from codex2lark.core.scheduling import TaskConcurrencyLimits
 from codex2lark.storage.capacity import StorageCapacityPolicy
@@ -41,7 +42,7 @@ class GatewayConfig:
     model_provider_concurrency: int = 4
     plugin_concurrency: int = 4
     storage_capacity: StorageCapacityPolicy = field(default_factory=StorageCapacityPolicy)
-    max_attachment_bytes: int = 20 * 1024 * 1024
+    max_attachment_bytes: int = DEFAULT_MAX_ATTACHMENT_BYTES
     canary_agent_version: int | None = None
     canary_percent: int = 0
     rollout_salt: str = field(default="", repr=False)
@@ -131,7 +132,7 @@ class GatewayConfig:
             plugin_concurrency=cls._integer(values, "CODEX2LARK_PLUGIN_CONCURRENCY", 4),
             storage_capacity=StorageCapacityPolicy.from_environment(values),
             max_attachment_bytes=cls._integer(
-                values, "CODEX2LARK_MAX_ATTACHMENT_BYTES", 20 * 1024 * 1024
+                values, "CODEX2LARK_MAX_ATTACHMENT_BYTES", DEFAULT_MAX_ATTACHMENT_BYTES
             ),
             canary_agent_version=cls._optional_integer(values, "CODEX2LARK_CANARY_AGENT_VERSION"),
             canary_percent=cls._integer(values, "CODEX2LARK_CANARY_PERCENT", 0),

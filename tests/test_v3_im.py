@@ -1119,6 +1119,7 @@ class FakeLiveIMReader:
         self.related = related
         self.complete = complete
         self.used_related = False
+        self.recent_requests: list[tuple[int, int]] = []
 
     async def get_message(self, request: IMContextRequest) -> IncomingMessage:
         assert request.message_id == self.trigger.message_id
@@ -1132,7 +1133,8 @@ class FakeLiveIMReader:
     async def recent_messages(
         self, trigger: IncomingMessage, *, since_ms: int, limit: int
     ) -> MessagePage:
-        assert trigger == self.trigger and since_ms >= 0 and limit == 30
+        assert trigger == self.trigger and since_ms >= 0
+        self.recent_requests.append((since_ms, limit))
         return MessagePage(self.related, self.complete)
 
 
@@ -1352,9 +1354,11 @@ async def test_context_provider_resolves_only_exact_named_recent_attachment(
     tmp_path: Path,
 ) -> None:
     database, repository, _runtime_store, _service = await setup(tmp_path)
+    day_ms = 24 * 60 * 60 * 1000
     trigger = message(
         body_text="Please analyze trojan-go_mod1.sh",
         attachments=(),
+        occurred_at_ms=40 * day_ms,
         thread_id=None,
         root_id=None,
         parent_id=None,
@@ -1366,7 +1370,7 @@ async def test_context_provider_resolves_only_exact_named_recent_attachment(
         body_text="",
         mentions=(),
         attachments=(AttachmentReference("wanted-key", "file", "trojan-go_mod1.sh"),),
-        occurred_at_ms=90,
+        occurred_at_ms=20 * day_ms,
         thread_id=None,
     )
     unrelated = message(
@@ -1376,13 +1380,14 @@ async def test_context_provider_resolves_only_exact_named_recent_attachment(
         body_text="",
         mentions=(),
         attachments=(AttachmentReference("other-key", "file", "secrets.txt"),),
-        occurred_at_ms=80,
+        occurred_at_ms=19 * day_ms,
         thread_id=None,
     )
     loader = FakeAttachmentLoader()
+    source = FakeLiveIMReader(trigger, (unrelated, wanted))
     try:
         bundle = await IMContextProvider(
-            FakeLiveIMReader(trigger, (unrelated, wanted)),
+            source,
             repository,
             attachments=loader,
             clock_ms=lambda: 500,
@@ -1393,6 +1398,7 @@ async def test_context_provider_resolves_only_exact_named_recent_attachment(
         assert isinstance(request, AttachmentLoadRequest)
         assert request.message_id == "om_file"
         assert request.resource_key == "wanted-key"
+        assert source.recent_requests == [(10 * day_ms, 500)]
         assert "im_attachment_ambiguous" not in bundle.warnings
     finally:
         await database.close()
@@ -1616,6 +1622,28 @@ async def test_attachment_service_rejects_unreferenced_and_oversized_downloads(
         await database.close()
 
 
+async def test_attachment_service_limit_is_inclusive(tmp_path: Path) -> None:
+    database, repository, _runtime_store, _service = await setup(tmp_path)
+    await repository.upsert_message(
+        message(attachments=(AttachmentReference("file-key", "file", "notes.txt", None, 4),))
+    )
+    service = AttachmentService(
+        repository,
+        FakeDownloader(b"four"),
+        EncryptedBlobStore(tmp_path / "blobs", EnvelopeCipher(MasterKey("test", b"i" * 32))),
+        SafeAttachmentParser(),
+        max_attachment_bytes=4,
+    )
+    try:
+        loaded = await service.load(
+            AttachmentLoadRequest("tenant-1", "app-1", "oc_group", "om_request", "file-key"),
+            now_ms=2,
+        )
+        assert loaded.evidence.content == "four"
+    finally:
+        await database.close()
+
+
 class FakeHarnessRunner:
     def __init__(self, outcome: AgentOutcome) -> None:
         self.outcome = outcome
@@ -1685,6 +1713,8 @@ def test_im_terminal_renderer_localizes_and_deduplicates_context_warnings() -> N
     assert "im_context_" not in rendered
     assert rendered.count("回答仅基于当前消息") == 1
     assert "230027" in rendered
+    assert "im:message.group_msg" in rendered
+    assert "机器人仍在群中" in rendered
     assert "应用身份" in rendered
     assert "Completed. Ask me if anything is unclear." in rendered
 

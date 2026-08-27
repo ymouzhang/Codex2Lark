@@ -260,7 +260,9 @@ class IMMentionTaskHandler:
                 remaining.remove("im_context_incomplete")
             presented.append(
                 "提示: 飞书拒绝了机器人读取群聊历史 (230027), "
-                "本次回答仅基于当前消息。请为应用身份开通群消息读取权限并发布新版本。"
+                "本次回答仅基于当前消息。请检查应用身份已开通 "
+                "im:message:readonly (或 im:message) 与 im:message.group_msg, "
+                "并确认机器人仍在群中。"
             )
         elif "im_context_incomplete" in remaining:
             remaining.remove("im_context_incomplete")
