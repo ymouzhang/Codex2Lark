@@ -479,11 +479,12 @@ The model context is assembled progressively in this order:
 8. a working checkpoint when compaction is required.
 
 Context is append-oriented during a run. The builder avoids rewriting a stable
-prefix, enforces hard per-item and total token budgets, keeps complete
-assistant/tool-call pairs, and reserves capacity for tool results and the final
-answer.
+prefix, keeps each individual model request within its configured context
+capacity, preserves complete assistant/tool-call pairs, and reserves capacity
+for tool results and the final answer. There is no cumulative token budget
+across turns.
 
-When the budget is exceeded, it removes irrelevant evidence first, then
+When a single request would exceed the context capacity, it removes irrelevant evidence first, then
 summarizes older complete turns while retaining the active request, completed
 actions, resource identifiers, verification results, blockers, and next action.
 Persistent checkpoints are derived data and carry source message IDs so they can

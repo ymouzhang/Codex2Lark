@@ -530,14 +530,12 @@ def create_v3_gateway(
             tool_ids=tuple(tool.definition.tool_id for tool in enabled_tools),
             resource_packages=("group-agent-core",),
             budget_limits=(
-                BudgetLimit(BudgetKind.MODEL_TOKENS, 32_000),
                 BudgetLimit(BudgetKind.TOOL_CALLS, 16),
                 BudgetLimit(BudgetKind.EXTERNAL_WRITES, 6),
                 BudgetLimit(BudgetKind.AGENT_NODES, 8),
                 BudgetLimit(BudgetKind.WALL_TIME_MS, config.run_wall_time_ms),
                 BudgetLimit(BudgetKind.COST_MICROS, config.run_cost_limit_micros),
             ),
-            max_turns=8,
             max_context_tokens=32_000,
         )
 

@@ -162,7 +162,6 @@ def root_definition() -> AgentDefinition:
         "test-model",
         ("agent.delegate",),
         budget_limits=(
-            BudgetLimit(BudgetKind.MODEL_TOKENS, 32_000),
             BudgetLimit(BudgetKind.TOOL_CALLS, 16),
             BudgetLimit(BudgetKind.EXTERNAL_WRITES, 6),
         ),

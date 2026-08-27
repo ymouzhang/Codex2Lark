@@ -214,7 +214,7 @@ async def test_trace_id_joins_event_task_run_graph_approval_and_outbox(tmp_path:
                 task_brief="Handle the request.",
                 expected_output_type="AgentOutcome",
                 tool_ids=("docs.read",),
-                budgets={"model_tokens": 100, "tool_calls": 2, "external_writes": 1},
+                budgets={"tool_calls": 2, "external_writes": 1},
             ),
             limits=GraphLimits(),
             now_ms=103,

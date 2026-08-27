@@ -80,11 +80,11 @@ class ContextEngine:
                 messages = self._compact_journal(stable, retained_evidence, request, journal)
                 journal_compacted = True
                 break
-            raise ValueError("required context exceeds the AgentDefinition token budget")
+            raise ValueError("required context exceeds the AgentDefinition context capacity")
 
         estimated = self.estimate_tokens(messages)
         if estimated > definition.max_context_tokens:
-            raise ValueError("compacted context exceeds the AgentDefinition token budget")
+            raise ValueError("compacted context exceeds the AgentDefinition context capacity")
         return ContextBuild(
             messages=tuple(messages),
             source_versions={item.source_ref: item.source_version for item in evidence},

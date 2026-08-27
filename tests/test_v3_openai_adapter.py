@@ -85,7 +85,7 @@ async def test_openai_responses_adapter_is_stateless_strict_and_preserves_calls(
                 ToolEffect.WRITE,
             ),
         ),
-        remaining_budget={"model_tokens": 4_000},
+        remaining_budget={"tool_calls": 4},
     )
 
     result = await model.complete(request)
@@ -102,6 +102,7 @@ async def test_openai_responses_adapter_is_stateless_strict_and_preserves_calls(
     assert responses.parameters["input"][1]["name"].startswith("c2l_")
     assert responses.parameters["input"][1]["call_id"] == "call_1"
     assert responses.parameters["input"][2]["type"] == "function_call_output"
+    assert "max_output_tokens" not in responses.parameters
 
 
 async def test_openai_provider_health_uses_metadata_without_creating_response() -> None:
@@ -134,4 +135,4 @@ async def test_openai_responses_adapter_rejects_missing_billable_usage() -> None
     )
 
     with pytest.raises(ValueError, match="missing token usage"):
-        await model.complete(ModelRequest("run", "/root", "model", (), (), {"model_tokens": 10}))
+        await model.complete(ModelRequest("run", "/root", "model", (), (), {}))

@@ -3,6 +3,14 @@
 This file records behavioral implementation work and the document that authorized
 it. It is not a release changelog.
 
+- Removed the production Agent Runtime's cumulative model-token budget and
+  fixed model-turn ceiling. Runs now continue until a terminal outcome,
+  cancellation, or an active tool/write/time/cost/provider boundary; token and
+  turn usage remain observable, while each model request still respects its
+  configured context and output capacity. Implementation area: Agent definition,
+  Harness loop, root/worker bootstrap budgets, model adapter, and regression
+  tests.
+
 - Raised the documented default IM attachment download limit to an inclusive
   200 MiB (209,715,200 bytes). Declared-size preflight, actual-byte postflight,
   encrypted persistence, storage-pressure admission, parser limits, and cleanup

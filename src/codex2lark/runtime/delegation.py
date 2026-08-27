@@ -107,7 +107,6 @@ class DelegatedHarnessWorker:
                     for key, value in node.spec.budgets.items()
                     if key in {item.value for item in BudgetKind}
                 ),
-                max_turns=6,
                 max_context_tokens=16_000,
                 require_verified_external_effect=requires_verification,
             )
@@ -321,7 +320,6 @@ class MultiAgentCoordinator:
                     expected_output_type=str(arguments["expected_output_type"]),
                     tool_ids=requested_tools,
                     budgets={
-                        "model_tokens": 12_000,
                         "tool_calls": 6,
                         "external_writes": 2,
                     },

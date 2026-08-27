@@ -212,7 +212,9 @@ class AgentHarness:
         wall_time = _ActiveWallTime(ledger, self._monotonic_ns)
 
         try:
-            for turn in range(first_turn, definition.max_turns + 1):
+            turn = first_turn - 1
+            while True:
+                turn += 1
                 journal = await self._apply_controls(
                     request,
                     journal,
@@ -260,11 +262,6 @@ class AgentHarness:
                 )
                 response = await wall_time.wait_for(
                     self._complete_model(model_request, request.tool_context)
-                )
-                self._consume_if_limited(
-                    ledger,
-                    BudgetKind.MODEL_TOKENS,
-                    response.usage.input_tokens + response.usage.output_tokens,
                 )
                 self._consume_if_limited(ledger, BudgetKind.COST_MICROS, response.usage.cost_micros)
                 assistant = ModelMessage(
@@ -447,13 +444,6 @@ class AgentHarness:
                     clock_ms,
                 )
 
-            outcome = AgentOutcome(
-                status=RunStatus.FAILED,
-                summary="The Agent reached its maximum turn budget before completing the task.",
-                warnings=("turn_budget_exhausted",),
-            )
-            await self._finish(request.run_id, outcome, clock_ms)
-            return outcome
         except CancelledByPolicyError as exc:
             outcome = AgentOutcome(status=RunStatus.CANCELLED, summary=str(exc))
             await self._finish(

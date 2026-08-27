@@ -5,7 +5,6 @@ from enum import StrEnum
 
 
 class BudgetKind(StrEnum):
-    MODEL_TOKENS = "model_tokens"
     TOOL_CALLS = "tool_calls"
     EXTERNAL_WRITES = "external_writes"
     WALL_TIME_MS = "wall_time_ms"

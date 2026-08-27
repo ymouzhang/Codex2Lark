@@ -99,10 +99,13 @@ retention_policy
 eval_suite_version
 ```
 
-The Runtime API 1 definition also contains hard maximum turns, context tokens,
-tool calls, external writes, wall time, and cost, plus a declared model profile,
-tool allowlist, required resource packages, and whether completion requires at
-least one verified external effect.
+The Runtime API 1 definition contains a per-request context capacity plus hard
+limits for tool calls, external writes, wall time, and cost. It deliberately has
+no cumulative model-token budget and no fixed model-turn ceiling. A run may keep
+reasoning until it reaches a terminal outcome or another active safety boundary.
+The definition also declares the model profile, tool allowlist, required
+resource packages, and whether completion requires at least one verified
+external effect.
 
 A running turn never silently changes definition version. New events may use a
 new version after rollout; an in-flight run remains reproducible against the
@@ -201,11 +204,14 @@ admit request
        emit explicit terminal state
 ```
 
-The loop has hard limits for model turns, total tool calls, repeated identical
-tool calls, context tokens, output bytes, wall time, Feishu requests, model
-cost, and external writes. A final assistant message alone does not prove task
-completion when the requested outcome includes an external write; the Outcome
-Gate requires a verified resource or a truthful blocked/failed result.
+The loop has no fixed turn count and no cumulative token cutoff. It is bounded
+by total tool calls, repeated identical tool calls, per-request context
+capacity, output bytes, wall time, Feishu requests, model cost, external writes,
+explicit cancellation, and the provider's own request limits. Token usage and
+turn count remain observable telemetry but never independently fail a run. A
+final assistant message alone does not prove task completion when the requested
+outcome includes an external write; the Outcome Gate requires a verified
+resource or a truthful blocked/failed result.
 
 `wall_time_ms` measures cumulative active Harness execution across checkpoint
 and resume. Time spent while a run is durably stopped does not consume this

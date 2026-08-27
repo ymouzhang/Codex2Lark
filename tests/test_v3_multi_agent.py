@@ -58,7 +58,7 @@ def root_spec() -> NodeSpec:
         task_brief="Own the verified user outcome.",
         expected_output_type="AgentOutcome",
         tool_ids=("docs.create", "docs.read", "sheets.update"),
-        budgets={"model_tokens": 100_000, "tool_calls": 20, "external_writes": 5},
+        budgets={"tool_calls": 20, "external_writes": 5},
     )
 
 
@@ -75,7 +75,7 @@ def child_spec(
         task_brief=f"Complete the bounded {name} deliverable.",
         expected_output_type="ResearchBundle",
         tool_ids=tools,
-        budgets={"model_tokens": 20_000, "tool_calls": 4, "external_writes": 0},
+        budgets={"tool_calls": 4, "external_writes": 0},
         context_mode=ContextMode.SELECTED,
         dependency_node_ids=dependency_ids,
     )

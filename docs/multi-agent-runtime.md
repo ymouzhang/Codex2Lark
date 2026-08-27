@@ -92,7 +92,7 @@ supervisor accepts a spawn request only when:
 3. expected output and completion criteria are declared;
 4. requested tools are a subset of parent-delegable capabilities;
 5. the child identity cannot exceed the parent's authority;
-6. graph depth, node count, concurrency, token, time, and cost budgets permit it;
+6. graph depth, node count, concurrency, time, and cost budgets permit it;
 7. dependencies do not introduce a cycle;
 8. the task is not a duplicate of active work.
 
@@ -121,8 +121,8 @@ tool IDs. Tenant/app/chat identity and the parent node are bound from
 
 The coordinator idempotently reuses the child canonical path, leases the child
 through `MultiAgentSupervisor`, and runs a separate Harness session with the
-child role instructions, smaller token/tool/write budgets, selected evidence,
-and only the requested tool subset. The child returns a typed encrypted
+child role instructions, smaller tool/write/time/cost budgets, selected
+evidence, and only the requested tool subset. The child returns a typed encrypted
 artifact; its observable summary and verified resource references are supplied
 to the root as a non-persistable tool observation. A worker cannot publish an IM
 result. When the root Harness reaches a terminal state, the IM handler maps that

@@ -68,9 +68,6 @@ class OpenAIResponsesModel:
         )
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
-        remaining = request.remaining_budget.get("model_tokens", 16_384)
-        if remaining < 1:
-            raise ValueError("model token budget is exhausted")
         provider_names = {
             self._provider_tool_name(definition.tool_id): definition.tool_id
             for definition in request.tools
@@ -90,7 +87,6 @@ class OpenAIResponsesModel:
             ],
             tool_choice="auto" if request.tools else "none",
             parallel_tool_calls=True,
-            max_output_tokens=min(16_384, remaining),
             metadata={"run_id": request.run_id, "node_id": request.node_id},
             store=False,
         )

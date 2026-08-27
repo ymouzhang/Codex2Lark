@@ -188,11 +188,9 @@ class ParallelReadTool:
 def definition(
     *,
     require_verified: bool = True,
-    max_turns: int = 4,
     wall_time_ms: int | None = None,
 ) -> AgentDefinition:
     budgets = [
-        BudgetLimit(BudgetKind.MODEL_TOKENS, 10_000),
         BudgetLimit(BudgetKind.TOOL_CALLS, 5),
         BudgetLimit(BudgetKind.EXTERNAL_WRITES, 3),
         BudgetLimit(BudgetKind.COST_MICROS, 1_000),
@@ -207,7 +205,6 @@ def definition(
         tool_ids=("docs.create",),
         resource_packages=("authoring",),
         budget_limits=tuple(budgets),
-        max_turns=max_turns,
         max_context_tokens=2_000,
         require_verified_external_effect=require_verified,
     )
@@ -344,7 +341,6 @@ async def test_harness_runs_parallel_safe_read_batch_concurrently_in_call_order(
         "Delegate independent work.",
         "test-model",
         ("agent.delegate",),
-        max_turns=2,
     )
 
     outcome = await harness.run(request(), agent, now_ms=100)
@@ -357,6 +353,37 @@ async def test_harness_runs_parallel_safe_read_batch_concurrently_in_call_order(
         "call-a",
         "call-b",
     ]
+
+
+async def test_harness_has_no_cumulative_token_or_fixed_turn_limit() -> None:
+    responses = [
+        ModelResponse(
+            "",
+            (ToolCall(f"call-{index}", "docs.create", {"title": f"Draft {index}"}),),
+        )
+        for index in range(10)
+    ]
+    responses.append(ModelResponse("All drafts are complete."))
+    model = FakeModel(responses)
+    harness, _ = build_harness(model)
+    agent = replace(
+        definition(require_verified=False),
+        budget_limits=(
+            BudgetLimit(BudgetKind.TOOL_CALLS, 20),
+            BudgetLimit(BudgetKind.EXTERNAL_WRITES, 20),
+            BudgetLimit(BudgetKind.COST_MICROS, 1_000),
+        ),
+    )
+
+    outcome = await harness.run(request(), agent, now_ms=100)
+
+    assert outcome.status is RunStatus.COMPLETED
+    assert len(model.requests) == 11
+    assert all(
+        "model_tokens" not in sent.remaining_budget
+        for sent in model.requests
+        if isinstance(sent, ModelRequest)
+    )
 
 
 async def test_root_and_child_harnesses_share_provider_capacity() -> None:

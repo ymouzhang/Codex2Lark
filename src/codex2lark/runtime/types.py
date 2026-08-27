@@ -129,7 +129,6 @@ class AgentDefinition:
     tool_ids: tuple[str, ...]
     resource_packages: tuple[str, ...] = ()
     budget_limits: tuple[BudgetLimit, ...] = ()
-    max_turns: int = 12
     max_context_tokens: int = 64_000
     require_verified_external_effect: bool = False
     policy_version: int = 1
@@ -138,8 +137,8 @@ class AgentDefinition:
     def __post_init__(self) -> None:
         if not self.agent_id or self.version < 1 or not self.instructions:
             raise ValueError("AgentDefinition identity and instructions are required")
-        if self.max_turns < 1 or self.max_context_tokens < 1:
-            raise ValueError("AgentDefinition limits must be positive")
+        if self.max_context_tokens < 1:
+            raise ValueError("AgentDefinition context capacity must be positive")
         if len(set(self.tool_ids)) != len(self.tool_ids):
             raise ValueError("AgentDefinition tool_ids must be unique")
 

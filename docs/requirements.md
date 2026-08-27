@@ -120,7 +120,8 @@ The Harness MUST:
 - expose normalized thread, turn, model, tool, approval, compaction,
   verification, mailbox, and terminal events;
 - load resources progressively;
-- enforce token, tool, time, cost, node, depth, and concurrency budgets;
+- enforce tool, time, cost, node, depth, and concurrency budgets while recording
+  model-token usage without a cumulative token cutoff;
 - support steer, follow-up, interrupt, cancel, checkpoint, and resume;
 - preserve complete tool-call/result pairs during compaction;
 - stop only in `completed`, `blocked`, `failed`, or `cancelled` terminal state;
@@ -255,8 +256,9 @@ V3 is complete only when automated or explicitly opt-in live tests demonstrate:
    resource locks, and reply intent.
 4. One task safely delegates at least three independent workers, integrates
    typed results, and publishes one root terminal reply.
-5. Depth, node, concurrency, token, time, tool, and cost budgets stop excessive
-   delegation deterministically.
+5. Depth, node, concurrency, time, tool, and cost budgets stop excessive
+   delegation deterministically; token usage remains observable and individual
+   model calls stay within the configured context capacity.
 6. User steer/follow-up, approval, interrupt, and cancellation reach the correct
    graph and survive restart.
 7. Duplicate delivery/retry produces no duplicate document, edit, invitation,
